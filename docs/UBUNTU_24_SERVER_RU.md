@@ -41,7 +41,35 @@ sudo bash scripts/ubuntu/install.sh
 - копирует неизменяемый код в `/opt/moex-tinvest-bot`;
 - создаёт state в `/var/lib/moex-tinvest-bot` и логи в `/var/log/moex-tinvest-bot`;
 - создаёт `/etc/moex-tinvest-bot/bot.env` с правами `0640 root:moexbot`;
+- проверяет SHA-256 и устанавливает официальный Russian Trusted CA bundle;
 - устанавливает systemd units, но не включает timers до заполнения секретов и активации.
+
+### Системные TLS-сертификаты
+
+В проект включено полное содержимое двух Linux-архивов, на которые ссылается официальный гайд
+T-Bank для ПК/Linux: два корневых и три выпускающих сертификата. Источники, сроки действия,
+fingerprints сертификатов и SHA-256 архивов зафиксированы в
+`deploy/ubuntu/certificates/README.md`. GOST-файлы из источника были в DER и преобразованы в PEM
+без изменения X.509-сертификата.
+
+`install.sh` перед установкой проверяет точные хеши `SHA256SUMS`, копирует каждый сертификат
+отдельным `.crt` в `/usr/local/share/ca-certificates/` и выполняет `update-ca-certificates`.
+Несовпадение хеша останавливает установку; проверка TLS никогда не отключается. Добавление CA
+расширяет системное доверие Ubuntu, поэтому обновлять эти файлы можно только из проверенного
+официального источника.
+
+Проверить установку:
+
+```bash
+ls -l /usr/local/share/ca-certificates/moex-tinvest-*.crt
+
+openssl s_client \
+  -connect sandbox-invest-public-api.tbank.ru:443 \
+  -servername sandbox-invest-public-api.tbank.ru \
+  -verify_return_error </dev/null 2>&1 | grep 'Verify return code'
+```
+
+Ожидаемый результат TLS-проверки: `Verify return code: 0 (ok)`.
 
 ## 2. Секреты
 
@@ -194,8 +222,16 @@ sudo bash scripts/ubuntu/update.sh
 ```
 
 Скрипт останавливает timers, обновляет код и зависимости, валидирует конфиги, выполняет
-`daemon-reload`, возвращает timers и запускает один shadow smoke-cycle. При ошибке trap пытается
-вернуть timers в рабочее состояние.
+проверку и установку CA bundle через `update-ca-certificates`, затем `daemon-reload`, возвращает
+timers и запускает один shadow smoke-cycle. При ошибке trap пытается вернуть timers в рабочее
+состояние. Таким образом, для обновления сертификатов используется тот же `update.sh`; отдельное
+ручное скачивание на сервер не требуется.
+
+Повторно установить только сертификаты из уже развёрнутой версии можно командой:
+
+```bash
+sudo /opt/moex-tinvest-bot/scripts/ubuntu/install-ca-certificates.sh
+```
 
 ## 10. Удаление
 

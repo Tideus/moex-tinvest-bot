@@ -1,3 +1,4 @@
+import hashlib
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -48,10 +49,36 @@ def test_env_template_contains_names_only() -> None:
 def test_all_deployment_shell_scripts_use_strict_mode() -> None:
     scripts = sorted((PROJECT_ROOT / "scripts" / "ubuntu").glob("*.sh"))
     assert {item.name for item in scripts} == {
-        "activate.sh", "backup.sh", "healthcheck.sh", "install.sh", "run-shadow-cycle.sh",
-        "test-deployment.sh", "uninstall.sh", "update.sh",
+        "activate.sh", "backup.sh", "healthcheck.sh", "install-ca-certificates.sh",
+        "install.sh", "run-shadow-cycle.sh", "test-deployment.sh", "uninstall.sh", "update.sh",
     }
     for script in scripts:
         text = script.read_text(encoding="utf-8")
         assert text.startswith("#!/usr/bin/env bash\n")
         assert "set -Eeuo pipefail" in text
+
+
+def test_certificate_manifest_pins_all_deployment_certificates() -> None:
+    directory = DEPLOY / "certificates"
+    manifest: dict[str, str] = {}
+    for line in (directory / "SHA256SUMS").read_text(encoding="utf-8").splitlines():
+        digest, name = line.split()
+        manifest[name] = digest
+    assert set(manifest) == {
+        "russian_trusted_root_ca.crt",
+        "russian_trusted_root_ca_gost_2025.crt",
+        "russian_trusted_sub_ca.crt",
+        "russian_trusted_sub_ca_2024.crt",
+        "russian_trusted_sub_ca_gost_2025.crt",
+    }
+    for name, expected_digest in manifest.items():
+        payload = (directory / name).read_bytes()
+        assert payload.startswith(b"-----BEGIN CERTIFICATE-----\n")
+        assert payload.endswith(b"-----END CERTIFICATE-----\n")
+        assert hashlib.sha256(payload).hexdigest() == expected_digest
+
+
+def test_install_and_update_both_refresh_system_ca_store() -> None:
+    for name in ("install.sh", "update.sh"):
+        text = (PROJECT_ROOT / "scripts" / "ubuntu" / name).read_text(encoding="utf-8")
+        assert "install-ca-certificates.sh" in text

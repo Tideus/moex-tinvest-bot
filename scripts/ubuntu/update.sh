@@ -34,6 +34,7 @@ rsync -a --delete \
   --exclude '.git' --exclude '.venv' --exclude '.env' --exclude 'artifacts/*' \
   --exclude 'logs/*' --exclude 'data' --exclude 'work' \
   "${PROJECT_DIR}/" "${APP_DIR}/"
+bash "${PROJECT_DIR}/scripts/ubuntu/install-ca-certificates.sh"
 "${APP_DIR}/.venv/bin/python" -m pip install --upgrade "${APP_DIR}[server]"
 "${APP_DIR}/.venv/bin/python" -m moex_bot.cli config-check --root "${APP_DIR}"
 install -m 0644 "${PROJECT_DIR}/deploy/ubuntu/"*.service /etc/systemd/system/

@@ -15,6 +15,8 @@ required=(
   "opt/moex-tinvest-bot/pyproject.toml"
   "opt/moex-tinvest-bot/scripts/ubuntu/run-shadow-cycle.sh"
   "opt/moex-tinvest-bot/scripts/ubuntu/activate.sh"
+  "opt/moex-tinvest-bot/scripts/ubuntu/install-ca-certificates.sh"
+  "opt/moex-tinvest-bot/deploy/ubuntu/certificates/SHA256SUMS"
   "etc/moex-tinvest-bot/bot.env"
   "etc/moex-tinvest-bot/runtime.json"
   "etc/systemd/system/moex-tinvest-shadow.service"
@@ -22,6 +24,11 @@ required=(
   "etc/systemd/system/moex-tinvest-health.service"
   "etc/systemd/system/moex-tinvest-health.timer"
   "etc/logrotate.d/moex-tinvest-bot"
+  "usr/local/share/ca-certificates/moex-tinvest-russian_trusted_root_ca.crt"
+  "usr/local/share/ca-certificates/moex-tinvest-russian_trusted_root_ca_gost_2025.crt"
+  "usr/local/share/ca-certificates/moex-tinvest-russian_trusted_sub_ca.crt"
+  "usr/local/share/ca-certificates/moex-tinvest-russian_trusted_sub_ca_2024.crt"
+  "usr/local/share/ca-certificates/moex-tinvest-russian_trusted_sub_ca_gost_2025.crt"
 )
 for path in "${required[@]}"; do
   [[ -e "${STAGE_DIR}/${path}" ]] || {
@@ -29,6 +36,11 @@ for path in "${required[@]}"; do
     exit 2
   }
 done
+
+(cd "${PROJECT_DIR}/deploy/ubuntu/certificates" && \
+  sha256sum --check --strict SHA256SUMS)
+grep -q 'install-ca-certificates.sh' "${PROJECT_DIR}/scripts/ubuntu/install.sh"
+grep -q 'install-ca-certificates.sh' "${PROJECT_DIR}/scripts/ubuntu/update.sh"
 
 grep -q '^User=moexbot$' \
   "${STAGE_DIR}/etc/systemd/system/moex-tinvest-shadow.service"

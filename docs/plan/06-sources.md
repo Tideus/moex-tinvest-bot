@@ -11,6 +11,8 @@
 - Новые официальные SDK T-Bank: https://opensource.tbank.ru/invest
 - Сообщение о переносе SDK и карантине старого пакета: https://developer.tbank.ru/invest/release/release1_44
 - T-Invest sandbox: https://developer.tbank.ru/invest/intro/developer/sandbox/
+- T-Invest API TLS certificates: https://developer.tbank.ru/docs/tls-settings
+- T-Bank PC/Linux certificate guide: https://www.tbank.ru/bank/help/certificates/
 - Лимиты T-Invest API: https://developer.tbank.ru/invest/intro/intro/limits
 - Токены T-Invest: https://developer.tbank.ru/invest/intro/intro/token
 - Тарифы T-Invest: https://www.tbank.ru/invest/tariffs/

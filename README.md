@@ -24,6 +24,7 @@ bash scripts/ubuntu/test-deployment.sh
 - replay CLI and preflight checks;
 - read-only hourly MOEX snapshot command;
 - idempotent T-Invest sandbox account bootstrap and optional RUB top-up;
+- verified Russian Trusted CA bundle installed by Ubuntu install/update scripts;
 - T-Invest sandbox-only REST adapter with timeout-to-UNKNOWN semantics;
 - unit and integration-style replay tests;
 - CI workflow.
@@ -100,6 +101,12 @@ python -m moex_bot.cli sandbox-bootstrap --top-up 300000
 `--top-up` changes only virtual sandbox money. The command is hard-wired to the official sandbox
 host and cannot fund or mutate a production account. T-Invest limits one sandbox top-up operation
 to a positive amount not exceeding 30,000,000 RUB.
+
+Ubuntu installation and updates install the five CA certificates currently shipped in the two
+official Linux archives linked by T-Bank. Exact PEM hashes, certificate fingerprints, validity and
+source URLs are recorded in
+[`deploy/ubuntu/certificates/README.md`](deploy/ubuntu/certificates/README.md). Installation fails
+closed on any checksum mismatch and never disables TLS verification.
 
 ## Optional MOEX integration
 

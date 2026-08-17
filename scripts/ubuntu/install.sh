@@ -65,7 +65,7 @@ fi
 if [[ -z "${DESTDIR}" && "${INSTALL_PACKAGES}" -eq 1 ]]; then
   apt-get update
   DEBIAN_FRONTEND=noninteractive apt-get install -y \
-    python3.12 python3.12-venv ca-certificates curl logrotate rsync
+    python3.12 python3.12-venv ca-certificates openssl curl logrotate rsync
 fi
 
 if [[ -z "${DESTDIR}" ]] && ! id "${SERVICE_USER}" >/dev/null 2>&1; then
@@ -112,6 +112,8 @@ install -m 0644 "${PROJECT_DIR}/deploy/ubuntu/moex-tinvest-health.timer" \
   "$(root_path /etc/systemd/system/moex-tinvest-health.timer)"
 install -m 0644 "${PROJECT_DIR}/deploy/ubuntu/moex-tinvest-bot.logrotate" \
   "$(root_path /etc/logrotate.d/moex-tinvest-bot)"
+
+DESTDIR="${DESTDIR}" bash "${PROJECT_DIR}/scripts/ubuntu/install-ca-certificates.sh"
 
 env_path="$(root_path "${CONFIG_DIR}/bot.env")"
 if [[ ! -e "${env_path}" ]]; then

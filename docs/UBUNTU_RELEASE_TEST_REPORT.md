@@ -1,6 +1,6 @@
 # Ubuntu 24 deployment — отчёт проверки
 
-Дата проверки: 2026-08-14.
+Дата проверки: 2026-08-18.
 
 ## Итог
 
@@ -10,12 +10,15 @@
 ## Пройденные проверки
 
 - Ruff: PASS.
-- mypy strict: PASS, 23 source files.
-- pytest: 53 PASS.
-- Coverage: 76.73%, gate 75%.
+- mypy strict: PASS, 24 source files.
+- pytest: 62 PASS.
+- Coverage: 77.12%, gate 75%.
 - Все 10 project JSON-конфигов: PASS.
 - Shadow config preflight: PASS.
 - T-Invest endpoint/environment resolver: PASS, `sandbox`, live disabled.
+- Russian Trusted CA assets: PASS, five PEM files verified by committed SHA-256 manifest.
+- Ubuntu CA staging: PASS, install/update scripts route certificates to the system trust store.
+- Live TLS contract: PASS, bundled RSA root validates `sandbox-invest-public-api.tbank.ru`.
 - Deterministic replay: PASS, quality true, 3 targets, 3 dry-run orders.
 - Telegram outbox health: PASS.
 - Bash syntax для всех Ubuntu scripts: PASS.
