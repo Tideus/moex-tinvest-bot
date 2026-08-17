@@ -5,6 +5,7 @@ import pytest
 
 from moex_bot.runtime_config import (
     load_runtime_config,
+    materialize_runtime_defaults,
     render_systemd_timer_overrides,
     set_runtime_environment,
 )
@@ -64,3 +65,25 @@ def test_environment_switch_preserves_schedule(tmp_path: Path) -> None:
     raw = json.loads(runtime.read_text(encoding="utf-8"))
     assert raw["t_invest_environment"] == "prod"
     assert raw["schedule"]["health_interval"] == "30min"
+
+
+def test_runtime_migration_completes_minimal_file_without_replacing_values(
+    tmp_path: Path,
+) -> None:
+    runtime = tmp_path / "runtime.json"
+    _write(
+        runtime,
+        {
+            "t_invest_environment": "sandbox",
+            "schedule": {"health_interval": "30min"},
+            "future_extension": {"keep": True},
+        },
+    )
+    assert materialize_runtime_defaults(runtime)
+    raw = json.loads(runtime.read_text(encoding="utf-8"))
+    assert raw["t_invest_environment"] == "sandbox"
+    assert raw["schedule"]["health_interval"] == "30min"
+    assert raw["schedule"]["timezone"] == "Europe/Moscow"
+    assert raw["schedule"]["diagnostics_interval_seconds"] == 60
+    assert raw["future_extension"] == {"keep": True}
+    assert not materialize_runtime_defaults(runtime)

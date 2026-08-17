@@ -12,6 +12,7 @@ cd "${APP_DIR}"
 "${PYTHON_BIN}" -m moex_bot.cli preflight --config "${APP_DIR}/config/shadow.json"
 "${PYTHON_BIN}" -m moex_bot.cli integration-preflight \
   --services "${APP_DIR}/config/services.json" \
+  --runtime "${CONFIG_DIR}/runtime.json" \
   --require moex_algopack --require telegram
 "${PYTHON_BIN}" -m moex_bot.cli environment-status \
   --runtime "${CONFIG_DIR}/runtime.json" \

@@ -61,16 +61,21 @@ def load_universe(path: Path) -> tuple[UniverseEntry, ...]:
     raw = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(raw, list) or not raw:
         raise ValueError("universe must be a non-empty list")
-    entries = tuple(
-        UniverseEntry(
-            secid=str(item["secid"]),
-            board=str(item["board"]),
-            t_invest_uid=str(item["t_invest_uid"]),
-            lot_size_verified=int(item["lot_size_verified"]),
-            api_trade_available=bool(item["api_trade_available"]),
+    entries_list: list[UniverseEntry] = []
+    for item in raw:
+        trade_available = item["api_trade_available"]
+        if not isinstance(trade_available, bool):
+            raise ValueError("universe api_trade_available must be a JSON boolean")
+        entries_list.append(
+            UniverseEntry(
+                secid=str(item["secid"]),
+                board=str(item["board"]),
+                t_invest_uid=str(item["t_invest_uid"]),
+                lot_size_verified=int(item["lot_size_verified"]),
+                api_trade_available=trade_available,
+            )
         )
-        for item in raw
-    )
+    entries = tuple(entries_list)
     for entry in entries:
         entry.validate()
     if len({entry.secid for entry in entries}) != len(entries):

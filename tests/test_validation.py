@@ -6,6 +6,19 @@ import pytest
 from moex_bot.validation import validate_project_configs
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+EXPECTED_CONFIGS = {
+    "geo_sources.json",
+    "ownership_disclosures.json",
+    "replay.json",
+    "runtime.json",
+    "services.json",
+    "shadow.json",
+    "universe.json",
+}
+
+
+def test_config_directory_contains_only_documented_files() -> None:
+    assert {path.name for path in (PROJECT_ROOT / "config").glob("*.json")} == EXPECTED_CONFIGS
 
 
 def test_all_committed_project_configs_are_valid() -> None:

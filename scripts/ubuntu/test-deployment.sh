@@ -13,6 +13,13 @@ DESTDIR="${STAGE_DIR}" bash "${PROJECT_DIR}/scripts/ubuntu/install.sh" \
 
 required=(
   "opt/moex-tinvest-bot/pyproject.toml"
+  "opt/moex-tinvest-bot/config/geo_sources.json"
+  "opt/moex-tinvest-bot/config/ownership_disclosures.json"
+  "opt/moex-tinvest-bot/config/replay.json"
+  "opt/moex-tinvest-bot/config/runtime.json"
+  "opt/moex-tinvest-bot/config/services.json"
+  "opt/moex-tinvest-bot/config/shadow.json"
+  "opt/moex-tinvest-bot/config/universe.json"
   "opt/moex-tinvest-bot/scripts/ubuntu/run-shadow-cycle.sh"
   "opt/moex-tinvest-bot/scripts/ubuntu/activate.sh"
   "opt/moex-tinvest-bot/scripts/ubuntu/install-ca-certificates.sh"
@@ -48,6 +55,11 @@ done
   printf 'FAIL: staged moex-botctl is not executable\n' >&2
   exit 2
 }
+for config in "${PROJECT_DIR}"/config/*.json; do
+  cmp "${config}" "${STAGE_DIR}/opt/moex-tinvest-bot/config/$(basename "${config}")"
+done
+cmp "${PROJECT_DIR}/config/runtime.json" \
+  "${STAGE_DIR}/etc/moex-tinvest-bot/runtime.json"
 
 (cd "${PROJECT_DIR}/deploy/ubuntu/certificates" && \
   sha256sum --check --strict SHA256SUMS)

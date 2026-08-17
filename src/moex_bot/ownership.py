@@ -31,6 +31,8 @@ def load_ownership_disclosures(
         raise ValueError("ownership disclosure registry must be a list")
     result: list[OwnershipDisclosure] = []
     for item in raw:
+        if not isinstance(item["verified"], bool):
+            raise ValueError("ownership verified must be a JSON boolean")
         published_at = datetime.fromisoformat(str(item["published_at"]))
         if published_at.tzinfo is None or published_at > as_of:
             raise ValueError("ownership publication timestamp is invalid")
@@ -48,8 +50,10 @@ def load_ownership_disclosures(
             published_at=published_at,
             source_url=source_url,
             source_kind=str(item["source_kind"]),
-            verified=bool(item["verified"]),
+            verified=item["verified"],
         )
+        if not disclosure.secid or not disclosure.holder_name or not disclosure.source_kind:
+            raise ValueError("ownership identity and source_kind must not be empty")
         if disclosure.stake_percent is not None and not (
             Decimal("0") <= disclosure.stake_percent <= Decimal("100")
         ):

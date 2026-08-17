@@ -67,6 +67,55 @@ def test_integration_preflight_enforces_required_credentials(
     assert integration_preflight(required=("moex_algopack",)) == 2
 
 
+@pytest.mark.parametrize(
+    ("active", "inactive_token", "inactive_account"),
+    [
+        ("sandbox", "T_INVEST_PROD_TOKEN", "T_INVEST_PROD_ACCOUNT_ID"),
+        ("prod", "T_INVEST_SANDBOX_TOKEN", "T_INVEST_SANDBOX_ACCOUNT_ID"),
+    ],
+)
+def test_integration_preflight_ignores_incomplete_inactive_contour(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    active: str,
+    inactive_token: str,
+    inactive_account: str,
+) -> None:
+    runtime = tmp_path / "runtime.json"
+    runtime.write_text(json.dumps({"t_invest_environment": active}), encoding="utf-8")
+    for name in (
+        "T_INVEST_SANDBOX_TOKEN",
+        "T_INVEST_SANDBOX_ACCOUNT_ID",
+        "T_INVEST_PROD_TOKEN",
+        "T_INVEST_PROD_ACCOUNT_ID",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv(inactive_token, "unused-token")
+    monkeypatch.delenv(inactive_account, raising=False)
+    assert integration_preflight(runtime_path=runtime) == 0
+
+
+@pytest.mark.parametrize(
+    ("active", "token_name", "account_name"),
+    [
+        ("sandbox", "T_INVEST_SANDBOX_TOKEN", "T_INVEST_SANDBOX_ACCOUNT_ID"),
+        ("prod", "T_INVEST_PROD_TOKEN", "T_INVEST_PROD_ACCOUNT_ID"),
+    ],
+)
+def test_integration_preflight_rejects_incomplete_active_contour(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    active: str,
+    token_name: str,
+    account_name: str,
+) -> None:
+    runtime = tmp_path / "runtime.json"
+    runtime.write_text(json.dumps({"t_invest_environment": active}), encoding="utf-8")
+    monkeypatch.setenv(token_name, "active-token")
+    monkeypatch.delenv(account_name, raising=False)
+    assert integration_preflight(runtime_path=runtime) == 2
+
+
 def test_session_check_returns_skip_outside_market_window() -> None:
     assert session_check(datetime(2026, 8, 14, 21, 30, tzinfo=UTC)) == 3
 
@@ -87,9 +136,10 @@ def test_geo_refresh_with_bad_config_fails_closed(tmp_path: Path) -> None:
 def test_environment_set_writes_explicit_switch(tmp_path: Path) -> None:
     runtime = tmp_path / "runtime.json"
     assert environment_set(runtime_path=runtime, environment=TInvestEnvironment.PROD) == 0
-    assert json.loads(runtime.read_text(encoding="utf-8")) == {
-        "t_invest_environment": "prod"
-    }
+    raw = json.loads(runtime.read_text(encoding="utf-8"))
+    assert raw["t_invest_environment"] == "prod"
+    assert raw["schedule"]["timezone"] == "Europe/Moscow"
+    assert raw["schedule"]["diagnostics_interval_seconds"] == 60
 
 
 def test_local_env_loader_is_optional() -> None:

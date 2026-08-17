@@ -33,16 +33,29 @@ class BotConfig:
 
     def validate(self) -> tuple[str, ...]:
         errors: list[str] = []
+        if self.base_currency != "RUB":
+            errors.append("base_currency must be RUB in the MVP")
         if self.max_data_age_seconds <= 0:
             errors.append("max_data_age_seconds must be positive")
         for name, value in (
             ("max_position_weight", self.max_position_weight),
             ("max_gross_exposure", self.max_gross_exposure),
         ):
-            if not Decimal("0") < value <= Decimal("1"):
+            if not value.is_finite() or not Decimal("0") < value <= Decimal("1"):
                 errors.append(f"{name} must be in (0, 1]")
-        if self.max_order_notional <= 0 or self.max_daily_turnover <= 0:
-            errors.append("notional and turnover limits must be positive")
+        for name, value in (
+            ("max_order_notional", self.max_order_notional),
+            ("max_daily_turnover", self.max_daily_turnover),
+            ("min_trade_notional", self.min_trade_notional),
+        ):
+            if not value.is_finite() or value <= 0:
+                errors.append(f"{name} must be positive and finite")
+        if self.min_trade_notional > self.max_order_notional:
+            errors.append("min_trade_notional must not exceed max_order_notional")
+        if self.max_order_notional > self.max_daily_turnover:
+            errors.append("max_order_notional must not exceed max_daily_turnover")
+        if self.max_open_orders <= 0:
+            errors.append("max_open_orders must be positive")
         if self.allow_margin:
             errors.append("margin is forbidden in the MVP")
         if self.mode is ExecutionMode.LIVE:
@@ -51,11 +64,22 @@ class BotConfig:
             errors.append("live_interlock must remain false until a reviewed live adapter exists")
         if self.strategy.top_n <= 0:
             errors.append("strategy.top_n must be positive")
+        if (
+            not self.strategy.min_momentum.is_finite()
+            or self.strategy.min_momentum <= Decimal("-1")
+        ):
+            errors.append("strategy.min_momentum must be finite and greater than -1")
         return tuple(errors)
 
 
 def _decimal(value: Any) -> Decimal:
     return Decimal(str(value))
+
+
+def _boolean(value: Any, label: str) -> bool:
+    if not isinstance(value, bool):
+        raise ValueError(f"{label} must be a JSON boolean")
+    return value
 
 
 def load_config(path: Path) -> BotConfig:
@@ -71,12 +95,14 @@ def load_config(path: Path) -> BotConfig:
         max_daily_turnover=_decimal(raw["max_daily_turnover"]),
         min_trade_notional=_decimal(raw["min_trade_notional"]),
         max_open_orders=int(raw["max_open_orders"]),
-        allow_margin=bool(raw["allow_margin"]),
-        live_interlock=bool(raw["live_interlock"]),
+        allow_margin=_boolean(raw["allow_margin"], "allow_margin"),
+        live_interlock=_boolean(raw["live_interlock"], "live_interlock"),
         strategy=StrategyConfig(
             top_n=int(strategy["top_n"]),
             min_momentum=_decimal(strategy["min_momentum"]),
-            require_above_trend=bool(strategy["require_above_trend"]),
+            require_above_trend=_boolean(
+                strategy["require_above_trend"], "strategy.require_above_trend"
+            ),
         ),
     )
     errors = config.validate()

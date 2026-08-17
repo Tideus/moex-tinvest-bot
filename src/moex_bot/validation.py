@@ -7,6 +7,7 @@ from typing import Any
 
 from .config import load_config
 from .geo_feed import load_sources
+from .ownership import load_ownership_disclosures
 from .runtime_config import load_runtime_config
 from .service_config import load_service_config
 from .shadow import load_geo_feed, load_universe
@@ -39,6 +40,10 @@ def validate_project_configs(root: Path) -> tuple[str, ...]:
         }
         if not required.issubset(item):
             raise ValueError("ownership disclosure entry is incomplete")
+    load_ownership_disclosures(
+        root / "config" / "ownership_disclosures.json",
+        as_of=datetime.now(UTC),
+    )
     checks.append("config/ownership_disclosures.json")
 
     portfolio = _object(root / "examples" / "portfolio_empty.json")

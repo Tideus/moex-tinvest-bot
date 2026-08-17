@@ -4,6 +4,7 @@ Safety-first Python 3.12 scaffold for research, deterministic replay, shadow ope
 
 Полная инструкция оператора на русском: [`docs/USER_GUIDE_RU.md`](docs/USER_GUIDE_RU.md).
 Установка на Ubuntu Server 24.04 LTS: [`docs/UBUNTU_24_SERVER_RU.md`](docs/UBUNTU_24_SERVER_RU.md).
+Все параметры JSON: [`docs/CONFIG_REFERENCE_RU.md`](docs/CONFIG_REFERENCE_RU.md).
 
 После серверной установки операционные команды сведены к одному интерфейсу:
 

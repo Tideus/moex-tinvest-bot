@@ -100,6 +100,12 @@ def test_install_and_update_publish_single_command_control_tool() -> None:
         assert "/usr/local/sbin/moex-botctl" in text
 
 
+def test_install_and_update_materialize_full_runtime_config() -> None:
+    for name in ("install.sh", "update.sh"):
+        text = (PROJECT_ROOT / "scripts" / "ubuntu" / name).read_text(encoding="utf-8")
+        assert "runtime-normalize" in text
+
+
 def test_control_tool_exposes_safe_operator_workflow() -> None:
     text = (PROJECT_ROOT / "scripts" / "ubuntu" / "moex-botctl.sh").read_text(
         encoding="utf-8"

@@ -144,11 +144,16 @@ chmod 0640 "${CONFIG_DIR}/bot.env"
 python3.12 -m venv "${APP_DIR}/.venv"
 "${APP_DIR}/.venv/bin/python" -m pip install --upgrade pip
 "${APP_DIR}/.venv/bin/python" -m pip install "${APP_DIR}[server]"
+"${APP_DIR}/.venv/bin/python" -m moex_bot.cli runtime-normalize \
+  --runtime "${CONFIG_DIR}/runtime.json"
+chown root:"${SERVICE_USER}" "${CONFIG_DIR}/runtime.json"
+chmod 0644 "${CONFIG_DIR}/runtime.json"
 "${APP_DIR}/.venv/bin/python" -m moex_bot.cli config-check --root "${APP_DIR}"
 "${APP_DIR}/.venv/bin/python" -m moex_bot.cli preflight \
   --config "${APP_DIR}/config/shadow.json"
 "${APP_DIR}/.venv/bin/python" -m moex_bot.cli integration-preflight \
-  --services "${APP_DIR}/config/services.json"
+  --services "${APP_DIR}/config/services.json" \
+  --runtime "${CONFIG_DIR}/runtime.json"
 
 systemctl daemon-reload
 if [[ "${ENABLE_TIMER}" -eq 1 ]]; then

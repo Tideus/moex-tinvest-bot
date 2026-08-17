@@ -38,7 +38,13 @@ def load_sources(path: Path) -> tuple[GeoSource, ...]:
     sources = tuple(GeoSource(**item) for item in raw)
     if not sources:
         raise ValueError("geo source list is empty")
+    if len({source.source_id for source in sources}) != len(sources):
+        raise ValueError("geo source_id values must be unique")
     for source in sources:
+        if not source.source_id.strip():
+            raise ValueError("geo source_id must not be empty")
+        if source.source_tier not in {"primary"}:
+            raise ValueError("geo source_tier must be primary")
         parsed = urlparse(source.url)
         if parsed.scheme != "https" or parsed.hostname not in ALLOWED_HOSTS:
             raise ValueError(f"geo source is outside the allowlist: {source.url}")

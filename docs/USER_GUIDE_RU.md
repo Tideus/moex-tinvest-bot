@@ -1,5 +1,7 @@
 # Руководство пользователя MOEX + ALGOPACK + T-Invest bot
 
+Полный справочник параметров JSON: [`CONFIG_REFERENCE_RU.md`](CONFIG_REFERENCE_RU.md).
+
 ## 1. Что бот умеет сейчас
 
 Проект готов для `replay` и часового `shadow`: он читает завершённые свечи MOEX,

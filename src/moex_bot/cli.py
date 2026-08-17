@@ -27,6 +27,7 @@ from .ownership import load_ownership_disclosures, render_ownership_report
 from .reporting import render_flow_report, render_shadow_report
 from .runtime_config import (
     load_runtime_config,
+    materialize_runtime_defaults,
     render_systemd_timer_overrides,
     set_runtime_environment,
 )
@@ -145,6 +146,7 @@ def preflight(config_path: Path) -> int:
 def integration_preflight(
     services_path: Path = Path("config/services.json"),
     required: tuple[str, ...] = (),
+    runtime_path: Path = Path("config/runtime.json"),
 ) -> int:
     checks = {
         "MOEX_APIKEY": bool(os.getenv("MOEX_APIKEY", "").strip()),
@@ -157,26 +159,47 @@ def integration_preflight(
     }
     try:
         services = load_service_config(services_path)
+        active_environment = load_runtime_config(runtime_path).environment
     except (OSError, ValueError, KeyError, json.JSONDecodeError) as exc:
-        print(f"FAIL: service configuration: {exc}")
+        print(f"FAIL: integration configuration: {exc}")
         return 2
     print("Integration preflight (secret values are never printed):")
+    print(f"- Active T-Invest environment: {active_environment.value}")
     print(f"- T-Invest prod gRPC: {services.t_invest.prod_grpc}")
     print(f"- T-Invest sandbox gRPC: {services.t_invest.sandbox_grpc}")
     for name, present in checks.items():
         print(f"- {name}: {'present' if present else 'missing'}")
-    if checks["T_INVEST_SANDBOX_ACCOUNT_ID"] and not checks["T_INVEST_SANDBOX_TOKEN"]:
-        print("FAIL: sandbox account id is unusable without a sandbox token")
-        return 2
-    if checks["T_INVEST_SANDBOX_TOKEN"] and not checks["T_INVEST_SANDBOX_ACCOUNT_ID"]:
-        print("INFO: run sandbox-bootstrap to create or restore the sandbox account id")
-    if checks["T_INVEST_PROD_TOKEN"] != checks["T_INVEST_PROD_ACCOUNT_ID"]:
-        print("FAIL: prod token and account id must be configured together")
-        return 2
+    pairs = {
+        TInvestEnvironment.SANDBOX: (
+            checks["T_INVEST_SANDBOX_TOKEN"], checks["T_INVEST_SANDBOX_ACCOUNT_ID"]
+        ),
+        TInvestEnvironment.PROD: (
+            checks["T_INVEST_PROD_TOKEN"], checks["T_INVEST_PROD_ACCOUNT_ID"]
+        ),
+    }
+    for environment, (token_present, account_present) in pairs.items():
+        if token_present == account_present:
+            continue
+        if environment is active_environment:
+            if environment is TInvestEnvironment.SANDBOX and token_present:
+                print("INFO: run sandbox-bootstrap to create or restore the sandbox account id")
+            print(
+                f"FAIL: active {environment.value} token and account id "
+                "must be configured together"
+            )
+            return 2
+        print(
+            f"WARN: incomplete {environment.value} credentials are ignored while "
+            f"{active_environment.value} is active"
+        )
     if checks["TELEGRAM_BOT_TOKEN"] != checks["TELEGRAM_CHAT_ID"]:
         print("FAIL: Telegram token and chat id must be configured together")
         return 2
-    if checks["T_INVEST_PROD_TOKEN"]:
+    if (
+        active_environment is TInvestEnvironment.PROD
+        and checks["T_INVEST_PROD_TOKEN"]
+        and checks["T_INVEST_PROD_ACCOUNT_ID"]
+    ):
         print("SAFE: prod credentials detected, but live execution remains disabled")
     requirements = {
         "moex_algopack": checks["MOEX_APIKEY"],
@@ -298,6 +321,17 @@ def runtime_render_systemd(*, runtime_path: Path, output_dir: Path) -> int:
         return 2
     for path in paths:
         print(f"PASS: wrote systemd schedule override: {path}")
+    return 0
+
+
+def runtime_normalize(*, runtime_path: Path) -> int:
+    try:
+        changed = materialize_runtime_defaults(runtime_path)
+    except (OSError, ValueError, KeyError, json.JSONDecodeError) as exc:
+        print(f"FAIL: runtime migration: {exc}")
+        return 2
+    state = "completed missing fields" if changed else "already complete"
+    print(f"PASS: runtime configuration {state}: {runtime_path}")
     return 0
 
 
@@ -512,6 +546,7 @@ def build_parser() -> argparse.ArgumentParser:
     preflight_parser.add_argument("--config", type=Path, required=True)
     integration_parser = sub.add_parser("integration-preflight")
     integration_parser.add_argument("--services", type=Path, default=Path("config/services.json"))
+    integration_parser.add_argument("--runtime", type=Path, default=Path("config/runtime.json"))
     integration_parser.add_argument(
         "--require",
         action="append",
@@ -550,6 +585,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     runtime_render_parser.add_argument(
         "--output-dir", type=Path, default=Path("/etc/systemd/system")
+    )
+    runtime_normalize_parser = sub.add_parser("runtime-normalize")
+    runtime_normalize_parser.add_argument(
+        "--runtime", type=Path, default=Path("config/runtime.json")
     )
     config_parser = sub.add_parser("config-check")
     config_parser.add_argument("--root", type=Path, default=Path("."))
@@ -609,7 +648,7 @@ def main() -> int:
     if args.command == "preflight":
         return preflight(args.config)
     if args.command == "integration-preflight":
-        return integration_preflight(args.services, tuple(args.require))
+        return integration_preflight(args.services, tuple(args.require), args.runtime)
     if args.command == "sandbox-bootstrap":
         return sandbox_bootstrap(
             env_path=args.env_file,
@@ -625,6 +664,8 @@ def main() -> int:
         return runtime_render_systemd(
             runtime_path=args.runtime, output_dir=args.output_dir
         )
+    if args.command == "runtime-normalize":
+        return runtime_normalize(runtime_path=args.runtime)
     if args.command == "config-check":
         return config_check(root=args.root)
     if args.command == "moex-snapshot":

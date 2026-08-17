@@ -15,7 +15,7 @@ Environment=PYTHONUNBUFFERED=1
 Environment=PYTHONDONTWRITEBYTECODE=1
 Environment=TZ=Europe/Moscow
 ExecStartPre=/opt/moex-tinvest-bot/.venv/bin/python -m moex_bot.cli config-check --root /opt/moex-tinvest-bot
-ExecStartPre=/opt/moex-tinvest-bot/.venv/bin/python -m moex_bot.cli integration-preflight --services /opt/moex-tinvest-bot/config/services.json --require moex_algopack --require telegram
+ExecStartPre=/opt/moex-tinvest-bot/.venv/bin/python -m moex_bot.cli integration-preflight --services /opt/moex-tinvest-bot/config/services.json --runtime /etc/moex-tinvest-bot/runtime.json --require moex_algopack --require telegram
 ExecStartPre=/opt/moex-tinvest-bot/.venv/bin/python -m moex_bot.cli environment-status --runtime /etc/moex-tinvest-bot/runtime.json --services /opt/moex-tinvest-bot/config/services.json
 ExecStart=/usr/bin/bash /opt/moex-tinvest-bot/scripts/ubuntu/run-shadow-cycle.sh
 TimeoutStartSec=20min

@@ -2,6 +2,8 @@
 set -Eeuo pipefail
 
 APP_DIR="${MOEX_BOT_APP_DIR:-/opt/moex-tinvest-bot}"
+CONFIG_DIR="${MOEX_BOT_CONFIG_DIR:-/etc/moex-tinvest-bot}"
+SERVICE_USER="${MOEX_BOT_USER:-moexbot}"
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 
 if [[ "${EUID}" -ne 0 ]]; then
@@ -37,6 +39,10 @@ rsync -a --delete \
 find "${APP_DIR}/scripts/ubuntu" -type f -name '*.sh' -exec chmod 0755 {} +
 bash "${PROJECT_DIR}/scripts/ubuntu/install-ca-certificates.sh"
 "${APP_DIR}/.venv/bin/python" -m pip install --upgrade "${APP_DIR}[server]"
+"${APP_DIR}/.venv/bin/python" -m moex_bot.cli runtime-normalize \
+  --runtime "${CONFIG_DIR}/runtime.json"
+chown root:"${SERVICE_USER}" "${CONFIG_DIR}/runtime.json"
+chmod 0644 "${CONFIG_DIR}/runtime.json"
 "${APP_DIR}/.venv/bin/python" -m moex_bot.cli config-check --root "${APP_DIR}"
 install -m 0644 "${PROJECT_DIR}/deploy/ubuntu/"*.service /etc/systemd/system/
 install -m 0644 "${PROJECT_DIR}/deploy/ubuntu/"*.timer /etc/systemd/system/

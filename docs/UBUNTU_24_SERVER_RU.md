@@ -144,6 +144,8 @@ systemctl list-timers 'moex-tinvest-*'
 
 Расписание и контур задаются в `/etc/moex-tinvest-bot/runtime.json`:
 
+Полное описание всех файлов и параметров: [`CONFIG_REFERENCE_RU.md`](CONFIG_REFERENCE_RU.md).
+
 ```json
 {
   "t_invest_environment": "sandbox",

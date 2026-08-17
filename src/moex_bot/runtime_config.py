@@ -69,6 +69,34 @@ def set_runtime_environment(path: Path, environment: TInvestEnvironment) -> None
     temporary = path.with_suffix(path.suffix + ".tmp")
     temporary.write_text(json.dumps(raw, indent=2) + "\n", encoding="utf-8")
     temporary.replace(path)
+    materialize_runtime_defaults(path)
+
+
+def materialize_runtime_defaults(path: Path) -> bool:
+    """Add missing documented fields without replacing operator-owned values."""
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(raw, dict):
+        raise ValueError("runtime configuration must be a JSON object")
+    config = load_runtime_config(path)
+    schedule = raw.setdefault("schedule", {})
+    if not isinstance(schedule, dict):
+        raise ValueError("runtime schedule must be a JSON object")
+    defaults: dict[str, object] = {
+        "timezone": config.schedule.timezone,
+        "shadow_on_calendar": config.schedule.shadow_on_calendar,
+        "shadow_randomized_delay_seconds": config.schedule.shadow_randomized_delay_seconds,
+        "health_on_boot": config.schedule.health_on_boot,
+        "health_interval": config.schedule.health_interval,
+        "diagnostics_interval_seconds": config.schedule.diagnostics_interval_seconds,
+    }
+    changed = False
+    for name, value in defaults.items():
+        if name not in schedule:
+            schedule[name] = value
+            changed = True
+    if changed:
+        _atomic_write(path, json.dumps(raw, indent=2) + "\n")
+    return changed
 
 
 def render_systemd_timer_overrides(config: RuntimeConfig, output_dir: Path) -> tuple[Path, Path]:

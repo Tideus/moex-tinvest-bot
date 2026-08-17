@@ -120,7 +120,8 @@ prelaunch() {
   check "Обязательные credentials присутствуют" \
     "заполните bot.env; для sandbox сначала выполните sandbox-bootstrap" \
     as_service "${PYTHON_BIN}" -m moex_bot.cli integration-preflight \
-      --services "${SERVICES_FILE}" --require moex_algopack --require telegram \
+      --services "${SERVICES_FILE}" --runtime "${RUNTIME_FILE}" \
+      --require moex_algopack --require telegram \
       --require "${requirement}"
 
   heading "4/5 Systemd"
@@ -193,7 +194,8 @@ diagnose_once() {
       --runtime "${RUNTIME_FILE}" --services "${SERVICES_FILE}"
   check "Интеграции" "проверьте credentials в bot.env" \
     as_service "${PYTHON_BIN}" -m moex_bot.cli integration-preflight \
-      --services "${SERVICES_FILE}" --require moex_algopack --require telegram \
+      --services "${SERVICES_FILE}" --runtime "${RUNTIME_FILE}" \
+      --require moex_algopack --require telegram \
       --require "${requirement}"
   check "Shadow timer активен" "выполните sudo moex-botctl start" \
     systemctl is-active --quiet moex-tinvest-shadow.timer
