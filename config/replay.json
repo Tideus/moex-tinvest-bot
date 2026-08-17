@@ -1,0 +1,19 @@
+{
+  "mode": "replay",
+  "base_currency": "RUB",
+  "max_data_age_seconds": 3900,
+  "max_position_weight": "0.20",
+  "max_order_notional": "50000",
+  "max_gross_exposure": "0.95",
+  "max_daily_turnover": "100000",
+  "min_trade_notional": "500",
+  "max_open_orders": 10,
+  "allow_margin": false,
+  "live_interlock": false,
+  "strategy": {
+    "top_n": 3,
+    "min_momentum": "0",
+    "require_above_trend": true
+  }
+}
+

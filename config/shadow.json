@@ -1,0 +1,19 @@
+{
+  "mode": "shadow",
+  "base_currency": "RUB",
+  "max_data_age_seconds": 3900,
+  "max_position_weight": "0.15",
+  "max_order_notional": "10000",
+  "max_gross_exposure": "0.80",
+  "max_daily_turnover": "30000",
+  "min_trade_notional": "500",
+  "max_open_orders": 5,
+  "allow_margin": false,
+  "live_interlock": false,
+  "strategy": {
+    "top_n": 5,
+    "min_momentum": "0",
+    "require_above_trend": true
+  }
+}
+

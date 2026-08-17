@@ -1,0 +1,18 @@
+[Unit]
+Description=Health check for MOEX/T-Invest shadow deployment
+After=moex-tinvest-shadow.service
+
+[Service]
+Type=oneshot
+User=moexbot
+Group=moexbot
+WorkingDirectory=/opt/moex-tinvest-bot
+EnvironmentFile=/etc/moex-tinvest-bot/bot.env
+Environment=PYTHONDONTWRITEBYTECODE=1
+ExecStart=/opt/moex-tinvest-bot/scripts/ubuntu/healthcheck.sh
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/moex-tinvest-bot /var/log/moex-tinvest-bot
+UMask=0077

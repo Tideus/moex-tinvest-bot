@@ -1,0 +1,10 @@
+/var/log/moex-tinvest-bot/*.log {
+    daily
+    rotate 30
+    compress
+    delaycompress
+    missingok
+    notifempty
+    copytruncate
+    create 0640 moexbot moexbot
+}

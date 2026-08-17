@@ -1,0 +1,16 @@
+{
+  "t_invest": {
+    "prod_grpc": "invest-public-api.tbank.ru:443",
+    "sandbox_grpc": "sandbox-invest-public-api.tbank.ru:443",
+    "prod_rest": "https://invest-public-api.tbank.ru/rest",
+    "sandbox_rest": "https://sandbox-invest-public-api.tbank.ru/rest",
+    "prod_websocket": "wss://invest-public-api.tbank.ru/ws/"
+  },
+  "moex": {
+    "iss": "https://iss.moex.com/iss",
+    "algopack": "https://apim.moex.com/iss"
+  },
+  "telegram": {
+    "api": "https://api.telegram.org"
+  }
+}

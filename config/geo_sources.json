@@ -1,0 +1,12 @@
+[
+  {
+    "source_id": "cbr_press",
+    "url": "https://www.cbr.ru/rss/RssPress",
+    "source_tier": "primary"
+  },
+  {
+    "source_id": "moex_risk",
+    "url": "https://www.moex.com/export/news.aspx?cat=122",
+    "source_tier": "primary"
+  }
+]

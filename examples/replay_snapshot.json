@@ -1,0 +1,15 @@
+{
+  "as_of": "2026-08-14T10:05:00+03:00",
+  "cash": "100000",
+  "daily_turnover": "0",
+  "open_orders": 0,
+  "positions": {},
+  "market": [
+    {"secid":"SBER","uid":"uid-sber","board":"TQBR","lot_size":10,"tick_size":"0.01","price":"320.00","trend":"300.00","momentum":"0.18","volatility":"0.24","observed_at":"2026-08-14T10:00:00+03:00","complete":true,"tradable":true},
+    {"secid":"GAZP","uid":"uid-gazp","board":"TQBR","lot_size":10,"tick_size":"0.01","price":"150.00","trend":"145.00","momentum":"0.08","volatility":"0.30","observed_at":"2026-08-14T10:00:00+03:00","complete":true,"tradable":true},
+    {"secid":"LKOH","uid":"uid-lkoh","board":"TQBR","lot_size":1,"tick_size":"0.50","price":"7100.00","trend":"6800.00","momentum":"0.12","volatility":"0.22","observed_at":"2026-08-14T10:00:00+03:00","complete":true,"tradable":true},
+    {"secid":"NVTK","uid":"uid-nvtk","board":"TQBR","lot_size":1,"tick_size":"0.20","price":"1200.00","trend":"1250.00","momentum":"-0.04","volatility":"0.27","observed_at":"2026-08-14T10:00:00+03:00","complete":true,"tradable":true}
+  ],
+  "geo_events": []
+}
+

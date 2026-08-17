@@ -1,0 +1,50 @@
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[project]
+name = "moex-tinvest-bot"
+version = "0.1.0"
+description = "Safety-first research, replay and execution harness for MOEX/ALGOPACK and T-Invest"
+readme = "README.md"
+requires-python = ">=3.12"
+license = { text = "Proprietary" }
+dependencies = []
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.3,<9",
+  "pytest-cov>=6,<7",
+  "ruff>=0.9,<1",
+  "mypy>=1.14,<2",
+]
+integrations = [
+  "moexalgo[dataframe]>=2.5,<3",
+  "python-dotenv>=1.0,<2",
+]
+server = [
+  "moexalgo[dataframe]>=2.5,<3",
+  "python-dotenv>=1.0,<2",
+]
+
+[project.scripts]
+moex-bot = "moex_bot.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/moex_bot"]
+
+[tool.pytest.ini_options]
+addopts = "-q --strict-markers"
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "SIM"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+packages = ["moex_bot"]

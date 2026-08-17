@@ -1,0 +1,11 @@
+[Unit]
+Description=Check MOEX/T-Invest shadow health every 15 minutes
+
+[Timer]
+OnBootSec=10min
+OnUnitActiveSec=15min
+Persistent=true
+Unit=moex-tinvest-health.service
+
+[Install]
+WantedBy=timers.target
