@@ -59,7 +59,31 @@ TELEGRAM_BOT_TOKEN=
 TELEGRAM_CHAT_ID=
 ```
 
+Для песочницы добавьте токен, а ID оставьте пустым — bootstrap заполнит его сам:
+
+```dotenv
+T_INVEST_SANDBOX_TOKEN=
+T_INVEST_SANDBOX_ACCOUNT_ID=
+```
+
 Не храните токены в `/opt`, git, shell history, unit-файлах или аргументах процесса.
+
+Создайте/проверьте sandbox-счёт и интерактивно задайте виртуальное пополнение. Команда запускается
+от root только для сохранения ID в защищённый `/etc`-файл; она жёстко использует sandbox endpoint:
+
+```bash
+sudo bash -c 'set -a; source /etc/moex-tinvest-bot/bot.env; set +a; \
+  exec /opt/moex-tinvest-bot/.venv/bin/python -m moex_bot.cli sandbox-bootstrap \
+  --env-file /etc/moex-tinvest-bot/bot.env'
+```
+
+Для автоматической проверки без ожидания ввода используйте `--no-prompt`. Для явно заданного
+виртуального пополнения используйте `--top-up 300000`. После записи проверьте права:
+
+```bash
+sudo chown root:moexbot /etc/moex-tinvest-bot/bot.env
+sudo chmod 0640 /etc/moex-tinvest-bot/bot.env
+```
 
 ## 3. Проверка до первого запуска
 

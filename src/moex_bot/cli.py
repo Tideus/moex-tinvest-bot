@@ -13,10 +13,15 @@ from typing import Any
 from .adapters import DryRunExecutionAdapter, JsonlAuditLog
 from .config import load_config
 from .domain import GeoEvent, Instrument, MarketObservation, PortfolioSnapshot, Position
+from .env_file import upsert_env_value
 from .geo_feed import refresh_geo_feed
 from .harness import TradingHarness
 from .integrations.algopack_flow import AlgoPackFlowAdapter
 from .integrations.moexalgo_data import MoexAlgoReadOnlyAdapter
+from .integrations.tinvest_sandbox import (
+    MAX_SANDBOX_PAY_IN_RUB,
+    TInvestSandboxAccountService,
+)
 from .notifications import SQLiteOutbox, TelegramBotApiSender, deliver_pending
 from .ownership import load_ownership_disclosures, render_ownership_report
 from .reporting import render_flow_report, render_shadow_report
@@ -155,9 +160,11 @@ def integration_preflight(
     print(f"- T-Invest sandbox gRPC: {services.t_invest.sandbox_grpc}")
     for name, present in checks.items():
         print(f"- {name}: {'present' if present else 'missing'}")
-    if checks["T_INVEST_SANDBOX_TOKEN"] != checks["T_INVEST_SANDBOX_ACCOUNT_ID"]:
-        print("FAIL: sandbox token and account id must be configured together")
+    if checks["T_INVEST_SANDBOX_ACCOUNT_ID"] and not checks["T_INVEST_SANDBOX_TOKEN"]:
+        print("FAIL: sandbox account id is unusable without a sandbox token")
         return 2
+    if checks["T_INVEST_SANDBOX_TOKEN"] and not checks["T_INVEST_SANDBOX_ACCOUNT_ID"]:
+        print("INFO: run sandbox-bootstrap to create or restore the sandbox account id")
     if checks["T_INVEST_PROD_TOKEN"] != checks["T_INVEST_PROD_ACCOUNT_ID"]:
         print("FAIL: prod token and account id must be configured together")
         return 2
@@ -183,6 +190,62 @@ def integration_preflight(
         print(f"FAIL: required integrations are missing: {', '.join(missing)}")
         return 2
     print("PASS: replay remains available; missing credentials only disable their integration")
+    return 0
+
+
+def _format_rub(value: Decimal) -> str:
+    return f"{value.quantize(Decimal('0.01')):,.2f}".replace(",", " ")
+
+
+def _read_top_up() -> Decimal:
+    raw = input("На сколько рублей пополнить sandbox? [0 — пропустить]: ").strip()
+    if not raw:
+        return Decimal("0")
+    return Decimal(raw.replace(" ", "").replace(",", "."))
+
+
+def sandbox_bootstrap(
+    *,
+    env_path: Path,
+    account_name: str,
+    top_up: Decimal | None,
+    no_prompt: bool,
+    service: TInvestSandboxAccountService | None = None,
+) -> int:
+    try:
+        sandbox = service or TInvestSandboxAccountService.from_environment()
+        configured_id = os.getenv("T_INVEST_SANDBOX_ACCOUNT_ID", "").strip()
+        result = sandbox.ensure_account(configured_id, account_name=account_name)
+        if result.account_id != configured_id:
+            upsert_env_value(env_path, "T_INVEST_SANDBOX_ACCOUNT_ID", result.account_id)
+            os.environ["T_INVEST_SANDBOX_ACCOUNT_ID"] = result.account_id
+            action = "created" if result.created else "restored"
+            print(f"PASS: sandbox account {action}; id saved to {env_path}")
+        else:
+            print("PASS: configured sandbox account exists and is open")
+
+        balance = sandbox.available_rub_balance(result.account_id)
+        print(f"Available sandbox balance: {_format_rub(balance)} RUB")
+        amount = top_up
+        if amount is None and not no_prompt:
+            amount = _read_top_up()
+        if amount is None or amount == 0:
+            print("SKIP: sandbox balance was not topped up")
+            return 0
+        if not amount.is_finite() or amount < 0:
+            raise ValueError("top-up must be zero or a positive finite amount")
+        if amount > MAX_SANDBOX_PAY_IN_RUB:
+            raise ValueError(
+                f"top-up exceeds the sandbox limit of {_format_rub(MAX_SANDBOX_PAY_IN_RUB)} RUB"
+            )
+        new_balance = sandbox.pay_in(result.account_id, amount)
+        print(
+            f"PASS: added {_format_rub(amount)} RUB; "
+            f"new sandbox balance: {_format_rub(new_balance)} RUB"
+        )
+    except (EOFError, OSError, ValueError) as exc:
+        print(f"FAIL: sandbox bootstrap: {exc}")
+        return 2
     return 0
 
 
@@ -439,6 +502,22 @@ def build_parser() -> argparse.ArgumentParser:
         choices=("moex_algopack", "telegram", "tinvest_sandbox", "tinvest_prod"),
         default=[],
     )
+    sandbox_parser = sub.add_parser(
+        "sandbox-bootstrap",
+        help="Verify/create the sandbox account, show cash and optionally top it up",
+    )
+    sandbox_parser.add_argument("--env-file", type=Path, default=Path(".env"))
+    sandbox_parser.add_argument("--account-name", default="moex-tinvest-bot")
+    sandbox_parser.add_argument(
+        "--top-up",
+        type=Decimal,
+        help="RUB amount; when omitted an interactive prompt is shown",
+    )
+    sandbox_parser.add_argument(
+        "--no-prompt",
+        action="store_true",
+        help="Only verify the account and show balance",
+    )
     environment_parser = sub.add_parser("environment-status")
     environment_parser.add_argument("--runtime", type=Path, default=Path("config/runtime.json"))
     environment_parser.add_argument("--services", type=Path, default=Path("config/services.json"))
@@ -508,6 +587,13 @@ def main() -> int:
         return preflight(args.config)
     if args.command == "integration-preflight":
         return integration_preflight(args.services, tuple(args.require))
+    if args.command == "sandbox-bootstrap":
+        return sandbox_bootstrap(
+            env_path=args.env_file,
+            account_name=args.account_name,
+            top_up=args.top_up,
+            no_prompt=args.no_prompt,
+        )
     if args.command == "environment-status":
         return environment_status(runtime_path=args.runtime, services_path=args.services)
     if args.command == "environment-set":

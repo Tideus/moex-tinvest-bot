@@ -23,6 +23,7 @@ bash scripts/ubuntu/test-deployment.sh
 - local order state machine and audit JSONL;
 - replay CLI and preflight checks;
 - read-only hourly MOEX snapshot command;
+- idempotent T-Invest sandbox account bootstrap and optional RUB top-up;
 - T-Invest sandbox-only REST adapter with timeout-to-UNKNOWN semantics;
 - unit and integration-style replay tests;
 - CI workflow.
@@ -45,6 +46,7 @@ python -m pytest
 python -m moex_bot.cli replay --config config/replay.json --input examples/replay_snapshot.json
 python -m moex_bot.cli preflight --config config/shadow.json
 python -m moex_bot.cli integration-preflight
+python -m moex_bot.cli sandbox-bootstrap
 python -m moex_bot.cli hourly-shadow
 python -m moex_bot.cli ownership-report --secid SBER --output artifacts/sber_ownership.md
 ```
@@ -75,6 +77,29 @@ python -m moex_bot.cli environment-set --environment prod
 
 The switch chooses the endpoint and corresponding environment variables. Selecting `prod` does
 not authorize order submission; `LIVE` remains blocked independently.
+
+## Sandbox account bootstrap
+
+Put only `T_INVEST_SANDBOX_TOKEN` in the local `.env`, then start the sandbox setup:
+
+```powershell
+python -m moex_bot.cli sandbox-bootstrap
+```
+
+The command checks the saved account ID against `GetSandboxAccounts`. If the account has expired
+or the ID is absent, it reuses the bot's still-open named account or creates a new one, then
+atomically writes `T_INVEST_SANDBOX_ACCOUNT_ID` to `.env`. It obtains available RUB cash through
+`GetSandboxWithdrawLimits`, displays it and asks how much virtual cash to add. Enter `0` to skip.
+For scripts and systemd, prompts are deliberately disabled explicitly:
+
+```powershell
+python -m moex_bot.cli sandbox-bootstrap --no-prompt
+python -m moex_bot.cli sandbox-bootstrap --top-up 300000
+```
+
+`--top-up` changes only virtual sandbox money. The command is hard-wired to the official sandbox
+host and cannot fund or mutate a production account. T-Invest limits one sandbox top-up operation
+to a positive amount not exceeding 30,000,000 RUB.
 
 ## Optional MOEX integration
 

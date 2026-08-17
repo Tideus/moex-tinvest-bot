@@ -38,6 +38,7 @@ Copy-Item .env.example .env
 ```dotenv
 MOEX_APIKEY=
 T_INVEST_SANDBOX_TOKEN=
+# Это поле заполнит sandbox-bootstrap:
 T_INVEST_SANDBOX_ACCOUNT_ID=
 T_INVEST_PROD_TOKEN=
 T_INVEST_PROD_ACCOUNT_ID=
@@ -46,6 +47,33 @@ TELEGRAM_CHAT_ID=
 ```
 
 Для shadow достаточно MOEX/ALGOPACK и Telegram. T-Invest prod-токен сейчас не нужен.
+
+### Создание и пополнение sandbox-счёта
+
+В `.env` укажите `T_INVEST_SANDBOX_TOKEN`, но оставьте ID пустым. Затем выполните:
+
+```powershell
+python -m moex_bot.cli sandbox-bootstrap
+```
+
+При каждом таком запуске бот:
+
+1. Получает список sandbox-счетов и проверяет сохранённый ID.
+2. При отсутствующем/просроченном ID переиспользует открытый счёт с именем
+   `moex-tinvest-bot` либо создаёт новый.
+3. Атомарно сохраняет `T_INVEST_SANDBOX_ACCOUNT_ID` в локальный `.env`.
+4. Показывает доступный рублёвый остаток и спрашивает сумму виртуального пополнения.
+
+Введите `0`, чтобы не пополнять. Максимум одного пополнения — 30 000 000 ₽. Для CI, cron и
+systemd используйте неинтерактивный режим, чтобы процесс не ожидал ввода:
+
+```powershell
+python -m moex_bot.cli sandbox-bootstrap --no-prompt
+python -m moex_bot.cli sandbox-bootstrap --top-up 300000
+```
+
+Команда работает только с официальным sandbox REST endpoint; production-баланс она не меняет.
+Sandbox-деньги виртуальные, а качество исполнения заявок не моделирует реальный рынок.
 
 ## 3. Telegram
 
@@ -110,6 +138,9 @@ python -m moex_bot.cli preflight --config config/shadow.json
 python -m moex_bot.cli integration-preflight
 python -m moex_bot.cli environment-status
 ```
+
+Если планируется песочница, после добавления токена запустите `sandbox-bootstrap`, затем повторите
+`integration-preflight --require tinvest_sandbox`.
 
 ### Шаг 4 — ручной shadow-цикл
 
