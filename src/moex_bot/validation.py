@@ -7,7 +7,8 @@ from typing import Any
 
 from .config import load_config
 from .geo_feed import load_sources
-from .service_config import TInvestEnvironment, load_service_config
+from .runtime_config import load_runtime_config
+from .service_config import load_service_config
 from .shadow import load_geo_feed, load_universe
 
 
@@ -21,8 +22,7 @@ def validate_project_configs(root: Path) -> tuple[str, ...]:
 
     load_service_config(root / "config" / "services.json")
     checks.append("config/services.json")
-    runtime = _object(root / "config" / "runtime.json")
-    TInvestEnvironment(str(runtime["t_invest_environment"]))
+    load_runtime_config(root / "config" / "runtime.json")
     checks.append("config/runtime.json")
     load_universe(root / "config" / "universe.json")
     checks.append("config/universe.json")

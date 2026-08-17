@@ -15,7 +15,10 @@ def test_shadow_systemd_unit_has_security_and_absolute_paths() -> None:
     assert "EnvironmentFile=/etc/moex-tinvest-bot/bot.env" in unit
     assert "ExecStartPre=" in unit
     assert "--require moex_algopack --require telegram" in unit
-    assert "ExecStart=/opt/moex-tinvest-bot/scripts/ubuntu/run-shadow-cycle.sh" in unit
+    assert (
+        "ExecStart=/usr/bin/bash /opt/moex-tinvest-bot/scripts/ubuntu/run-shadow-cycle.sh"
+        in unit
+    )
     assert "NoNewPrivileges=true" in unit
     assert "ProtectSystem=strict" in unit
     assert "ReadWritePaths=/var/lib/moex-tinvest-bot /var/log/moex-tinvest-bot" in unit
@@ -33,7 +36,7 @@ def test_health_timer_and_service_contract_match() -> None:
     service = _unit("moex-tinvest-health.service")
     assert "Unit=moex-tinvest-health.service" in timer
     assert "OnUnitActiveSec=15min" in timer
-    assert "ExecStart=/opt/moex-tinvest-bot/scripts/ubuntu/healthcheck.sh" in service
+    assert "ExecStart=/usr/bin/bash /opt/moex-tinvest-bot/scripts/ubuntu/healthcheck.sh" in service
 
 
 def test_env_template_contains_names_only() -> None:
@@ -50,7 +53,8 @@ def test_all_deployment_shell_scripts_use_strict_mode() -> None:
     scripts = sorted((PROJECT_ROOT / "scripts" / "ubuntu").glob("*.sh"))
     assert {item.name for item in scripts} == {
         "activate.sh", "backup.sh", "healthcheck.sh", "install-ca-certificates.sh",
-        "install.sh", "run-shadow-cycle.sh", "test-deployment.sh", "uninstall.sh", "update.sh",
+        "install.sh", "moex-botctl.sh", "run-shadow-cycle.sh", "test-deployment.sh",
+        "uninstall.sh", "update.sh",
     }
     for script in scripts:
         text = script.read_text(encoding="utf-8")
@@ -82,3 +86,24 @@ def test_install_and_update_both_refresh_system_ca_store() -> None:
     for name in ("install.sh", "update.sh"):
         text = (PROJECT_ROOT / "scripts" / "ubuntu" / name).read_text(encoding="utf-8")
         assert "install-ca-certificates.sh" in text
+
+
+def test_install_and_update_restore_script_execute_permissions() -> None:
+    for name in ("install.sh", "update.sh"):
+        text = (PROJECT_ROOT / "scripts" / "ubuntu" / name).read_text(encoding="utf-8")
+        assert "-exec chmod 0755 {} +" in text
+
+
+def test_install_and_update_publish_single_command_control_tool() -> None:
+    for name in ("install.sh", "update.sh"):
+        text = (PROJECT_ROOT / "scripts" / "ubuntu" / name).read_text(encoding="utf-8")
+        assert "/usr/local/sbin/moex-botctl" in text
+
+
+def test_control_tool_exposes_safe_operator_workflow() -> None:
+    text = (PROJECT_ROOT / "scripts" / "ubuntu" / "moex-botctl.sh").read_text(
+        encoding="utf-8"
+    )
+    for command in ("prelaunch", "start", "diagnose", "status", "contour"):
+        assert f"{command})" in text
+    assert "timers не включены" in text

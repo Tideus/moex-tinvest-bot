@@ -13,7 +13,10 @@ rm -f /etc/systemd/system/moex-tinvest-shadow.service \
   /etc/systemd/system/moex-tinvest-shadow.timer \
   /etc/systemd/system/moex-tinvest-health.service \
   /etc/systemd/system/moex-tinvest-health.timer \
-  /etc/logrotate.d/moex-tinvest-bot
+  /etc/logrotate.d/moex-tinvest-bot \
+  /usr/local/sbin/moex-botctl
+rm -rf /etc/systemd/system/moex-tinvest-shadow.timer.d \
+  /etc/systemd/system/moex-tinvest-health.timer.d
 systemctl daemon-reload
 rm -rf /opt/moex-tinvest-bot
 if [[ "${PURGE}" -eq 1 ]]; then

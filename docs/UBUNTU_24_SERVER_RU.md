@@ -116,34 +116,22 @@ sudo chmod 0640 /etc/moex-tinvest-bot/bot.env
 ## 3. Проверка до первого запуска
 
 ```bash
-sudo -u moexbot /opt/moex-tinvest-bot/.venv/bin/python \
-  -m moex_bot.cli config-check --root /opt/moex-tinvest-bot
-
-sudo -u moexbot /opt/moex-tinvest-bot/.venv/bin/python \
-  -m moex_bot.cli integration-preflight \
-  --services /opt/moex-tinvest-bot/config/services.json \
-  --require moex_algopack --require telegram
-
-sudo -u moexbot /opt/moex-tinvest-bot/.venv/bin/python \
-  -m moex_bot.cli environment-status \
-  --runtime /etc/moex-tinvest-bot/runtime.json \
-  --services /opt/moex-tinvest-bot/config/services.json
-
-sudo systemd-analyze verify \
-  /etc/systemd/system/moex-tinvest-shadow.service \
-  /etc/systemd/system/moex-tinvest-shadow.timer \
-  /etc/systemd/system/moex-tinvest-health.service \
-  /etc/systemd/system/moex-tinvest-health.timer
+sudo moex-botctl prelaunch
 ```
+
+Команда сама загружает защищённый `bot.env`, проверяет права, JSON-конфиги, выбранный
+T-Invest-контур, обязательные credentials, risk-конфиг и systemd units. Вывод разбит на
+категории; каждая ошибка содержит причину и рекомендуемое действие. При любой ошибке запуск
+блокируется и возвращается ненулевой exit code.
 
 ## 4. Активация и первый запуск
 
 ```bash
-sudo /opt/moex-tinvest-bot/scripts/ubuntu/activate.sh
-sudo systemctl status moex-tinvest-shadow.service --no-pager
-sudo journalctl -u moex-tinvest-shadow.service -n 100 --no-pager
-sudo find /var/lib/moex-tinvest-bot/artifacts -maxdepth 1 -type f -printf '%TY-%Tm-%Td %TT %p\n'
+sudo moex-botctl start
 ```
+
+`start` повторяет prelaunch, применяет расписание, запускает первый shadow cycle и health-check,
+включает оба timer и показывает фактически назначенные следующие запуски.
 
 Oneshot-сервис после успешного завершения будет `inactive (dead)` с кодом `0`; это нормально.
 Постоянно активным должен быть timer:
@@ -154,7 +142,27 @@ systemctl list-timers 'moex-tinvest-*'
 
 ## 5. Расписание
 
-`moex-tinvest-shadow.timer` запускает цикл каждый час в `HH:05 Europe/Moscow`. Python дополнительно
+Расписание и контур задаются в `/etc/moex-tinvest-bot/runtime.json`:
+
+```json
+{
+  "t_invest_environment": "sandbox",
+  "schedule": {
+    "timezone": "Europe/Moscow",
+    "shadow_on_calendar": "*-*-* *:05:00",
+    "shadow_randomized_delay_seconds": 20,
+    "health_on_boot": "10min",
+    "health_interval": "15min",
+    "diagnostics_interval_seconds": 60
+  }
+}
+```
+
+`shadow_on_calendar` использует синтаксис systemd `OnCalendar`. После изменения выполните
+`sudo moex-botctl prelaunch`, затем `sudo moex-botctl start`; второй вызов атомарно создаст
+systemd drop-in и покажет итоговое расписание. Секреты в этот JSON добавлять нельзя.
+
+По умолчанию shadow запускается каждый час в `HH:05 Europe/Moscow`. Python дополнительно
 пропускает выходные и время вне консервативного окна 07:05–23:05 МСК. `Persistent=true`
 запустит пропущенный timer после перезагрузки, но не восстановит утраченный рыночный снимок.
 
@@ -165,10 +173,13 @@ Healthcheck запускается каждые 15 минут и требует 
 Переключать T-Invest-контур на сервере нужно в сохраняемом `/etc`-конфиге:
 
 ```bash
-sudo -u moexbot /opt/moex-tinvest-bot/.venv/bin/python \
-  -m moex_bot.cli environment-set --environment sandbox \
-  --runtime /etc/moex-tinvest-bot/runtime.json
+sudo moex-botctl contour sandbox
+# либо
+sudo moex-botctl contour prod
 ```
+
+Переключение контура не включает live orders. После изменения снова выполните `prelaunch` и
+`start`, чтобы проверить соответствующую пару token/account ID.
 
 ## 6. Каталоги
 
@@ -176,7 +187,7 @@ sudo -u moexbot /opt/moex-tinvest-bot/.venv/bin/python \
 | --- | --- |
 | `/opt/moex-tinvest-bot` | код и venv, только root может изменять |
 | `/etc/moex-tinvest-bot/bot.env` | секреты |
-| `/etc/moex-tinvest-bot/runtime.json` | активный T-Invest контур `sandbox/prod` |
+| `/etc/moex-tinvest-bot/runtime.json` | активный контур и расписание без секретов |
 | `/var/lib/moex-tinvest-bot/artifacts` | shadow/flow/geo результаты |
 | `/var/lib/moex-tinvest-bot/data` | SQLite Telegram outbox |
 | `/var/log/moex-tinvest-bot` | отдельные логи циклов |
@@ -185,13 +196,23 @@ sudo -u moexbot /opt/moex-tinvest-bot/.venv/bin/python \
 ## 7. Диагностика
 
 ```bash
-sudo systemctl status moex-tinvest-shadow.timer moex-tinvest-health.timer
-sudo systemctl status moex-tinvest-health.service
-sudo journalctl -u moex-tinvest-shadow.service --since today
-sudo journalctl -u moex-tinvest-health.service --since today
-sudo -u moexbot /opt/moex-tinvest-bot/scripts/ubuntu/healthcheck.sh
-sudo logrotate --debug /etc/logrotate.d/moex-tinvest-bot
+sudo moex-botctl diagnose
 ```
+
+Непрерывный диагностический цикл с повтором до `Ctrl+C`:
+
+```bash
+sudo moex-botctl diagnose --watch
+```
+
+Интервал берётся из `schedule.diagnostics_interval_seconds`. Временное переопределение:
+
+```bash
+sudo moex-botctl diagnose --watch --interval 30
+```
+
+Диагностика проверяет окружение, credentials, оба timer, Telegram outbox и свежесть последнего
+shadow artifact. При ошибке показывает комментарий и последние сообщения units.
 
 Если сервис упал:
 

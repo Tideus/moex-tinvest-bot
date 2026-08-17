@@ -5,6 +5,15 @@ Safety-first Python 3.12 scaffold for research, deterministic replay, shadow ope
 Полная инструкция оператора на русском: [`docs/USER_GUIDE_RU.md`](docs/USER_GUIDE_RU.md).
 Установка на Ubuntu Server 24.04 LTS: [`docs/UBUNTU_24_SERVER_RU.md`](docs/UBUNTU_24_SERVER_RU.md).
 
+После серверной установки операционные команды сведены к одному интерфейсу:
+
+```bash
+sudo moex-botctl prelaunch
+sudo moex-botctl start
+sudo moex-botctl diagnose
+sudo moex-botctl diagnose --watch
+```
+
 Проверка Ubuntu deployment без изменения системы:
 
 ```bash

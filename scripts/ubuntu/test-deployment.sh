@@ -24,6 +24,7 @@ required=(
   "etc/systemd/system/moex-tinvest-health.service"
   "etc/systemd/system/moex-tinvest-health.timer"
   "etc/logrotate.d/moex-tinvest-bot"
+  "usr/local/sbin/moex-botctl"
   "usr/local/share/ca-certificates/moex-tinvest-russian_trusted_root_ca.crt"
   "usr/local/share/ca-certificates/moex-tinvest-russian_trusted_root_ca_gost_2025.crt"
   "usr/local/share/ca-certificates/moex-tinvest-russian_trusted_sub_ca.crt"
@@ -36,6 +37,17 @@ for path in "${required[@]}"; do
     exit 2
   }
 done
+
+for script in "${STAGE_DIR}"/opt/moex-tinvest-bot/scripts/ubuntu/*.sh; do
+  [[ -x "${script}" ]] || {
+    printf 'FAIL: staged script is not executable: %s\n' "${script}" >&2
+    exit 2
+  }
+done
+[[ -x "${STAGE_DIR}/usr/local/sbin/moex-botctl" ]] || {
+  printf 'FAIL: staged moex-botctl is not executable\n' >&2
+  exit 2
+}
 
 (cd "${PROJECT_DIR}/deploy/ubuntu/certificates" && \
   sha256sum --check --strict SHA256SUMS)

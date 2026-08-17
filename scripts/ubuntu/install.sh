@@ -77,13 +77,14 @@ if [[ -n "${DESTDIR}" ]]; then
   mkdir -p "$(root_path "${APP_DIR}")" "$(root_path "${CONFIG_DIR}")" \
     "$(root_path "${STATE_DIR}")" "$(root_path "${LOG_DIR}")" \
     "$(root_path "${BACKUP_DIR}")" "$(root_path /etc/systemd/system)" \
-    "$(root_path /etc/logrotate.d)"
+    "$(root_path /etc/logrotate.d)" "$(root_path /usr/local/sbin)"
 else
   install -d -m 0755 "$(root_path "${APP_DIR}")"
   install -d -m 0750 "$(root_path "${CONFIG_DIR}")"
   install -d -m 0750 "$(root_path "${STATE_DIR}")" "$(root_path "${LOG_DIR}")" \
     "$(root_path "${BACKUP_DIR}")"
   install -d -m 0755 "$(root_path /etc/systemd/system)" "$(root_path /etc/logrotate.d)"
+  install -d -m 0755 "$(root_path /usr/local/sbin)"
 fi
 
 if command -v rsync >/dev/null 2>&1; then
@@ -112,6 +113,8 @@ install -m 0644 "${PROJECT_DIR}/deploy/ubuntu/moex-tinvest-health.timer" \
   "$(root_path /etc/systemd/system/moex-tinvest-health.timer)"
 install -m 0644 "${PROJECT_DIR}/deploy/ubuntu/moex-tinvest-bot.logrotate" \
   "$(root_path /etc/logrotate.d/moex-tinvest-bot)"
+install -m 0755 "${PROJECT_DIR}/scripts/ubuntu/moex-botctl.sh" \
+  "$(root_path /usr/local/sbin/moex-botctl)"
 
 DESTDIR="${DESTDIR}" bash "${PROJECT_DIR}/scripts/ubuntu/install-ca-certificates.sh"
 

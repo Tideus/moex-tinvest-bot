@@ -9,7 +9,7 @@ Group=moexbot
 WorkingDirectory=/opt/moex-tinvest-bot
 EnvironmentFile=/etc/moex-tinvest-bot/bot.env
 Environment=PYTHONDONTWRITEBYTECODE=1
-ExecStart=/opt/moex-tinvest-bot/scripts/ubuntu/healthcheck.sh
+ExecStart=/usr/bin/bash /opt/moex-tinvest-bot/scripts/ubuntu/healthcheck.sh
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict

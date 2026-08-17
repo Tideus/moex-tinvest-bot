@@ -25,6 +25,11 @@ from .integrations.tinvest_sandbox import (
 from .notifications import SQLiteOutbox, TelegramBotApiSender, deliver_pending
 from .ownership import load_ownership_disclosures, render_ownership_report
 from .reporting import render_flow_report, render_shadow_report
+from .runtime_config import (
+    load_runtime_config,
+    render_systemd_timer_overrides,
+    set_runtime_environment,
+)
 from .scheduler import is_conservative_stock_window
 from .service_config import (
     TInvestEnvironment,
@@ -251,10 +256,9 @@ def sandbox_bootstrap(
 
 def environment_status(*, runtime_path: Path, services_path: Path) -> int:
     try:
-        raw = json.loads(runtime_path.read_text(encoding="utf-8"))
-        environment = TInvestEnvironment(str(raw["t_invest_environment"]))
+        config = load_runtime_config(runtime_path)
         runtime = resolve_tinvest_runtime(
-            load_service_config(services_path), environment=environment
+            load_service_config(services_path), environment=config.environment
         )
     except (OSError, ValueError, KeyError, json.JSONDecodeError) as exc:
         print(f"FAIL: runtime configuration: {exc}")
@@ -268,20 +272,32 @@ def environment_status(*, runtime_path: Path, services_path: Path) -> int:
         f"({'present' if runtime.account_id else 'missing'})"
     )
     print("live orders: DISABLED")
+    print(
+        "shadow schedule: "
+        f"{config.schedule.shadow_on_calendar} {config.schedule.timezone}"
+    )
+    print(f"health interval: {config.schedule.health_interval}")
+    print(f"diagnostics interval: {config.schedule.diagnostics_interval_seconds}s")
     return 0
 
 
 def environment_set(*, runtime_path: Path, environment: TInvestEnvironment) -> int:
-    runtime_path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = runtime_path.with_suffix(runtime_path.suffix + ".tmp")
-    temporary.write_text(
-        json.dumps({"t_invest_environment": environment.value}, indent=2) + "\n",
-        encoding="utf-8",
-    )
-    temporary.replace(runtime_path)
+    set_runtime_environment(runtime_path, environment)
     print(f"T-Invest environment switched to {environment.value}")
     if environment is TInvestEnvironment.PROD:
         print("SAFE: production server selected; live orders remain DISABLED")
+    return 0
+
+
+def runtime_render_systemd(*, runtime_path: Path, output_dir: Path) -> int:
+    try:
+        config = load_runtime_config(runtime_path)
+        paths = render_systemd_timer_overrides(config, output_dir)
+    except (OSError, ValueError, KeyError, json.JSONDecodeError) as exc:
+        print(f"FAIL: runtime schedule: {exc}")
+        return 2
+    for path in paths:
+        print(f"PASS: wrote systemd schedule override: {path}")
     return 0
 
 
@@ -528,6 +544,13 @@ def build_parser() -> argparse.ArgumentParser:
     environment_set_parser.add_argument(
         "--runtime", type=Path, default=Path("config/runtime.json")
     )
+    runtime_render_parser = sub.add_parser("runtime-render-systemd")
+    runtime_render_parser.add_argument(
+        "--runtime", type=Path, default=Path("config/runtime.json")
+    )
+    runtime_render_parser.add_argument(
+        "--output-dir", type=Path, default=Path("/etc/systemd/system")
+    )
     config_parser = sub.add_parser("config-check")
     config_parser.add_argument("--root", type=Path, default=Path("."))
     snapshot_parser = sub.add_parser("moex-snapshot")
@@ -598,6 +621,10 @@ def main() -> int:
         return environment_status(runtime_path=args.runtime, services_path=args.services)
     if args.command == "environment-set":
         return environment_set(runtime_path=args.runtime, environment=args.environment)
+    if args.command == "runtime-render-systemd":
+        return runtime_render_systemd(
+            runtime_path=args.runtime, output_dir=args.output_dir
+        )
     if args.command == "config-check":
         return config_check(root=args.root)
     if args.command == "moex-snapshot":

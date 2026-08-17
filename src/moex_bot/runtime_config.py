@@ -1,0 +1,130 @@
+from __future__ import annotations
+
+import json
+import re
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
+from .service_config import TInvestEnvironment
+
+_DURATION = re.compile(r"^[1-9][0-9]*(?:s|min|h)$")
+_DEFAULT_SHADOW_CALENDAR = "*-*-* *:05:00"
+
+
+@dataclass(frozen=True, slots=True)
+class RuntimeSchedule:
+    timezone: str = "Europe/Moscow"
+    shadow_on_calendar: str = _DEFAULT_SHADOW_CALENDAR
+    shadow_randomized_delay_seconds: int = 20
+    health_on_boot: str = "10min"
+    health_interval: str = "15min"
+    diagnostics_interval_seconds: int = 60
+
+
+@dataclass(frozen=True, slots=True)
+class RuntimeConfig:
+    environment: TInvestEnvironment
+    schedule: RuntimeSchedule
+
+
+def load_runtime_config(path: Path) -> RuntimeConfig:
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(raw, dict):
+        raise ValueError("runtime configuration must be a JSON object")
+    environment = TInvestEnvironment(str(raw["t_invest_environment"]))
+    schedule_raw = raw.get("schedule", {})
+    if not isinstance(schedule_raw, dict):
+        raise ValueError("runtime schedule must be a JSON object")
+    schedule = RuntimeSchedule(
+        timezone=str(schedule_raw.get("timezone", "Europe/Moscow")),
+        shadow_on_calendar=str(
+            schedule_raw.get("shadow_on_calendar", _DEFAULT_SHADOW_CALENDAR)
+        ),
+        shadow_randomized_delay_seconds=_integer(
+            schedule_raw.get("shadow_randomized_delay_seconds", 20),
+            "shadow_randomized_delay_seconds",
+        ),
+        health_on_boot=str(schedule_raw.get("health_on_boot", "10min")),
+        health_interval=str(schedule_raw.get("health_interval", "15min")),
+        diagnostics_interval_seconds=_integer(
+            schedule_raw.get("diagnostics_interval_seconds", 60),
+            "diagnostics_interval_seconds",
+        ),
+    )
+    _validate_schedule(schedule)
+    return RuntimeConfig(environment=environment, schedule=schedule)
+
+
+def set_runtime_environment(path: Path, environment: TInvestEnvironment) -> None:
+    raw: dict[str, Any] = {}
+    if path.exists():
+        loaded = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(loaded, dict):
+            raise ValueError("runtime configuration must be a JSON object")
+        raw = loaded
+    raw["t_invest_environment"] = environment.value
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    temporary.write_text(json.dumps(raw, indent=2) + "\n", encoding="utf-8")
+    temporary.replace(path)
+
+
+def render_systemd_timer_overrides(config: RuntimeConfig, output_dir: Path) -> tuple[Path, Path]:
+    shadow = output_dir / "moex-tinvest-shadow.timer.d" / "runtime.conf"
+    health = output_dir / "moex-tinvest-health.timer.d" / "runtime.conf"
+    calendar = f"{config.schedule.shadow_on_calendar} {config.schedule.timezone}"
+    _atomic_write(
+        shadow,
+        "[Timer]\n"
+        "OnCalendar=\n"
+        f"OnCalendar={calendar}\n"
+        f"RandomizedDelaySec={config.schedule.shadow_randomized_delay_seconds}s\n",
+    )
+    _atomic_write(
+        health,
+        "[Timer]\n"
+        "OnBootSec=\n"
+        f"OnBootSec={config.schedule.health_on_boot}\n"
+        "OnUnitActiveSec=\n"
+        f"OnUnitActiveSec={config.schedule.health_interval}\n",
+    )
+    return shadow, health
+
+
+def _integer(value: object, label: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError(f"{label} must be an integer")
+    return value
+
+
+def _validate_schedule(schedule: RuntimeSchedule) -> None:
+    try:
+        ZoneInfo(schedule.timezone)
+    except (ZoneInfoNotFoundError, ValueError) as exc:
+        raise ValueError("schedule timezone must be a valid IANA timezone") from exc
+    if (
+        not schedule.shadow_on_calendar.strip()
+        or "\n" in schedule.shadow_on_calendar
+        or "\r" in schedule.shadow_on_calendar
+        or len(schedule.shadow_on_calendar) > 80
+    ):
+        raise ValueError("shadow_on_calendar must be a single systemd calendar expression")
+    for label, value in (
+        ("health_on_boot", schedule.health_on_boot),
+        ("health_interval", schedule.health_interval),
+    ):
+        if not _DURATION.fullmatch(value):
+            raise ValueError(f"{label} must look like 30s, 15min or 1h")
+    if not 0 <= schedule.shadow_randomized_delay_seconds <= 3600:
+        raise ValueError("shadow_randomized_delay_seconds must be between 0 and 3600")
+    if not 10 <= schedule.diagnostics_interval_seconds <= 86400:
+        raise ValueError("diagnostics_interval_seconds must be between 10 and 86400")
+
+
+def _atomic_write(path: Path, payload: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    temporary.write_text(payload, encoding="utf-8")
+    temporary.replace(path)

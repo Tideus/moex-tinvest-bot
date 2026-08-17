@@ -1,3 +1,11 @@
 {
-  "t_invest_environment": "sandbox"
+  "t_invest_environment": "sandbox",
+  "schedule": {
+    "timezone": "Europe/Moscow",
+    "shadow_on_calendar": "*-*-* *:05:00",
+    "shadow_randomized_delay_seconds": 20,
+    "health_on_boot": "10min",
+    "health_interval": "15min",
+    "diagnostics_interval_seconds": 60
+  }
 }

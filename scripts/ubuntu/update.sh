@@ -34,6 +34,7 @@ rsync -a --delete \
   --exclude '.git' --exclude '.venv' --exclude '.env' --exclude 'artifacts/*' \
   --exclude 'logs/*' --exclude 'data' --exclude 'work' \
   "${PROJECT_DIR}/" "${APP_DIR}/"
+find "${APP_DIR}/scripts/ubuntu" -type f -name '*.sh' -exec chmod 0755 {} +
 bash "${PROJECT_DIR}/scripts/ubuntu/install-ca-certificates.sh"
 "${APP_DIR}/.venv/bin/python" -m pip install --upgrade "${APP_DIR}[server]"
 "${APP_DIR}/.venv/bin/python" -m moex_bot.cli config-check --root "${APP_DIR}"
@@ -41,6 +42,8 @@ install -m 0644 "${PROJECT_DIR}/deploy/ubuntu/"*.service /etc/systemd/system/
 install -m 0644 "${PROJECT_DIR}/deploy/ubuntu/"*.timer /etc/systemd/system/
 install -m 0644 "${PROJECT_DIR}/deploy/ubuntu/moex-tinvest-bot.logrotate" \
   /etc/logrotate.d/moex-tinvest-bot
+install -m 0755 "${PROJECT_DIR}/scripts/ubuntu/moex-botctl.sh" \
+  /usr/local/sbin/moex-botctl
 systemctl daemon-reload
 restart_timers
 trap - EXIT
