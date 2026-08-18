@@ -4,6 +4,8 @@ set -Eeuo pipefail
 APP_DIR="${MOEX_BOT_APP_DIR:-/opt/moex-tinvest-bot}"
 CONFIG_DIR="${MOEX_BOT_CONFIG_DIR:-/etc/moex-tinvest-bot}"
 STATE_DIR="${MOEX_BOT_STATE_DIR:-/var/lib/moex-tinvest-bot}"
+LOG_DIR="${MOEX_BOT_LOG_DIR:-/var/log/moex-tinvest-bot}"
+BACKUP_DIR="${MOEX_BOT_BACKUP_DIR:-/var/backups/moex-tinvest-bot}"
 SYSTEMD_DIR="${MOEX_BOT_SYSTEMD_DIR:-/etc/systemd/system}"
 SERVICE_USER="${MOEX_BOT_USER:-moexbot}"
 PYTHON_BIN="${MOEX_BOT_PYTHON:-${APP_DIR}/.venv/bin/python}"
@@ -94,11 +96,37 @@ check_paths() {
   [[ -z "${non_executable}" ]]
 }
 
+require_permissions() {
+  local expected="$1"
+  local path="$2"
+  local actual=""
+  actual="$(stat -c '%a:%U:%G' "${path}")"
+  if [[ "${actual}" != "${expected}" ]]; then
+    printf 'FAIL: %s expected=%s actual=%s\n' "${path}" "${expected}" "${actual}" >&2
+    return 2
+  fi
+}
+
+check_permissions() {
+  require_permissions "755:root:root" "${APP_DIR}"
+  require_permissions "750:root:${SERVICE_USER}" "${CONFIG_DIR}"
+  require_permissions "640:root:${SERVICE_USER}" "${ENV_FILE}"
+  require_permissions "644:root:${SERVICE_USER}" "${RUNTIME_FILE}"
+  require_permissions "750:${SERVICE_USER}:${SERVICE_USER}" "${STATE_DIR}"
+  require_permissions "750:${SERVICE_USER}:${SERVICE_USER}" "${LOG_DIR}"
+  require_permissions "750:${SERVICE_USER}:${SERVICE_USER}" "${BACKUP_DIR}"
+  while IFS= read -r script; do
+    require_permissions "755:root:root" "${script}"
+  done < <(find "${APP_DIR}/scripts/ubuntu" -type f -name '*.sh' -print)
+}
+
 prelaunch() {
   FAILURES=0
   heading "1/5 Файлы и права"
   check "Установочные файлы доступны" \
     "проверьте установку и выполните chmod 0755 для scripts/ubuntu/*.sh" check_paths
+  check "Владельцы и режимы файлов безопасны" \
+    "повторно выполните install/update для восстановления прав" check_permissions
   check "Секреты загружены" \
     "проверьте ${ENV_FILE}, владельца root:${SERVICE_USER} и режим 0640" load_secrets
   load_secrets || true

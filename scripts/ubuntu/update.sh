@@ -3,6 +3,9 @@ set -Eeuo pipefail
 
 APP_DIR="${MOEX_BOT_APP_DIR:-/opt/moex-tinvest-bot}"
 CONFIG_DIR="${MOEX_BOT_CONFIG_DIR:-/etc/moex-tinvest-bot}"
+STATE_DIR="${MOEX_BOT_STATE_DIR:-/var/lib/moex-tinvest-bot}"
+LOG_DIR="${MOEX_BOT_LOG_DIR:-/var/log/moex-tinvest-bot}"
+BACKUP_DIR="${MOEX_BOT_BACKUP_DIR:-/var/backups/moex-tinvest-bot}"
 SERVICE_USER="${MOEX_BOT_USER:-moexbot}"
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 
@@ -50,6 +53,12 @@ rsync -a --delete \
   --exclude 'logs/*' --exclude 'data' --exclude 'work' \
   "${PROJECT_DIR}/" "${APP_DIR}/"
 find "${APP_DIR}/scripts/ubuntu" -type f -name '*.sh' -exec chmod 0755 {} +
+chown -R root:root "${APP_DIR}"
+install -d -o root -g "${SERVICE_USER}" -m 0750 "${CONFIG_DIR}"
+install -d -o "${SERVICE_USER}" -g "${SERVICE_USER}" -m 0750 \
+  "${STATE_DIR}" "${LOG_DIR}" "${BACKUP_DIR}"
+chown root:"${SERVICE_USER}" "${CONFIG_DIR}/bot.env"
+chmod 0640 "${CONFIG_DIR}/bot.env"
 bash "${PROJECT_DIR}/scripts/ubuntu/install-ca-certificates.sh"
 "${APP_DIR}/.venv/bin/python" -m pip install --upgrade "${APP_DIR}[server]"
 "${APP_DIR}/.venv/bin/python" -m moex_bot.cli runtime-normalize \

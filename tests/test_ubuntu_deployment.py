@@ -1,4 +1,5 @@
 import hashlib
+import subprocess
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -71,6 +72,19 @@ def test_all_deployment_shell_scripts_use_strict_mode() -> None:
         assert "set -Eeuo pipefail" in text
 
 
+def test_git_index_preserves_shell_script_execute_bits() -> None:
+    result = subprocess.run(
+        ["git", "ls-files", "--stage", "scripts/ubuntu/*.sh"],
+        cwd=PROJECT_ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    rows = [line for line in result.stdout.splitlines() if line]
+    assert rows
+    assert all(line.startswith("100755 ") for line in rows)
+
+
 def test_certificate_manifest_pins_all_deployment_certificates() -> None:
     directory = DEPLOY / "certificates"
     manifest: dict[str, str] = {}
@@ -101,6 +115,25 @@ def test_install_and_update_restore_script_execute_permissions() -> None:
     for name in ("install.sh", "update.sh"):
         text = (PROJECT_ROOT / "scripts" / "ubuntu" / name).read_text(encoding="utf-8")
         assert "-exec chmod 0755 {} +" in text
+
+
+def test_update_reasserts_runtime_owners_and_modes() -> None:
+    text = (PROJECT_ROOT / "scripts" / "ubuntu" / "update.sh").read_text(
+        encoding="utf-8"
+    )
+    assert 'chown -R root:root "${APP_DIR}"' in text
+    assert 'chmod 0640 "${CONFIG_DIR}/bot.env"' in text
+    assert 'install -d -o root -g "${SERVICE_USER}" -m 0750 "${CONFIG_DIR}"' in text
+    assert '"${STATE_DIR}" "${LOG_DIR}" "${BACKUP_DIR}"' in text
+
+
+def test_prelaunch_checks_runtime_owners_and_modes() -> None:
+    text = (PROJECT_ROOT / "scripts" / "ubuntu" / "moex-botctl.sh").read_text(
+        encoding="utf-8"
+    )
+    assert "check_permissions" in text
+    assert 'require_permissions "640:root:${SERVICE_USER}" "${ENV_FILE}"' in text
+    assert 'require_permissions "755:root:root" "${script}"' in text
 
 
 def test_install_and_update_publish_single_command_control_tool() -> None:
