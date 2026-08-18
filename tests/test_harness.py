@@ -77,6 +77,29 @@ def test_replay_harness_produces_audited_dry_run_orders(tmp_path: Path) -> None:
     assert log_path.read_text(encoding="utf-8").count("order_record") == 2
 
 
+def test_projected_shadow_orders_do_not_masquerade_as_broker_orders(
+    tmp_path: Path,
+) -> None:
+    now = datetime.now(UTC)
+    config = _config()
+    harness = TradingHarness(
+        config,
+        DryRunExecutionAdapter(config.mode),
+        JsonlAuditLog(tmp_path / "audit.jsonl"),
+    )
+    result = harness.run(
+        run_id="run-tinvest-projection",
+        as_of=now,
+        market=_market(now),
+        portfolio=PortfolioSnapshot(
+            Decimal("100000"), open_orders=0, source="t_invest_sandbox"
+        ),
+        geo_events=(),
+    )
+    assert len(result.orders) == 2
+    assert not result.rejected
+
+
 def test_stale_market_blocks_run(tmp_path: Path) -> None:
     now = datetime.now(UTC)
     config = _config()

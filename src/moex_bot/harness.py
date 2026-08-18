@@ -126,12 +126,16 @@ class TradingHarness:
                 continue
             record = self.execution.submit(decision.intent)
             orders.append(record)
+            projected_source = projected_portfolio.source
+            if projected_source.startswith("t_invest"):
+                projected_source = f"projected:{projected_source}"
             if decision.intent.side.value == "buy":
                 projected_portfolio = replace(
                     projected_portfolio,
                     cash=projected_portfolio.cash - decision.intent.notional,
                     daily_turnover=(projected_portfolio.daily_turnover + decision.intent.notional),
                     open_orders=projected_portfolio.open_orders + 1,
+                    source=projected_source,
                 )
                 projected_gross += decision.intent.notional
             else:
@@ -139,6 +143,7 @@ class TradingHarness:
                     projected_portfolio,
                     daily_turnover=(projected_portfolio.daily_turnover + decision.intent.notional),
                     open_orders=projected_portfolio.open_orders + 1,
+                    source=projected_source,
                 )
                 projected_gross = max(
                     Decimal("0"), projected_gross - decision.intent.notional

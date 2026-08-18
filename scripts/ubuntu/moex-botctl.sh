@@ -19,6 +19,7 @@ usage() {
 Usage:
   sudo moex-botctl prelaunch
   sudo moex-botctl start
+  sudo moex-botctl stop
   sudo moex-botctl diagnose [--once|--watch] [--interval SECONDS]
   sudo moex-botctl status
   sudo moex-botctl portfolio
@@ -218,6 +219,45 @@ start_bot() {
   printf '\033[1;32mSTARTED\033[0m: shadow, daily-report и health timers активны; live orders отключены.\n'
 }
 
+timers_are_stopped() {
+  local unit=""
+  for unit in \
+    moex-tinvest-shadow.timer \
+    moex-tinvest-health.timer \
+    moex-tinvest-daily-report.timer; do
+    if systemctl is-active --quiet "${unit}"; then
+      printf 'FAIL: timer remains active: %s\n' "${unit}" >&2
+      return 2
+    fi
+    if systemctl is-enabled --quiet "${unit}"; then
+      printf 'FAIL: timer remains enabled: %s\n' "${unit}" >&2
+      return 2
+    fi
+  done
+}
+
+stop_bot() {
+  FAILURES=0
+  heading "Остановка расписания"
+  check "Таймеры отключены" "проверьте systemctl status moex-tinvest-*.timer" \
+    systemctl disable --now \
+      moex-tinvest-shadow.timer \
+      moex-tinvest-health.timer \
+      moex-tinvest-daily-report.timer
+  check "Текущие циклы остановлены" "проверьте journalctl сервисов" \
+    systemctl stop \
+      moex-tinvest-shadow.service \
+      moex-tinvest-health.service \
+      moex-tinvest-daily-report.service
+  check "Автозапуск действительно выключен" \
+    "один или несколько timers остались active/enabled" timers_are_stopped
+  if [[ "${FAILURES}" -ne 0 ]]; then
+    printf '\033[1;31mPARTIAL/FAILED\033[0m: ошибок при остановке: %s.\n' "${FAILURES}"
+    return 2
+  fi
+  printf '\033[1;32mSTOPPED\033[0m: расписание отключено, активные циклы завершены; данные и конфиги сохранены.\n'
+}
+
 diagnose_once() {
   FAILURES=0
   local requirement="tinvest_sandbox"
@@ -340,6 +380,7 @@ if [[ $# -gt 0 ]]; then shift; fi
 case "${command}" in
   prelaunch) prelaunch ;;
   start) start_bot ;;
+  stop) stop_bot ;;
   diagnose) diagnose "$@" ;;
   status) status_bot ;;
   portfolio) show_portfolio ;;

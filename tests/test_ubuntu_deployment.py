@@ -167,6 +167,7 @@ def test_control_tool_exposes_safe_operator_workflow() -> None:
     for command in (
         "prelaunch",
         "start",
+        "stop",
         "diagnose",
         "status",
         "portfolio",
@@ -175,6 +176,21 @@ def test_control_tool_exposes_safe_operator_workflow() -> None:
     ):
         assert f"{command})" in text
     assert "timers не включены" in text
+
+
+def test_control_stop_disables_all_timers_and_stops_current_cycles() -> None:
+    text = (PROJECT_ROOT / "scripts" / "ubuntu" / "moex-botctl.sh").read_text(
+        encoding="utf-8"
+    )
+    assert "systemctl disable --now" in text
+    assert "moex-tinvest-shadow.timer" in text
+    assert "moex-tinvest-health.timer" in text
+    assert "moex-tinvest-daily-report.timer" in text
+    assert "moex-tinvest-shadow.service" in text
+    assert "moex-tinvest-health.service" in text
+    assert "moex-tinvest-daily-report.service" in text
+    assert "timers_are_stopped" in text
+    assert "данные и конфиги сохранены" in text
 
 
 def test_shadow_runner_uses_selected_broker_snapshot_not_empty_example() -> None:

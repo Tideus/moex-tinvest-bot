@@ -16,6 +16,7 @@ read-only T-Invest portfolio synchronization. It implements the control plane de
 ```bash
 sudo moex-botctl prelaunch
 sudo moex-botctl start
+sudo moex-botctl stop
 sudo moex-botctl diagnose
 sudo moex-botctl diagnose --watch
 sudo moex-botctl portfolio

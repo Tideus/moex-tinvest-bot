@@ -2,11 +2,55 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 from decimal import Decimal
 from enum import StrEnum
+from zoneinfo import ZoneInfo
 
 from .harness import HarnessResult
+
+MOSCOW = ZoneInfo("Europe/Moscow")
+
+_GEO_LABELS = {
+    "normal": "нормальный",
+    "elevated": "повышенный",
+    "high": "высокий",
+    "critical": "критический",
+    "recovery": "восстановление",
+}
+_SECTOR_LABELS = {
+    "financials": "финансы",
+    "energy": "энергетика",
+    "metals_mining": "металлы и добыча",
+    "materials": "материалы",
+    "technology": "технологии",
+    "consumer_staples": "товары первой необходимости",
+    "telecommunications": "телеком",
+}
+_RISK_REASON_LABELS = {
+    "blocked by geopolitical risk policy": "покупка запрещена геориск-политикой",
+    "new exposure forbidden in CRITICAL mode": "новые позиции запрещены при критическом геориске",
+    "order notional exceeds limit": "сумма одной заявки выше лимита",
+    "daily turnover limit exceeded": "исчерпан дневной лимит оборота",
+    "open order limit reached": "достигнут лимит незавершённых заявок",
+    "active broker orders require position and exposure reconciliation": (
+        "у брокера есть активные заявки — сначала нужна сверка позиций"
+    ),
+    "sell requires an existing long position; shorting forbidden": (
+        "нет длинной позиции для продажи; шорт пока запрещён"
+    ),
+    "sell quantity exceeds unblocked long position; shorting forbidden": (
+        "объём продажи превышает свободный остаток позиции"
+    ),
+    "insufficient spendable cash after mandatory reserve; margin forbidden": (
+        "недостаточно свободных денег после обязательного резерва"
+    ),
+    "non-positive portfolio equity": "капитал счёта не положительный",
+    "resulting position exceeds position-weight limit": "позиция превысит лимит веса",
+    "projected gross exposure exceeds limit": "портфель превысит лимит общей экспозиции",
+    "projected sector exposure exceeds limit": "превышен лимит на один сектор",
+    "projected risk-cluster exposure exceeds limit": "превышен лимит группы связанных рисков",
+}
 
 
 class FlowState(StrEnum):
@@ -62,54 +106,119 @@ class ConcentrationSnapshot:
     metrics: Mapping[str, Decimal]
 
 
+def _number(value: Decimal, places: int = 2, *, signed: bool = False) -> str:
+    prefix = "+" if signed and value > 0 else ""
+    rendered = f"{value:,.{places}f}".replace(",", "\u00a0").replace(".", ",")
+    return prefix + rendered
+
+
+def _money(value: Decimal) -> str:
+    places = 0 if value == value.to_integral_value() else 2
+    return f"{_number(value, places)} ₽"
+
+
+def _rationale_metrics(rationale: str) -> tuple[Decimal, Decimal, Decimal] | None:
+    values: dict[str, str] = {}
+    for part in rationale.split(";"):
+        key, separator, value = part.strip().partition("=")
+        if separator:
+            values[key] = value
+    price, separator, trend = values.get("price", "").partition(">trend=")
+    if not separator:
+        return None
+    try:
+        return Decimal(values["momentum"]), Decimal(price), Decimal(trend)
+    except (KeyError, ArithmeticError):
+        return None
+
+
+def _risk_reason(reason: object) -> str:
+    raw = str(reason)
+    return _RISK_REASON_LABELS.get(raw, raw)
+
+
 def render_shadow_report(result: HarnessResult, as_of: datetime) -> str:
+    local_time = as_of.astimezone(MOSCOW)
+    quality_icon = "✅" if result.quality.passed else "⛔"
+    quality_text = "данные корректны" if result.quality.passed else "расчёт заблокирован"
+    geo_label = _GEO_LABELS.get(result.geo.level.value, result.geo.level.value)
     lines = [
-        "MOEX bot — часовой shadow-отчёт",
-        f"Время: {as_of.astimezone(UTC).isoformat()}",
-        f"Качество данных: {'OK' if result.quality.passed else 'BLOCKED'}",
-        f"Геориск: {result.geo.level.value}, множитель {result.geo.multiplier}",
-        f"Целей: {len(result.targets)}; dry-run приказов: {len(result.orders)}; "
-        f"отклонено: {len(result.rejected)}",
+        "🧪 MOEX BOT · SHADOW",
+        local_time.strftime("%d.%m.%Y · %H:%M МСК"),
+        "",
+        f"{quality_icon} Качество: {quality_text}",
+        f"🌍 Геориск: {geo_label} · размер позиций ×{_number(result.geo.multiplier)}",
+        "",
+        "📊 ИТОГ",
+        f"Выбрано бумаг: {len(result.targets)}",
+        f"Прошло риск-контроль: {len(result.orders)}",
+        f"Отклонено: {len(result.rejected)}",
     ]
+    if result.quality.errors:
+        lines.extend(("", "Причины блокировки:"))
+        lines.extend(f"• {_risk_reason(value)}" for value in result.quality.errors[:5])
     if result.portfolio is not None:
         portfolio = result.portfolio
         equity_text = (
             "не передан"
             if portfolio.reported_equity is None
-            else f"{portfolio.reported_equity} RUB"
+            else _money(portfolio.reported_equity)
         )
-        lines.append(
-            f"Счёт: equity={equity_text}; свободно={portfolio.cash} RUB; "
-            f"заблокировано={portfolio.blocked_cash} RUB; "
-            f"позиций={len(portfolio.positions)}; активных заявок={portfolio.open_orders}"
+        lines.extend(
+            (
+                "",
+                "💼 СЧЁТ",
+                f"Капитал: {equity_text}",
+                f"Свободно: {_money(portfolio.cash)}",
+                f"Заблокировано: {_money(portfolio.blocked_cash)}",
+                f"Позиции: {len(portfolio.positions)} · заявки у брокера: {portfolio.open_orders}",
+            )
         )
     if result.targets:
-        lines.append("Целевой портфель:")
-        for target in result.targets[:12]:
-            lines.append(f"- {target.secid}: {target.weight * 100:.2f}% ({target.rationale})")
+        lines.extend(("", "🎯 ЦЕЛЕВОЙ ПОРТФЕЛЬ"))
+        for index, target in enumerate(result.targets[:12], start=1):
+            lines.append(f"{index}. {target.secid} · цель {_number(target.weight * 100)}%")
+            metrics = _rationale_metrics(target.rationale)
+            if metrics is not None:
+                momentum, price, trend = metrics
+                lines.append(
+                    f"   импульс {_number(momentum * 100, signed=True)}% · "
+                    f"цена {_money(price)} · тренд {_money(trend)}"
+                )
     if result.orders:
-        lines.append("Виртуальные приказы:")
+        lines.extend(("", "🧾 ВИРТУАЛЬНЫЕ СДЕЛКИ"))
         for record in result.orders[:12]:
             intent = record.intent
+            icon = "🟢" if intent.side.value == "buy" else "🔴"
+            sector = _SECTOR_LABELS.get(intent.instrument.sector, intent.instrument.sector)
             lines.append(
-                f"- {intent.side.value.upper()} {intent.instrument.secid}: "
-                f"{intent.lots} лот.; {intent.notional} RUB; {record.status.value}"
-                f"; sector={intent.instrument.sector}; cluster={intent.instrument.risk_cluster}"
+                f"{icon} {intent.side.value.upper()} {intent.instrument.secid} · "
+                f"{intent.lots} лот. · {_money(intent.notional)}"
             )
+            lines.append(f"   лимит {_money(intent.limit_price)} · сектор: {sector}")
+    elif result.quality.passed:
+        lines.extend(("", "🧾 ВИРТУАЛЬНЫЕ СДЕЛКИ", "Нет сделок, прошедших риск-контроль."))
     if result.rejected:
-        lines.append("Отклонено risk-gate:")
+        lines.extend(("", "⛔ НЕ ПРОШЛИ РИСК-КОНТРОЛЬ"))
         for item in result.rejected[:12]:
             reasons_raw = item.get("reasons", ())
             reasons = (
-                ", ".join(str(value) for value in reasons_raw)
+                "; ".join(_risk_reason(value) for value in reasons_raw)
                 if isinstance(reasons_raw, (list, tuple))
-                else str(reasons_raw)
+                else _risk_reason(reasons_raw)
             )
             lines.append(
-                f"- {str(item.get('side', '?')).upper()} {item.get('secid', '?')}: "
+                f"• {str(item.get('side', '?')).upper()} {item.get('secid', '?')} — "
                 f"{reasons or 'причина не указана'}"
             )
-    lines.append("Режим: SHADOW — реальные заявки не отправлялись.")
+    lines.extend(
+        (
+            "",
+            "ℹ️ SHADOW: это расчёт возможных действий. Реальные заявки брокеру не отправлялись.",
+            "Импульс — изменение цены в окне стратегии; "
+            "тренд — средняя цена для фильтра направления.",
+        )
+    )
     report = "\n".join(lines)
     if len(report) > 4096:
         report = report[:4000] + "\n… отчёт сокращён; полный результат сохранён в JSON."

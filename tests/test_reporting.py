@@ -25,14 +25,30 @@ def test_hourly_telegram_report_contains_trade_intents() -> None:
         "shadow-test",
         QualityReport(True, (), ()),
         GeoRiskSnapshot(GeoRiskLevel.NORMAL, Decimal("1"), frozenset(), ()),
-        (Target("SBER", Decimal("0.15"), "momentum"),),
+        (
+            Target(
+                "SBER",
+                Decimal("0.15"),
+                "momentum=0.029122; price=300.5>trend=290.25; geo_multiplier=1",
+            ),
+        ),
         (OrderRecord(intent, OrderStatus.VALIDATED),),
-        (),
+        (
+            {
+                "side": "buy",
+                "secid": "LKOH",
+                "reasons": ("daily turnover limit exceeded",),
+            },
+        ),
     )
     report = render_shadow_report(result, datetime(2026, 8, 18, 10, tzinfo=UTC))
-    assert "Виртуальные приказы" in report
-    assert "BUY SBER: 2 лот.; 600 RUB" in report
-    assert "реальные заявки не отправлялись" in report
+    assert "18.08.2026 · 13:00 МСК" in report
+    assert "🎯 ЦЕЛЕВОЙ ПОРТФЕЛЬ" in report
+    assert "импульс +2,91% · цена 300,50 ₽ · тренд 290,25 ₽" in report
+    assert "🧾 ВИРТУАЛЬНЫЕ СДЕЛКИ" in report
+    assert "🟢 BUY SBER · 2 лот. · 600 ₽" in report
+    assert "BUY LKOH — исчерпан дневной лимит оборота" in report
+    assert "Реальные заявки брокеру не отправлялись" in report
 
 
 def test_persisted_shadow_decisions_show_buy_sell_and_rejections() -> None:
