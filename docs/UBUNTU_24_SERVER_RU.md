@@ -354,6 +354,13 @@ sudo /opt/moex-tinvest-bot/scripts/ubuntu/uninstall.sh --purge
 повторно поставьте сохранённые сообщения в очередь и запустите доставку:
 
 ```bash
+sudo moex-botctl telegram-recover
+```
+
+Команда последовательно выполняет requeue, доставку и итоговый health-check. Для старой
+установленной версии без этой команды используйте эквивалент:
+
+```bash
 sudo -u moexbot bash -c '
 set -a
 source /etc/moex-tinvest-bot/bot.env

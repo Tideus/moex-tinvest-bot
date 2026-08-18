@@ -27,6 +27,7 @@ Usage:
   sudo moex-botctl portfolio
   sudo moex-botctl decisions [SHADOW_JSON]
   sudo moex-botctl backtest
+  sudo moex-botctl telegram-recover
   sudo moex-botctl contour sandbox|prod
 EOF
 }
@@ -424,6 +425,21 @@ historical_backtest() {
   printf 'Готово: %s\n' "${STATE_DIR}/artifacts/historical-backtest/REPORT.md"
 }
 
+recover_telegram_outbox() {
+  load_secrets || {
+    printf 'FAIL: cannot load %s\n' "${ENV_FILE}" >&2
+    return 2
+  }
+  heading "Восстановление Telegram outbox"
+  as_service "${PYTHON_BIN}" -m moex_bot.cli outbox-retry-dead \
+    --outbox "${STATE_DIR}/data/notifications.sqlite3"
+  as_service "${PYTHON_BIN}" -m moex_bot.cli telegram-send \
+    --outbox "${STATE_DIR}/data/notifications.sqlite3"
+  as_service "${PYTHON_BIN}" -m moex_bot.cli outbox-health \
+    --outbox "${STATE_DIR}/data/notifications.sqlite3" --max-pending-due 20
+  printf 'TELEGRAM HEALTHY: dead-сообщения повторно отправлены.\n'
+}
+
 require_root
 command="${1:-}"
 if [[ $# -gt 0 ]]; then shift; fi
@@ -436,6 +452,7 @@ case "${command}" in
   portfolio) show_portfolio ;;
   decisions) show_decisions "$@" ;;
   backtest) historical_backtest "$@" ;;
+  telegram-recover) recover_telegram_outbox ;;
   contour) set_contour "$@" ;;
   sandbox-enable) set_sandbox_execution true "$@" ;;
   sandbox-disable) set_sandbox_execution false "$@" ;;
