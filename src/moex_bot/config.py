@@ -30,6 +30,9 @@ class BotConfig:
     allow_margin: bool
     live_interlock: bool
     strategy: StrategyConfig
+    min_cash_reserve_weight: Decimal = Decimal("0")
+    max_sector_weight: Decimal = Decimal("1")
+    max_risk_cluster_weight: Decimal = Decimal("1")
 
     def validate(self) -> tuple[str, ...]:
         errors: list[str] = []
@@ -40,9 +43,14 @@ class BotConfig:
         for name, value in (
             ("max_position_weight", self.max_position_weight),
             ("max_gross_exposure", self.max_gross_exposure),
+            ("min_cash_reserve_weight", self.min_cash_reserve_weight),
+            ("max_sector_weight", self.max_sector_weight),
+            ("max_risk_cluster_weight", self.max_risk_cluster_weight),
         ):
-            if not value.is_finite() or not Decimal("0") < value <= Decimal("1"):
-                errors.append(f"{name} must be in (0, 1]")
+            lower_ok = value >= 0 if name == "min_cash_reserve_weight" else value > 0
+            if not value.is_finite() or not lower_ok or value > Decimal("1"):
+                interval = "[0, 1]" if name == "min_cash_reserve_weight" else "(0, 1]"
+                errors.append(f"{name} must be in {interval}")
         for name, value in (
             ("max_order_notional", self.max_order_notional),
             ("max_daily_turnover", self.max_daily_turnover),
@@ -104,6 +112,9 @@ def load_config(path: Path) -> BotConfig:
                 strategy["require_above_trend"], "strategy.require_above_trend"
             ),
         ),
+        min_cash_reserve_weight=_decimal(raw.get("min_cash_reserve_weight", "0.10")),
+        max_sector_weight=_decimal(raw.get("max_sector_weight", "0.35")),
+        max_risk_cluster_weight=_decimal(raw.get("max_risk_cluster_weight", "0.45")),
     )
     errors = config.validate()
     if errors:

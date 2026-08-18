@@ -1,5 +1,10 @@
 # Дорожная карта и чек-листы
 
+Целевая long/short мультиактивная архитектура и недельная оценка описаны в
+[../MULTI_ASSET_STRATEGY_RU.md](../MULTI_ASSET_STRATEGY_RU.md). Этапы ниже относятся к безопасному
+фундаменту. Подключение short, futures и options выполняется последовательно после broker truth,
+forecast ledger и weekly scorecard, а не параллельно с первым live-запуском.
+
 ## Этап 0. Спецификация — 2–4 дня
 
 - [ ] Зафиксирована вселенная.
@@ -76,6 +81,8 @@ DoD: fault/replay тесты не создают дубликаты и зака�
 
 ## Этап 6. Sandbox — 1 неделя
 
+- [ ] Read-only portfolio/positions/orders/operations.
+- [ ] Forecast snapshot связан с broker snapshot.
 - [ ] Все операции sandbox.
 - [ ] Reconnect и restart.
 - [ ] Отмена/замена.
@@ -84,6 +91,43 @@ DoD: fault/replay тесты не создают дубликаты и зака�
 - [ ] Recovery drill.
 
 DoD: механика API стабильна; результат не интерпретируется как доходность.
+
+## Этап 6A. Недельная оценка — до любых новых классов активов
+
+- [ ] Forecast ledger с data cutoff, horizon и config hash.
+- [ ] Directional/return/probability score по каждому горизонту.
+- [ ] MAE/MFE, gross/net P&L и издержки.
+- [ ] Attribution data/model/risk/execution/event/process.
+- [ ] Counterfactual hedge только по доступным тогда данным и ценам.
+- [ ] Equity/cash/margin utilization и blocked amounts.
+- [ ] Issuer/sector/underlying/correlation concentration.
+- [ ] Marginal contribution to risk и причины урезания размера.
+- [ ] Автоматический отчёт не меняет параметры стратегии.
+
+DoD: каждое решение воспроизводимо, а недельный отчёт отделяет ошибку прогноза от sizing,
+execution и внешнего шока.
+
+## Этап 6B. Акции long/short sandbox
+
+- [ ] Long BUY/SELL и reconciliation.
+- [ ] Short availability и margin policy.
+- [ ] Отдельные gross/net/borrow/stress limits.
+- [ ] Sizing от broker equity/free cash/free margin с обязательным cash reserve.
+- [ ] Issuer/sector/correlation diversification limits.
+- [ ] Short включается отдельным config gate.
+
+DoD: рестарт, partial fills и неизвестные заявки не создают непреднамеренную short-позицию.
+
+## Этап 6C. Фьючерсы и опционы
+
+- [ ] Futures multiplier, ГО, expiry и rollover.
+- [ ] Option chain, underlying UID, strike, expiry и style.
+- [ ] IV surface и Greeks snapshots.
+- [ ] Defined-risk option strategies.
+- [ ] Portfolio delta/gamma/vega/theta и stress loss.
+- [ ] Отдельный sandbox/shadow gate на каждый класс активов.
+
+DoD: derivatives P&L и риск воспроизводимы; naked short options запрещены.
 
 ## Этап 7. Shadow — 4–8 недель
 
@@ -107,6 +151,7 @@ DoD: выполнены заранее определённые SLA и пред�
 - [ ] Ручное включение.
 - [ ] Ежедневное review.
 - [ ] 30–50 исполнений до масштабирования.
+- [ ] Каждый asset class разрешается отдельно; short/options/futures не включаются одновременно.
 
 ## Preflight каждого live-запуска
 

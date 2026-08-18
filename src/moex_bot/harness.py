@@ -30,6 +30,7 @@ class HarnessResult:
     targets: tuple[Target, ...]
     orders: tuple[OrderRecord, ...]
     rejected: tuple[dict[str, object], ...]
+    portfolio: PortfolioSnapshot | None = None
 
 
 class TradingHarness:
@@ -55,7 +56,7 @@ class TradingHarness:
         )
         if not quality.passed:
             self.audit.write({"type": "quality_block", "run_id": run_id, "errors": quality.errors})
-            return HarnessResult(run_id, quality, geo, (), (), ())
+            return HarnessResult(run_id, quality, geo, (), (), (), portfolio)
 
         raw_targets = calculate_targets(market.values(), self.config.strategy)
         targets = tuple(
@@ -68,16 +69,32 @@ class TradingHarness:
             if target.secid not in geo.blocked_secids
         )
         intents = build_order_intents(
-            run_id, targets, portfolio, market, self.config.min_trade_notional
+            run_id,
+            targets,
+            portfolio,
+            market,
+            self.config.min_trade_notional,
+            self.config.max_order_notional,
         )
         equity = portfolio.equity(market)
         gross_exposure = sum(
             (
-                position.units * market[secid].price
+                abs(position.units * market[secid].price)
                 for secid, position in portfolio.positions.items()
             ),
             start=Decimal("0"),
         )
+        sector_exposure: dict[str, Decimal] = {}
+        cluster_exposure: dict[str, Decimal] = {}
+        for secid, position in portfolio.positions.items():
+            exposure = abs(Decimal(position.units) * market[secid].price)
+            instrument = position.instrument
+            sector_exposure[instrument.sector] = (
+                sector_exposure.get(instrument.sector, Decimal("0")) + exposure
+            )
+            cluster_exposure[instrument.risk_cluster] = (
+                cluster_exposure.get(instrument.risk_cluster, Decimal("0")) + exposure
+            )
         orders: list[OrderRecord] = []
         rejected: list[dict[str, object]] = []
         projected_portfolio = portfolio
@@ -90,12 +107,18 @@ class TradingHarness:
                 geo,
                 equity,
                 projected_gross,
+                sector_exposure,
+                cluster_exposure,
             )
             if not decision.allowed or decision.intent is None:
                 item: dict[str, object] = {
                     "type": "risk_reject",
                     "run_id": run_id,
                     "order_request_id": intent.order_request_id,
+                    "secid": intent.instrument.secid,
+                    "side": intent.side.value,
+                    "lots": intent.lots,
+                    "notional": intent.notional,
                     "reasons": decision.reasons,
                 }
                 rejected.append(item)
@@ -117,6 +140,24 @@ class TradingHarness:
                     daily_turnover=(projected_portfolio.daily_turnover + decision.intent.notional),
                     open_orders=projected_portfolio.open_orders + 1,
                 )
+                projected_gross = max(
+                    Decimal("0"), projected_gross - decision.intent.notional
+                )
+            direction = (
+                Decimal("1") if decision.intent.side.value == "buy" else Decimal("-1")
+            )
+            sector = decision.intent.instrument.sector
+            cluster = decision.intent.instrument.risk_cluster
+            sector_exposure[sector] = max(
+                Decimal("0"),
+                sector_exposure.get(sector, Decimal("0"))
+                + direction * decision.intent.notional,
+            )
+            cluster_exposure[cluster] = max(
+                Decimal("0"),
+                cluster_exposure.get(cluster, Decimal("0"))
+                + direction * decision.intent.notional,
+            )
             event = order_record_event(record)
             event["run_id"] = run_id
             self.audit.write(event)
@@ -129,4 +170,6 @@ class TradingHarness:
                 "rejected": len(rejected),
             }
         )
-        return HarnessResult(run_id, quality, geo, targets, tuple(orders), tuple(rejected))
+        return HarnessResult(
+            run_id, quality, geo, targets, tuple(orders), tuple(rejected), portfolio
+        )

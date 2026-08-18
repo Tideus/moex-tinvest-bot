@@ -4,7 +4,7 @@ import argparse
 import json
 import os
 from dataclasses import asdict
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from decimal import Decimal
 from importlib import import_module
 from pathlib import Path
@@ -12,6 +12,7 @@ from typing import Any
 
 from .adapters import DryRunExecutionAdapter, JsonlAuditLog
 from .config import load_config
+from .daily_report import render_daily_shadow_report, summarize_shadow_artifacts
 from .domain import GeoEvent, Instrument, MarketObservation, PortfolioSnapshot, Position
 from .env_file import upsert_env_value
 from .geo_feed import refresh_geo_feed
@@ -19,12 +20,20 @@ from .harness import TradingHarness
 from .integrations.algopack_flow import AlgoPackFlowAdapter
 from .integrations.moexalgo_data import MoexAlgoReadOnlyAdapter
 from .integrations.tinvest_sandbox import (
+    GET_ORDERS_PATH,
+    GET_PORTFOLIO_PATH,
+    GET_POSITIONS_PATH,
     MAX_SANDBOX_PAY_IN_RUB,
     TInvestSandboxAccountService,
+    UrlLibJsonTransport,
 )
 from .notifications import SQLiteOutbox, TelegramBotApiSender, deliver_pending
 from .ownership import load_ownership_disclosures, render_ownership_report
-from .reporting import render_flow_report, render_shadow_report
+from .reporting import (
+    render_flow_report,
+    render_persisted_shadow_decisions,
+    render_shadow_report,
+)
 from .runtime_config import (
     load_runtime_config,
     materialize_runtime_defaults,
@@ -299,6 +308,10 @@ def environment_status(*, runtime_path: Path, services_path: Path) -> int:
         "shadow schedule: "
         f"{config.schedule.shadow_on_calendar} {config.schedule.timezone}"
     )
+    print(
+        "daily report schedule: "
+        f"{config.schedule.daily_report_on_calendar} {config.schedule.timezone}"
+    )
     print(f"health interval: {config.schedule.health_interval}")
     print(f"diagnostics interval: {config.schedule.diagnostics_interval_seconds}s")
     return 0
@@ -418,6 +431,84 @@ def hourly_shadow(
     return 0 if result.quality.passed else 2
 
 
+def broker_portfolio_snapshot(
+    *,
+    universe_path: Path,
+    output_path: Path,
+    runtime_path: Path,
+    services_path: Path,
+) -> int:
+    try:
+        runtime_config = load_runtime_config(runtime_path)
+        service_config = load_service_config(services_path)
+        broker = resolve_tinvest_runtime(
+            service_config, environment=runtime_config.environment
+        )
+        if not broker.token or not broker.account_id:
+            raise ValueError(f"{broker.environment.value} token and account id are required")
+        universe = load_universe(universe_path)
+        instruments = {
+            item.t_invest_uid: Instrument(
+                item.secid,
+                item.t_invest_uid,
+                item.board,
+                item.lot_size_verified,
+                Decimal("0.01"),
+                issuer_id=item.issuer_id,
+                sector=item.sector,
+                risk_cluster=item.risk_cluster,
+                asset_class=item.asset_class,
+            )
+            for item in universe
+        }
+        service = TInvestSandboxAccountService(broker.token, transport=UrlLibJsonTransport())
+        method_paths = (
+            {}
+            if broker.environment is TInvestEnvironment.SANDBOX
+            else {
+                "portfolio_path": GET_PORTFOLIO_PATH,
+                "positions_path": GET_POSITIONS_PATH,
+                "orders_path": GET_ORDERS_PATH,
+            }
+        )
+        snapshot = service.broker_snapshot(
+            broker.account_id,
+            instruments,
+            base_url=broker.rest_endpoint,
+            source=f"t_invest_{broker.environment.value}",
+            **method_paths,
+        )
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_text(
+            json.dumps(snapshot.as_portfolio_payload(), ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+    except (RuntimeError, ValueError, OSError, json.JSONDecodeError) as exc:
+        print(f"FAIL: broker portfolio snapshot: {exc}")
+        return 2
+    print(
+        f"PASS: {broker.environment.value} broker portfolio snapshot "
+        f"cash={snapshot.cash_available} blocked={snapshot.cash_blocked} "
+        f"equity={snapshot.reported_equity} positions={len(snapshot.positions_lots)} "
+        f"open_orders={snapshot.open_orders}"
+    )
+    print(f"result={output_path}")
+    return 0
+
+
+def shadow_decisions(*, input_path: Path) -> int:
+    try:
+        raw = json.loads(input_path.read_text(encoding="utf-8"))
+        if not isinstance(raw, dict):
+            raise ValueError("shadow artifact must be a JSON object")
+        report = render_persisted_shadow_decisions(raw)
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        print(f"FAIL: shadow decisions: {exc}")
+        return 2
+    print(report)
+    return 0
+
+
 def algopack_flow(
     *,
     secid: str,
@@ -491,6 +582,41 @@ def telegram_send(*, outbox_path: Path, as_of: datetime, limit: int) -> int:
     )
     print(f"telegram sent={sent} failed={failed} pending={outbox.counts().get('pending', 0)}")
     return 0 if failed == 0 else 2
+
+
+def daily_trade_report(
+    *,
+    artifacts_dir: Path,
+    report_date: date,
+    timezone: str,
+    output_path: Path,
+    outbox_path: Path | None,
+    as_of: datetime,
+) -> int:
+    try:
+        summary = summarize_shadow_artifacts(
+            artifacts_dir.glob("shadow-*.json"),
+            report_date=report_date,
+            timezone=timezone,
+        )
+        report = render_daily_shadow_report(summary)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_text(report + "\n", encoding="utf-8")
+        if outbox_path is not None and summary.cycles > 0:
+            SQLiteOutbox(outbox_path).enqueue(
+                kind="daily_trade_report",
+                dedupe_key=f"daily-shadow:{report_date.isoformat()}",
+                body=report,
+                now=as_of,
+            )
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        print(f"FAIL: daily trade report: {exc}")
+        return 2
+    print(
+        f"PASS: daily report date={report_date} cycles={summary.cycles} "
+        f"trade_rows={len(summary.rows)} output={output_path}"
+    )
+    return 0
 
 
 def outbox_health(*, outbox_path: Path, as_of: datetime, max_pending_due: int) -> int:
@@ -569,6 +695,20 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Only verify the account and show balance",
     )
+    broker_snapshot_parser = sub.add_parser(
+        "broker-portfolio-snapshot",
+        help="Read cash, positions and active orders from the selected account",
+    )
+    broker_snapshot_parser.add_argument(
+        "--universe", type=Path, default=Path("config/universe.json")
+    )
+    broker_snapshot_parser.add_argument("--output", type=Path, required=True)
+    broker_snapshot_parser.add_argument(
+        "--runtime", type=Path, default=Path("config/runtime.json")
+    )
+    broker_snapshot_parser.add_argument(
+        "--services", type=Path, default=Path("config/services.json")
+    )
     environment_parser = sub.add_parser("environment-status")
     environment_parser.add_argument("--runtime", type=Path, default=Path("config/runtime.json"))
     environment_parser.add_argument("--services", type=Path, default=Path("config/services.json"))
@@ -610,6 +750,8 @@ def build_parser() -> argparse.ArgumentParser:
     shadow_parser.add_argument("--as-of", type=datetime.fromisoformat)
     shadow_parser.add_argument("--require-token", action="store_true")
     shadow_parser.add_argument("--outbox", type=Path)
+    decisions_parser = sub.add_parser("shadow-decisions")
+    decisions_parser.add_argument("--input", type=Path, required=True)
     flow_parser = sub.add_parser("algopack-flow")
     flow_parser.add_argument("--secid", required=True)
     flow_parser.add_argument("--futures-ticker")
@@ -627,6 +769,16 @@ def build_parser() -> argparse.ArgumentParser:
     telegram_parser.add_argument("--outbox", type=Path, default=Path("data/notifications.sqlite3"))
     telegram_parser.add_argument("--as-of", type=datetime.fromisoformat)
     telegram_parser.add_argument("--limit", type=int, default=20)
+    daily_parser = sub.add_parser(
+        "daily-trade-report",
+        help="Aggregate one Moscow trading day and enqueue a Telegram shadow-trade report",
+    )
+    daily_parser.add_argument("--artifacts", type=Path, required=True)
+    daily_parser.add_argument("--date", type=date.fromisoformat, required=True)
+    daily_parser.add_argument("--timezone", default="Europe/Moscow")
+    daily_parser.add_argument("--output", type=Path, required=True)
+    daily_parser.add_argument("--outbox", type=Path)
+    daily_parser.add_argument("--as-of", type=datetime.fromisoformat)
     outbox_parser = sub.add_parser("outbox-health")
     outbox_parser.add_argument("--outbox", type=Path, default=Path("data/notifications.sqlite3"))
     outbox_parser.add_argument("--as-of", type=datetime.fromisoformat)
@@ -656,6 +808,13 @@ def main() -> int:
             top_up=args.top_up,
             no_prompt=args.no_prompt,
         )
+    if args.command == "broker-portfolio-snapshot":
+        return broker_portfolio_snapshot(
+            universe_path=args.universe,
+            output_path=args.output,
+            runtime_path=args.runtime,
+            services_path=args.services,
+        )
     if args.command == "environment-status":
         return environment_status(runtime_path=args.runtime, services_path=args.services)
     if args.command == "environment-set":
@@ -668,6 +827,8 @@ def main() -> int:
         return runtime_normalize(runtime_path=args.runtime)
     if args.command == "config-check":
         return config_check(root=args.root)
+    if args.command == "shadow-decisions":
+        return shadow_decisions(input_path=args.input)
     if args.command == "moex-snapshot":
         as_of = args.as_of or datetime.now(UTC)
         if as_of.tzinfo is None:
@@ -707,6 +868,19 @@ def main() -> int:
             print("FAIL: --as-of must include a timezone offset")
             return 2
         return telegram_send(outbox_path=args.outbox, as_of=as_of, limit=args.limit)
+    if args.command == "daily-trade-report":
+        as_of = args.as_of or datetime.now(UTC)
+        if as_of.tzinfo is None:
+            print("FAIL: --as-of must include a timezone offset")
+            return 2
+        return daily_trade_report(
+            artifacts_dir=args.artifacts,
+            report_date=args.date,
+            timezone=args.timezone,
+            output_path=args.output,
+            outbox_path=args.outbox,
+            as_of=as_of,
+        )
     if args.command == "outbox-health":
         as_of = args.as_of or datetime.now(UTC)
         if as_of.tzinfo is None:

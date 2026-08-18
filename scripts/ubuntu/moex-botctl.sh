@@ -19,6 +19,8 @@ Usage:
   sudo moex-botctl start
   sudo moex-botctl diagnose [--once|--watch] [--interval SECONDS]
   sudo moex-botctl status
+  sudo moex-botctl portfolio
+  sudo moex-botctl decisions [SHADOW_JSON]
   sudo moex-botctl contour sandbox|prod
 EOF
 }
@@ -131,7 +133,9 @@ prelaunch() {
       "${SYSTEMD_DIR}/moex-tinvest-shadow.service" \
       "${SYSTEMD_DIR}/moex-tinvest-shadow.timer" \
       "${SYSTEMD_DIR}/moex-tinvest-health.service" \
-      "${SYSTEMD_DIR}/moex-tinvest-health.timer"
+      "${SYSTEMD_DIR}/moex-tinvest-health.timer" \
+      "${SYSTEMD_DIR}/moex-tinvest-daily-report.service" \
+      "${SYSTEMD_DIR}/moex-tinvest-daily-report.timer"
 
   heading "5/5 Итог"
   if [[ "${FAILURES}" -eq 0 ]]; then
@@ -154,7 +158,8 @@ start_bot() {
     "проверьте поля schedule в runtime.json" \
     systemd-analyze verify \
       "${SYSTEMD_DIR}/moex-tinvest-shadow.timer" \
-      "${SYSTEMD_DIR}/moex-tinvest-health.timer"
+      "${SYSTEMD_DIR}/moex-tinvest-health.timer" \
+      "${SYSTEMD_DIR}/moex-tinvest-daily-report.timer"
   if [[ "${FAILURES}" -ne 0 ]]; then
     printf '\033[1;31mBLOCKED\033[0m: расписание не применено; сервисы не запускались.\n'
     return 2
@@ -174,14 +179,15 @@ start_bot() {
     return 2
   fi
   check "Таймеры включены" "проверьте systemctl status таймеров" \
-    systemctl enable --now moex-tinvest-shadow.timer moex-tinvest-health.timer
+    systemctl enable --now moex-tinvest-shadow.timer moex-tinvest-health.timer \
+      moex-tinvest-daily-report.timer
   heading "Фактическое расписание"
   systemctl list-timers 'moex-tinvest-*' --no-pager || true
   if [[ "${FAILURES}" -ne 0 ]]; then
     printf '\033[1;31mPARTIAL/FAILED\033[0m: ошибок при запуске: %s.\n' "${FAILURES}"
     return 2
   fi
-  printf '\033[1;32mSTARTED\033[0m: shadow и health timers активны; live orders отключены.\n'
+  printf '\033[1;32mSTARTED\033[0m: shadow, daily-report и health timers активны; live orders отключены.\n'
 }
 
 diagnose_once() {
@@ -201,6 +207,8 @@ diagnose_once() {
     systemctl is-active --quiet moex-tinvest-shadow.timer
   check "Health timer активен" "выполните sudo moex-botctl start" \
     systemctl is-active --quiet moex-tinvest-health.timer
+  check "Daily report timer активен" "выполните sudo moex-botctl start" \
+    systemctl is-active --quiet moex-tinvest-daily-report.timer
   check "Outbox Telegram здоров" "проверьте очередь и доступность Telegram" \
     as_service "${PYTHON_BIN}" -m moex_bot.cli outbox-health \
       --outbox "${STATE_DIR}/data/notifications.sqlite3" --max-pending-due 20
@@ -256,6 +264,35 @@ status_bot() {
   systemctl list-timers 'moex-tinvest-*' --no-pager || true
 }
 
+show_decisions() {
+  local input="${1:-}"
+  if [[ -z "${input}" ]]; then
+    input="$(
+      find "${STATE_DIR}/artifacts" -maxdepth 1 -type f -name 'shadow-*.json' \
+        -printf '%T@ %p\n' 2>/dev/null | sort -nr | head -n 1 | cut -d' ' -f2-
+    )"
+  fi
+  if [[ -z "${input}" || ! -r "${input}" ]]; then
+    printf 'FAIL: shadow artifact not found or not readable: %s\n' "${input:-latest}" >&2
+    return 2
+  fi
+  as_service "${PYTHON_BIN}" -m moex_bot.cli shadow-decisions --input "${input}"
+}
+
+show_portfolio() {
+  load_secrets || { printf 'FAIL: cannot load %s\n' "${ENV_FILE}" >&2; return 2; }
+  local stamp=""
+  local output=""
+  stamp="$(date -u +%Y%m%dT%H%M%SZ)"
+  output="${STATE_DIR}/artifacts/portfolio-${stamp}.json"
+  as_service mkdir -p "${STATE_DIR}/artifacts"
+  as_service "${PYTHON_BIN}" -m moex_bot.cli broker-portfolio-snapshot \
+    --universe "${APP_DIR}/config/universe.json" \
+    --runtime "${RUNTIME_FILE}" \
+    --services "${SERVICES_FILE}" \
+    --output "${output}"
+}
+
 set_contour() {
   local environment="${1:-}"
   case "${environment}" in
@@ -277,6 +314,8 @@ case "${command}" in
   start) start_bot ;;
   diagnose) diagnose "$@" ;;
   status) status_bot ;;
+  portfolio) show_portfolio ;;
+  decisions) show_decisions "$@" ;;
   contour) set_contour "$@" ;;
   -h|--help|help) usage ;;
   *) usage >&2; exit 2 ;;

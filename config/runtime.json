@@ -4,6 +4,7 @@
     "timezone": "Europe/Moscow",
     "shadow_on_calendar": "*-*-* *:05:00",
     "shadow_randomized_delay_seconds": 20,
+    "daily_report_on_calendar": "*-*-* 23:20:00",
     "health_on_boot": "10min",
     "health_interval": "15min",
     "diagnostics_interval_seconds": 60

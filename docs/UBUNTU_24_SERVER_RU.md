@@ -133,6 +133,18 @@ sudo moex-botctl start
 `start` повторяет prelaunch, применяет расписание, запускает первый shadow cycle и health-check,
 включает оба timer и показывает фактически назначенные следующие запуски.
 
+Перед каждым shadow-расчётом runner получает из выбранного контура T-Invest фактические свободные
+и заблокированные рубли, broker equity, позиции и активные заявки. Снимок сохраняется как
+`/var/lib/moex-tinvest-bot/artifacts/portfolio-<UTC>.json`. Если на счёте есть инструмент вне
+`config/universe.json`, цикл останавливается: сначала добавьте и независимо проверьте его UID,
+board и lot либо используйте отдельный счёт только для бота.
+
+Получить такой снимок вручную одной командой, без выставления заявок:
+
+```bash
+sudo moex-botctl portfolio
+```
+
 Oneshot-сервис после успешного завершения будет `inactive (dead)` с кодом `0`; это нормально.
 Постоянно активным должен быть timer:
 
@@ -145,6 +157,7 @@ systemctl list-timers 'moex-tinvest-*'
 Расписание и контур задаются в `/etc/moex-tinvest-bot/runtime.json`:
 
 Полное описание всех файлов и параметров: [`CONFIG_REFERENCE_RU.md`](CONFIG_REFERENCE_RU.md).
+Алгоритм и чтение решений: [`ALGORITHM_RU.md`](ALGORITHM_RU.md).
 
 ```json
 {
@@ -153,6 +166,7 @@ systemctl list-timers 'moex-tinvest-*'
     "timezone": "Europe/Moscow",
     "shadow_on_calendar": "*-*-* *:05:00",
     "shadow_randomized_delay_seconds": 20,
+    "daily_report_on_calendar": "*-*-* 23:20:00",
     "health_on_boot": "10min",
     "health_interval": "15min",
     "diagnostics_interval_seconds": 60
@@ -172,6 +186,16 @@ Healthcheck запускается каждые 15 минут и требует 
 Вне консервативного торгового окна freshness artifact не проверяется, поэтому ночь и выходные
 не создают ложную тревогу. Конфиги и обязательные credentials проверяются всегда.
 
+В `23:20 Europe/Moscow` отдельный timer агрегирует все `shadow-*.json` за московский день,
+сохраняет `daily-trades-YYYY-MM-DD.txt` и через тот же SQLite outbox отправляет Telegram-сводку:
+число циклов, blocked/rejected, суммарные BUY/SELL и агрегат по SECID. Это виртуальные намерения,
+не подтверждение исполнения брокером. Проверить timer:
+
+```bash
+systemctl status moex-tinvest-daily-report.timer
+journalctl -u moex-tinvest-daily-report.service -n 50 --no-pager
+```
+
 Переключать T-Invest-контур на сервере нужно в сохраняемом `/etc`-конфиге:
 
 ```bash
@@ -180,8 +204,9 @@ sudo moex-botctl contour sandbox
 sudo moex-botctl contour prod
 ```
 
-Переключение контура не включает live orders. После изменения снова выполните `prelaunch` и
-`start`, чтобы проверить соответствующую пару token/account ID.
+Переключение контура не включает live orders, но меняет счёт, из которого shadow читает портфель.
+После изменения снова выполните `prelaunch` и `start`, чтобы проверить соответствующую пару
+token/account ID.
 
 ## 6. Каталоги
 

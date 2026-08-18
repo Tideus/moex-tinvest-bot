@@ -10,7 +10,7 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 from uuid import UUID
 
-from ..domain import ExecutionMode, OrderIntent, OrderRecord, OrderStatus, Side
+from ..domain import ExecutionMode, Instrument, OrderIntent, OrderRecord, OrderStatus, Side
 from ..service_config import SANDBOX_REST
 
 SANDBOX_BASE_URL = SANDBOX_REST
@@ -19,6 +19,14 @@ SANDBOX_SERVICE_PATH = "/tinkoff.public.invest.api.contract.v1.SandboxService"
 GET_SANDBOX_ACCOUNTS_PATH = f"{SANDBOX_SERVICE_PATH}/GetSandboxAccounts"
 OPEN_SANDBOX_ACCOUNT_PATH = f"{SANDBOX_SERVICE_PATH}/OpenSandboxAccount"
 GET_SANDBOX_WITHDRAW_LIMITS_PATH = f"{SANDBOX_SERVICE_PATH}/GetSandboxWithdrawLimits"
+GET_SANDBOX_PORTFOLIO_PATH = f"{SANDBOX_SERVICE_PATH}/GetSandboxPortfolio"
+GET_SANDBOX_POSITIONS_PATH = f"{SANDBOX_SERVICE_PATH}/GetSandboxPositions"
+GET_SANDBOX_ORDERS_PATH = f"{SANDBOX_SERVICE_PATH}/GetSandboxOrders"
+OPERATIONS_SERVICE_PATH = "/tinkoff.public.invest.api.contract.v1.OperationsService"
+ORDERS_SERVICE_PATH = "/tinkoff.public.invest.api.contract.v1.OrdersService"
+GET_PORTFOLIO_PATH = f"{OPERATIONS_SERVICE_PATH}/GetPortfolio"
+GET_POSITIONS_PATH = f"{OPERATIONS_SERVICE_PATH}/GetPositions"
+GET_ORDERS_PATH = f"{ORDERS_SERVICE_PATH}/GetOrders"
 SANDBOX_PAY_IN_PATH = f"{SANDBOX_SERVICE_PATH}/SandboxPayIn"
 MAX_SANDBOX_PAY_IN_RUB = Decimal("30000000")
 
@@ -71,6 +79,52 @@ def money_value_to_decimal(value: Mapping[str, object]) -> Decimal:
     return units + nano
 
 
+def quotation_to_decimal(value: Mapping[str, object]) -> Decimal:
+    return money_value_to_decimal(value)
+
+
+def _rub_total(items: object, *, label: str) -> Decimal:
+    if not isinstance(items, list):
+        raise ValueError(f"unexpected {label} response")
+    result = Decimal("0")
+    for item in items:
+        if not isinstance(item, Mapping):
+            raise ValueError(f"unexpected {label} record")
+        if str(item.get("currency", "")).lower() == "rub":
+            result += money_value_to_decimal(item)
+    return result
+
+
+@dataclass(frozen=True, slots=True)
+class SandboxBrokerSnapshot:
+    account_id: str
+    cash_available: Decimal
+    cash_blocked: Decimal
+    reported_equity: Decimal
+    positions_lots: Mapping[str, int]
+    blocked_lots: Mapping[str, int]
+    open_orders: int
+    source: str = "t_invest_sandbox"
+
+    def as_portfolio_payload(self) -> dict[str, object]:
+        return {
+            "source": self.source,
+            "account_id": self.account_id,
+            "cash": str(self.cash_available),
+            "blocked_cash": str(self.cash_blocked),
+            "reported_equity": str(self.reported_equity),
+            "positions": {
+                secid: {
+                    "lots": lots,
+                    "blocked_lots": self.blocked_lots.get(secid, 0),
+                }
+                for secid, lots in sorted(self.positions_lots.items())
+            },
+            "daily_turnover": "0",
+            "open_orders": self.open_orders,
+        }
+
+
 @dataclass(frozen=True, slots=True)
 class SandboxAccount:
     account_id: str
@@ -106,9 +160,15 @@ class TInvestSandboxAccountService:
     def from_environment(cls) -> TInvestSandboxAccountService:
         return cls(os.getenv("T_INVEST_SANDBOX_TOKEN", ""), UrlLibJsonTransport())
 
-    def _post(self, path: str, payload: Mapping[str, object]) -> Mapping[str, Any]:
+    def _post(
+        self,
+        path: str,
+        payload: Mapping[str, object],
+        *,
+        base_url: str = SANDBOX_BASE_URL,
+    ) -> Mapping[str, Any]:
         return self.transport.post(
-            SANDBOX_BASE_URL + path,
+            base_url + path,
             headers={
                 "Authorization": f"Bearer {self.token}",
                 "Content-Type": "application/json",
@@ -207,6 +267,85 @@ class TInvestSandboxAccountService:
         if str(balance.get("currency", "")).lower() != "rub":
             raise ValueError("SandboxPayIn returned a non-RUB balance")
         return money_value_to_decimal(balance)
+
+    def broker_snapshot(
+        self,
+        account_id: str,
+        instruments_by_uid: Mapping[str, Instrument],
+        *,
+        base_url: str = SANDBOX_BASE_URL,
+        portfolio_path: str = GET_SANDBOX_PORTFOLIO_PATH,
+        positions_path: str = GET_SANDBOX_POSITIONS_PATH,
+        orders_path: str = GET_SANDBOX_ORDERS_PATH,
+        source: str = "t_invest_sandbox",
+    ) -> SandboxBrokerSnapshot:
+        clean_account_id = account_id.strip()
+        if not clean_account_id:
+            raise ValueError("sandbox account id is required")
+        payload = {"accountId": clean_account_id}
+        portfolio = self._post(
+            portfolio_path, {**payload, "currency": "RUB"}, base_url=base_url
+        )
+        positions = self._post(positions_path, payload, base_url=base_url)
+        orders = self._post(orders_path, payload, base_url=base_url)
+
+        if positions.get("limitsLoadingInProgress") is True:
+            raise ValueError("sandbox position limits are still loading")
+        cash_available = _rub_total(positions.get("money", []), label="money")
+        cash_blocked = _rub_total(positions.get("blocked", []), label="blocked money")
+        equity_raw = portfolio.get("totalAmountPortfolio")
+        if not isinstance(equity_raw, Mapping):
+            raise ValueError("GetSandboxPortfolio response has no totalAmountPortfolio")
+        reported_equity = money_value_to_decimal(equity_raw)
+        raw_positions = portfolio.get("positions", [])
+        if not isinstance(raw_positions, list):
+            raise ValueError("unexpected GetSandboxPortfolio positions response")
+
+        positions_lots: dict[str, int] = {}
+        blocked_lots: dict[str, int] = {}
+        for raw in raw_positions:
+            if not isinstance(raw, Mapping):
+                raise ValueError("unexpected sandbox portfolio position")
+            quantity_raw = raw.get("quantity")
+            if not isinstance(quantity_raw, Mapping):
+                raise ValueError("sandbox portfolio position has no quantity")
+            quantity = quotation_to_decimal(quantity_raw)
+            if quantity == 0:
+                continue
+            instrument_type = str(raw.get("instrumentType", "")).lower()
+            if instrument_type == "currency":
+                continue
+            uid = str(raw.get("instrumentUid", "")).strip()
+            instrument = instruments_by_uid.get(uid)
+            if instrument is None:
+                raise ValueError(f"non-zero sandbox position outside verified universe: {uid}")
+            lots = quantity / Decimal(instrument.lot_size)
+            if lots != lots.to_integral_value():
+                raise ValueError(
+                    f"position quantity is not divisible by lot size: {instrument.secid}"
+                )
+            blocked_raw = raw.get("blockedLots", {"units": "0", "nano": 0})
+            if not isinstance(blocked_raw, Mapping):
+                raise ValueError("invalid blockedLots in sandbox portfolio")
+            blocked = quotation_to_decimal(blocked_raw)
+            if blocked != blocked.to_integral_value() or blocked < 0:
+                raise ValueError(f"invalid blocked lots for {instrument.secid}")
+            positions_lots[instrument.secid] = int(lots)
+            blocked_lots[instrument.secid] = int(blocked)
+
+        raw_orders = orders.get("orders", [])
+        if not isinstance(raw_orders, list):
+            raise ValueError("unexpected GetSandboxOrders response")
+        return SandboxBrokerSnapshot(
+            account_id=clean_account_id,
+            cash_available=cash_available,
+            cash_blocked=cash_blocked,
+            reported_equity=reported_equity,
+            positions_lots=positions_lots,
+            blocked_lots=blocked_lots,
+            open_orders=len(raw_orders),
+            source=source,
+        )
 
 
 def _status(value: object) -> OrderStatus:

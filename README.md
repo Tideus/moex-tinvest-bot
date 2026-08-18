@@ -1,10 +1,15 @@
 ﻿# MOEX + ALGOPACK + T-Invest bot harness
 
-Safety-first Python 3.12 scaffold for research, deterministic replay, shadow operation and a future sandbox adapter. It implements the control plane described in `docs/plan` and deliberately does **not** implement live order submission.
+Safety-first Python 3.12 scaffold for research, deterministic replay and shadow operation with
+read-only T-Invest portfolio synchronization. It implements the control plane described in
+`docs/plan` and deliberately does **not** implement live order submission.
 
 Полная инструкция оператора на русском: [`docs/USER_GUIDE_RU.md`](docs/USER_GUIDE_RU.md).
 Установка на Ubuntu Server 24.04 LTS: [`docs/UBUNTU_24_SERVER_RU.md`](docs/UBUNTU_24_SERVER_RU.md).
 Все параметры JSON: [`docs/CONFIG_REFERENCE_RU.md`](docs/CONFIG_REFERENCE_RU.md).
+Алгоритм и чтение BUY/SELL: [`docs/ALGORITHM_RU.md`](docs/ALGORITHM_RU.md).
+Целевая long/short модель, derivatives и weekly review:
+[`docs/MULTI_ASSET_STRATEGY_RU.md`](docs/MULTI_ASSET_STRATEGY_RU.md).
 
 После серверной установки операционные команды сведены к одному интерфейсу:
 
@@ -13,6 +18,8 @@ sudo moex-botctl prelaunch
 sudo moex-botctl start
 sudo moex-botctl diagnose
 sudo moex-botctl diagnose --watch
+sudo moex-botctl portfolio
+sudo moex-botctl decisions
 ```
 
 Проверка Ubuntu deployment без изменения системы:
@@ -34,6 +41,9 @@ bash scripts/ubuntu/test-deployment.sh
 - replay CLI and preflight checks;
 - read-only hourly MOEX snapshot command;
 - idempotent T-Invest sandbox account bootstrap and optional RUB top-up;
+- read-only sandbox/prod cash, equity, positions and active-order snapshots;
+- cash-reserve, position-weight and gross-exposure diversification gates;
+- 13 independently cross-checked TQBR shares with sector and correlated-risk limits;
 - verified Russian Trusted CA bundle installed by Ubuntu install/update scripts;
 - T-Invest sandbox-only REST adapter with timeout-to-UNKNOWN semantics;
 - unit and integration-style replay tests;
@@ -45,7 +55,8 @@ bash scripts/ubuntu/test-deployment.sh
 ## Safety boundary
 
 `ExecutionMode.LIVE` is denied by configuration validation and by the executor. No T-Invest mutation API is called. Adding real execution requires a separately reviewed adapter, sandbox verification, shadow evidence, a recovery drill and an explicit code/config change.
-No live token or account variable is defined in the environment template.
+Production credentials may be configured for read-only shadow synchronization, but they do not
+enable order submission.
 
 ## Quick start
 

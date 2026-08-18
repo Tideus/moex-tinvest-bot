@@ -7,6 +7,7 @@ from typing import Any
 import pytest
 
 from moex_bot.cli import sandbox_bootstrap
+from moex_bot.domain import Instrument
 from moex_bot.env_file import upsert_env_value
 from moex_bot.integrations.tinvest_sandbox import (
     SandboxAccountBootstrap,
@@ -88,6 +89,69 @@ def test_pay_in_uses_money_value_and_returns_current_balance() -> None:
         "accountId": "sandbox-1",
         "amount": {"currency": "rub", "units": "150000", "nano": 250000000},
     }
+
+
+def test_broker_snapshot_reads_cash_positions_and_active_orders() -> None:
+    transport = SequencedTransport(
+        [
+            {
+                "totalAmountPortfolio": {
+                    "currency": "rub",
+                    "units": "120000",
+                    "nano": 0,
+                },
+                "positions": [
+                    {
+                        "instrumentUid": "uid-sber",
+                        "instrumentType": "share",
+                        "quantity": {"units": "30", "nano": 0},
+                        "blockedLots": {"units": "2", "nano": 0},
+                    }
+                ],
+            },
+            {
+                "money": [{"currency": "rub", "units": "80000", "nano": 0}],
+                "blocked": [{"currency": "rub", "units": "5000", "nano": 0}],
+                "limitsLoadingInProgress": False,
+            },
+            {"orders": [{"orderId": "one"}]},
+        ]
+    )
+    service = TInvestSandboxAccountService("token", transport)
+    instrument = Instrument("SBER", "uid-sber", "TQBR", 10, Decimal("0.01"))
+    snapshot = service.broker_snapshot("sandbox-1", {instrument.uid: instrument})
+
+    assert snapshot.cash_available == Decimal("80000")
+    assert snapshot.cash_blocked == Decimal("5000")
+    assert snapshot.reported_equity == Decimal("120000")
+    assert snapshot.positions_lots == {"SBER": 3}
+    assert snapshot.blocked_lots == {"SBER": 2}
+    assert snapshot.open_orders == 1
+    assert transport.calls[0]["url"].endswith("/GetSandboxPortfolio")
+    assert transport.calls[1]["url"].endswith("/GetSandboxPositions")
+    assert transport.calls[2]["url"].endswith("/GetSandboxOrders")
+
+
+def test_broker_snapshot_fails_closed_for_position_outside_universe() -> None:
+    transport = SequencedTransport(
+        [
+            {
+                "totalAmountPortfolio": {"currency": "rub", "units": "1", "nano": 0},
+                "positions": [
+                    {
+                        "instrumentUid": "unknown",
+                        "instrumentType": "share",
+                        "quantity": {"units": "1", "nano": 0},
+                    }
+                ],
+            },
+            {"money": [], "blocked": [], "limitsLoadingInProgress": False},
+            {"orders": []},
+        ]
+    )
+    service = TInvestSandboxAccountService("token", transport)
+    with pytest.raises(ValueError, match="outside verified universe"):
+        service.broker_snapshot("sandbox-1", {})
 
 
 def test_env_upsert_is_idempotent_and_removes_duplicate_keys(tmp_path: Path) -> None:

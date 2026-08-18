@@ -26,6 +26,7 @@ def test_runtime_schedule_loads_and_renders_safe_dropins(tmp_path: Path) -> None
                 "timezone": "Europe/Moscow",
                 "shadow_on_calendar": "Mon..Fri *-*-* *:10:00",
                 "shadow_randomized_delay_seconds": 30,
+                "daily_report_on_calendar": "Mon..Fri *-*-* 23:30:00",
                 "health_on_boot": "5min",
                 "health_interval": "20min",
                 "diagnostics_interval_seconds": 120,
@@ -33,10 +34,11 @@ def test_runtime_schedule_loads_and_renders_safe_dropins(tmp_path: Path) -> None
         },
     )
     config = load_runtime_config(runtime)
-    shadow, health = render_systemd_timer_overrides(config, tmp_path / "systemd")
+    shadow, health, daily = render_systemd_timer_overrides(config, tmp_path / "systemd")
     assert "OnCalendar=Mon..Fri *-*-* *:10:00 Europe/Moscow" in shadow.read_text()
     assert "RandomizedDelaySec=30s" in shadow.read_text()
     assert "OnUnitActiveSec=20min" in health.read_text()
+    assert "OnCalendar=Mon..Fri *-*-* 23:30:00 Europe/Moscow" in daily.read_text()
 
 
 def test_runtime_rejects_multiline_calendar_injection(tmp_path: Path) -> None:
@@ -85,5 +87,6 @@ def test_runtime_migration_completes_minimal_file_without_replacing_values(
     assert raw["schedule"]["health_interval"] == "30min"
     assert raw["schedule"]["timezone"] == "Europe/Moscow"
     assert raw["schedule"]["diagnostics_interval_seconds"] == 60
+    assert raw["schedule"]["daily_report_on_calendar"] == "*-*-* 23:20:00"
     assert raw["future_extension"] == {"keep": True}
     assert not materialize_runtime_defaults(runtime)

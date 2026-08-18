@@ -14,6 +14,7 @@ stamp="$(date -u +%Y%m%dT%H%M%SZ)"
 log_path="${LOG_DIR}/shadow-${stamp}.log"
 geo_path="${STATE_DIR}/artifacts/geo-${stamp}.json"
 shadow_path="${STATE_DIR}/artifacts/shadow-${stamp}.json"
+portfolio_path="${STATE_DIR}/artifacts/portfolio-${stamp}.json"
 flow_path="${STATE_DIR}/artifacts/flow-${stamp}.json"
 outbox_path="${STATE_DIR}/data/notifications.sqlite3"
 
@@ -40,11 +41,17 @@ if [[ "${session_status}" -ne 0 ]]; then
   exit "${session_status}"
 fi
 
+"${PYTHON_BIN}" -m moex_bot.cli broker-portfolio-snapshot \
+  --universe "${APP_DIR}/config/universe.json" \
+  --runtime "/etc/moex-tinvest-bot/runtime.json" \
+  --services "${APP_DIR}/config/services.json" \
+  --output "${portfolio_path}"
+
 shadow_status=0
 "${PYTHON_BIN}" -m moex_bot.cli hourly-shadow \
   --config "${APP_DIR}/config/shadow.json" \
   --universe "${APP_DIR}/config/universe.json" \
-  --portfolio "${APP_DIR}/examples/portfolio_empty.json" \
+  --portfolio "${portfolio_path}" \
   --geo "${geo_path}" \
   --output "${shadow_path}" \
   --outbox "${outbox_path}" || shadow_status=$?

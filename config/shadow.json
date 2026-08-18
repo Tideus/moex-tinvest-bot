@@ -5,6 +5,9 @@
   "max_position_weight": "0.15",
   "max_order_notional": "10000",
   "max_gross_exposure": "0.80",
+  "min_cash_reserve_weight": "0.10",
+  "max_sector_weight": "0.35",
+  "max_risk_cluster_weight": "0.45",
   "max_daily_turnover": "30000",
   "min_trade_notional": "500",
   "max_open_orders": 5,
@@ -16,4 +19,3 @@
     "require_above_trend": true
   }
 }
-

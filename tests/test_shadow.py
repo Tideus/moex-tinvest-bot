@@ -68,6 +68,10 @@ def test_load_universe_validates_uuid_and_identity(tmp_path: Path) -> None:
                     "t_invest_uid": "e6123145-9665-43e0-8413-cd61b8aa9b13",
                     "lot_size_verified": 1,
                     "api_trade_available": True,
+                    "issuer_id": "sberbank",
+                    "sector": "financials",
+                    "risk_cluster": "domestic_financial",
+                    "asset_class": "share",
                 }
             ]
         ),
@@ -76,6 +80,7 @@ def test_load_universe_validates_uuid_and_identity(tmp_path: Path) -> None:
     universe = load_universe(path)
     assert universe[0].secid == "SBER"
     assert universe[0].lot_size_verified == 1
+    assert universe[0].sector == "financials"
 
 
 def test_hourly_shadow_reduces_risk_when_geo_feed_is_stale(tmp_path: Path) -> None:
@@ -96,6 +101,10 @@ def test_hourly_shadow_reduces_risk_when_geo_feed_is_stale(tmp_path: Path) -> No
                 "e6123145-9665-43e0-8413-cd61b8aa9b13",
                 1,
                 True,
+                "sberbank",
+                "financials",
+                "domestic_financial",
+                "share",
             ),
         ),
         portfolio_path=portfolio,
@@ -109,4 +118,7 @@ def test_hourly_shadow_reduces_risk_when_geo_feed_is_stale(tmp_path: Path) -> No
     assert result.geo.multiplier == Decimal("0.70")
     assert result.targets[0].weight == Decimal("0.1050")
     assert persisted["geo"]["level"] == "elevated"
+    assert persisted["market"][0]["instrument"]["secid"] == "SBER"
+    assert persisted["portfolio_input"]["cash"] == "100000"
+    assert persisted["config_snapshot"]["strategy"]["top_n"] == 5
     assert output.with_suffix(".audit.jsonl").exists()

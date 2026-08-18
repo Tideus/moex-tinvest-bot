@@ -27,10 +27,13 @@ def build_order_intents(
     portfolio: PortfolioSnapshot,
     market: Mapping[str, MarketObservation],
     min_trade_notional: Decimal,
+    max_order_notional: Decimal | None = None,
 ) -> tuple[OrderIntent, ...]:
     equity = portfolio.equity(market)
     target_map = {target.secid: target for target in targets}
-    secids = sorted(set(target_map) | set(portfolio.positions))
+    ranked_targets = [target.secid for target in targets]
+    exits = sorted(set(portfolio.positions) - set(target_map))
+    secids = exits + ranked_targets
     intents: list[OrderIntent] = []
     for secid in secids:
         observation = market.get(secid)
@@ -50,6 +53,11 @@ def build_order_intents(
         side = Side.BUY if delta > 0 else Side.SELL
         lots = abs(delta)
         price = instrument.round_price(observation.price)
+        if max_order_notional is not None:
+            lot_notional = Decimal(instrument.lot_size) * price
+            lots = min(lots, int(max_order_notional // lot_notional))
+            if lots <= 0:
+                continue
         notional = Decimal(lots * instrument.lot_size) * price
         if notional < min_trade_notional:
             continue

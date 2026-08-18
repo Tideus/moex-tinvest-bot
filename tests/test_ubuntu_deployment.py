@@ -39,6 +39,15 @@ def test_health_timer_and_service_contract_match() -> None:
     assert "ExecStart=/usr/bin/bash /opt/moex-tinvest-bot/scripts/ubuntu/healthcheck.sh" in service
 
 
+def test_daily_report_timer_and_service_send_at_moscow_eod() -> None:
+    timer = _unit("moex-tinvest-daily-report.timer")
+    service = _unit("moex-tinvest-daily-report.service")
+    assert "OnCalendar=*-*-* 23:20:00 Europe/Moscow" in timer
+    assert "Persistent=true" in timer
+    assert "run-daily-report.sh" in service
+    assert "EnvironmentFile=/etc/moex-tinvest-bot/bot.env" in service
+
+
 def test_env_template_contains_names_only() -> None:
     lines = [
         line for line in _unit("bot.env.example").splitlines()
@@ -54,7 +63,7 @@ def test_all_deployment_shell_scripts_use_strict_mode() -> None:
     assert {item.name for item in scripts} == {
         "activate.sh", "backup.sh", "healthcheck.sh", "install-ca-certificates.sh",
         "install.sh", "moex-botctl.sh", "run-shadow-cycle.sh", "test-deployment.sh",
-        "uninstall.sh", "update.sh",
+        "run-daily-report.sh", "uninstall.sh", "update.sh",
     }
     for script in scripts:
         text = script.read_text(encoding="utf-8")
@@ -110,6 +119,24 @@ def test_control_tool_exposes_safe_operator_workflow() -> None:
     text = (PROJECT_ROOT / "scripts" / "ubuntu" / "moex-botctl.sh").read_text(
         encoding="utf-8"
     )
-    for command in ("prelaunch", "start", "diagnose", "status", "contour"):
+    for command in (
+        "prelaunch",
+        "start",
+        "diagnose",
+        "status",
+        "portfolio",
+        "decisions",
+        "contour",
+    ):
         assert f"{command})" in text
     assert "timers не включены" in text
+
+
+def test_shadow_runner_uses_selected_broker_snapshot_not_empty_example() -> None:
+    text = (PROJECT_ROOT / "scripts" / "ubuntu" / "run-shadow-cycle.sh").read_text(
+        encoding="utf-8"
+    )
+    assert "broker-portfolio-snapshot" in text
+    assert '--runtime "/etc/moex-tinvest-bot/runtime.json"' in text
+    assert '--portfolio "${portfolio_path}"' in text
+    assert "portfolio_empty.json" not in text

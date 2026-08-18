@@ -1,0 +1,30 @@
+[Unit]
+Description=MOEX/T-Invest daily shadow trade report
+Documentation=file:///opt/moex-tinvest-bot/docs/UBUNTU_24_SERVER_RU.md
+Wants=network-online.target
+After=network-online.target moex-tinvest-shadow.service
+ConditionPathExists=/etc/moex-tinvest-bot/bot.env
+
+[Service]
+Type=oneshot
+User=moexbot
+Group=moexbot
+WorkingDirectory=/opt/moex-tinvest-bot
+EnvironmentFile=/etc/moex-tinvest-bot/bot.env
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=TZ=Europe/Moscow
+ExecStart=/usr/bin/bash /opt/moex-tinvest-bot/scripts/ubuntu/run-daily-report.sh
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+ReadWritePaths=/var/lib/moex-tinvest-bot /var/log/moex-tinvest-bot
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

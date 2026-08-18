@@ -11,6 +11,7 @@ from .service_config import TInvestEnvironment
 
 _DURATION = re.compile(r"^[1-9][0-9]*(?:s|min|h)$")
 _DEFAULT_SHADOW_CALENDAR = "*-*-* *:05:00"
+_DEFAULT_DAILY_REPORT_CALENDAR = "*-*-* 23:20:00"
 
 
 @dataclass(frozen=True, slots=True)
@@ -18,6 +19,7 @@ class RuntimeSchedule:
     timezone: str = "Europe/Moscow"
     shadow_on_calendar: str = _DEFAULT_SHADOW_CALENDAR
     shadow_randomized_delay_seconds: int = 20
+    daily_report_on_calendar: str = _DEFAULT_DAILY_REPORT_CALENDAR
     health_on_boot: str = "10min"
     health_interval: str = "15min"
     diagnostics_interval_seconds: int = 60
@@ -45,6 +47,9 @@ def load_runtime_config(path: Path) -> RuntimeConfig:
         shadow_randomized_delay_seconds=_integer(
             schedule_raw.get("shadow_randomized_delay_seconds", 20),
             "shadow_randomized_delay_seconds",
+        ),
+        daily_report_on_calendar=str(
+            schedule_raw.get("daily_report_on_calendar", _DEFAULT_DAILY_REPORT_CALENDAR)
         ),
         health_on_boot=str(schedule_raw.get("health_on_boot", "10min")),
         health_interval=str(schedule_raw.get("health_interval", "15min")),
@@ -85,6 +90,7 @@ def materialize_runtime_defaults(path: Path) -> bool:
         "timezone": config.schedule.timezone,
         "shadow_on_calendar": config.schedule.shadow_on_calendar,
         "shadow_randomized_delay_seconds": config.schedule.shadow_randomized_delay_seconds,
+        "daily_report_on_calendar": config.schedule.daily_report_on_calendar,
         "health_on_boot": config.schedule.health_on_boot,
         "health_interval": config.schedule.health_interval,
         "diagnostics_interval_seconds": config.schedule.diagnostics_interval_seconds,
@@ -99,9 +105,12 @@ def materialize_runtime_defaults(path: Path) -> bool:
     return changed
 
 
-def render_systemd_timer_overrides(config: RuntimeConfig, output_dir: Path) -> tuple[Path, Path]:
+def render_systemd_timer_overrides(
+    config: RuntimeConfig, output_dir: Path
+) -> tuple[Path, Path, Path]:
     shadow = output_dir / "moex-tinvest-shadow.timer.d" / "runtime.conf"
     health = output_dir / "moex-tinvest-health.timer.d" / "runtime.conf"
+    daily = output_dir / "moex-tinvest-daily-report.timer.d" / "runtime.conf"
     calendar = f"{config.schedule.shadow_on_calendar} {config.schedule.timezone}"
     _atomic_write(
         shadow,
@@ -118,7 +127,15 @@ def render_systemd_timer_overrides(config: RuntimeConfig, output_dir: Path) -> t
         "OnUnitActiveSec=\n"
         f"OnUnitActiveSec={config.schedule.health_interval}\n",
     )
-    return shadow, health
+    daily_calendar = f"{config.schedule.daily_report_on_calendar} {config.schedule.timezone}"
+    _atomic_write(
+        daily,
+        "[Timer]\n"
+        "OnCalendar=\n"
+        f"OnCalendar={daily_calendar}\n"
+        f"RandomizedDelaySec={config.schedule.shadow_randomized_delay_seconds}s\n",
+    )
+    return shadow, health, daily
 
 
 def _integer(value: object, label: str) -> int:
@@ -139,6 +156,13 @@ def _validate_schedule(schedule: RuntimeSchedule) -> None:
         or len(schedule.shadow_on_calendar) > 80
     ):
         raise ValueError("shadow_on_calendar must be a single systemd calendar expression")
+    if (
+        not schedule.daily_report_on_calendar.strip()
+        or "\n" in schedule.daily_report_on_calendar
+        or "\r" in schedule.daily_report_on_calendar
+        or len(schedule.daily_report_on_calendar) > 80
+    ):
+        raise ValueError("daily_report_on_calendar must be a single systemd calendar expression")
     for label, value in (
         ("health_on_boot", schedule.health_on_boot),
         ("health_interval", schedule.health_interval),

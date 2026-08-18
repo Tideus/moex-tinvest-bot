@@ -1,0 +1,12 @@
+[Unit]
+Description=Send MOEX/T-Invest daily shadow trade report
+
+[Timer]
+OnCalendar=*-*-* 23:20:00 Europe/Moscow
+Persistent=true
+RandomizedDelaySec=20s
+AccuracySec=1s
+Unit=moex-tinvest-daily-report.service
+
+[Install]
+WantedBy=timers.target

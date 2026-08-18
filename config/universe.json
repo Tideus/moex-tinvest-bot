@@ -1,13 +1,54 @@
 [
   {
-    "secid": "SBER",
-    "board": "TQBR",
-    "t_invest_uid": "e6123145-9665-43e0-8413-cd61b8aa9b13",
-    "isin": "RU0009029540",
-    "class_code": "TQBR",
-    "lot_size_verified": 1,
-    "api_trade_available": true,
-    "verified_at": "2026-08-14T02:00:00+05:00",
-    "verification_source": "official T-Invest read-only MCP"
+    "secid": "SBER", "board": "TQBR", "t_invest_uid": "e6123145-9665-43e0-8413-cd61b8aa9b13", "isin": "RU0009029540", "class_code": "TQBR", "lot_size_verified": 1, "api_trade_available": true,
+    "issuer_id": "sberbank", "sector": "financials", "risk_cluster": "domestic_financial", "asset_class": "share", "verified_at": "2026-08-18T11:12:18+03:00", "verification_source": "MOEX ISS TQBR + official T-Invest read-only MCP"
+  },
+  {
+    "secid": "T", "board": "TQBR", "t_invest_uid": "87db07bc-0e02-4e29-90bb-05e8ef791d7b", "isin": "RU000A107UL4", "class_code": "TQBR", "lot_size_verified": 1, "api_trade_available": true,
+    "issuer_id": "t_technologies", "sector": "financials", "risk_cluster": "domestic_financial", "asset_class": "share", "verified_at": "2026-08-18T11:12:18+03:00", "verification_source": "MOEX ISS TQBR + official T-Invest read-only MCP"
+  },
+  {
+    "secid": "MOEX", "board": "TQBR", "t_invest_uid": "5e1c2634-afc4-4e50-ad6d-f78fc14a539a", "isin": "RU000A0JR4A1", "class_code": "TQBR", "lot_size_verified": 10, "api_trade_available": true,
+    "issuer_id": "moscow_exchange", "sector": "financials", "risk_cluster": "domestic_financial", "asset_class": "share", "verified_at": "2026-08-18T11:12:18+03:00", "verification_source": "MOEX ISS TQBR + official T-Invest read-only MCP"
+  },
+  {
+    "secid": "LKOH", "board": "TQBR", "t_invest_uid": "02cfdf61-6298-4c0f-a9ca-9cabc82afaf3", "isin": "RU0009024277", "class_code": "TQBR", "lot_size_verified": 1, "api_trade_available": true,
+    "issuer_id": "lukoil", "sector": "energy", "risk_cluster": "hydrocarbons", "asset_class": "share", "verified_at": "2026-08-18T11:12:18+03:00", "verification_source": "MOEX ISS TQBR + official T-Invest read-only MCP"
+  },
+  {
+    "secid": "GAZP", "board": "TQBR", "t_invest_uid": "962e2a95-02a9-4171-abd7-aa198dbe643a", "isin": "RU0007661625", "class_code": "TQBR", "lot_size_verified": 10, "api_trade_available": true,
+    "issuer_id": "gazprom", "sector": "energy", "risk_cluster": "hydrocarbons", "asset_class": "share", "verified_at": "2026-08-18T11:12:18+03:00", "verification_source": "MOEX ISS TQBR + official T-Invest read-only MCP"
+  },
+  {
+    "secid": "NVTK", "board": "TQBR", "t_invest_uid": "0da66728-6c30-44c4-9264-df8fac2467ee", "isin": "RU000A0DKVS5", "class_code": "TQBR", "lot_size_verified": 1, "api_trade_available": true,
+    "issuer_id": "novatek", "sector": "energy", "risk_cluster": "hydrocarbons", "asset_class": "share", "verified_at": "2026-08-18T11:12:18+03:00", "verification_source": "MOEX ISS TQBR + official T-Invest read-only MCP"
+  },
+  {
+    "secid": "GMKN", "board": "TQBR", "t_invest_uid": "509edd0c-129c-4ee2-934d-7f6246126da1", "isin": "RU0007288411", "class_code": "TQBR", "lot_size_verified": 10, "api_trade_available": true,
+    "issuer_id": "nornickel", "sector": "metals_mining", "risk_cluster": "cyclical_exporters", "asset_class": "share", "verified_at": "2026-08-18T11:12:18+03:00", "verification_source": "MOEX ISS TQBR + official T-Invest read-only MCP"
+  },
+  {
+    "secid": "PLZL", "board": "TQBR", "t_invest_uid": "10620843-28ce-44e8-80c2-f26ceb1bd3e1", "isin": "RU000A0JNAA8", "class_code": "TQBR", "lot_size_verified": 1, "api_trade_available": true,
+    "issuer_id": "polyus", "sector": "metals_mining", "risk_cluster": "precious_metals", "asset_class": "share", "verified_at": "2026-08-18T11:12:18+03:00", "verification_source": "MOEX ISS TQBR + official T-Invest read-only MCP"
+  },
+  {
+    "secid": "PHOR", "board": "TQBR", "t_invest_uid": "9978b56f-782a-4a80-a4b1-a48cbecfd194", "isin": "RU000A0JRKT8", "class_code": "TQBR", "lot_size_verified": 1, "api_trade_available": true,
+    "issuer_id": "phosagro", "sector": "materials", "risk_cluster": "cyclical_exporters", "asset_class": "share", "verified_at": "2026-08-18T11:12:18+03:00", "verification_source": "MOEX ISS TQBR + official T-Invest read-only MCP"
+  },
+  {
+    "secid": "CHMF", "board": "TQBR", "t_invest_uid": "fa6aae10-b8d5-48c8-bbfd-d320d925d096", "isin": "RU0009046510", "class_code": "TQBR", "lot_size_verified": 1, "api_trade_available": true,
+    "issuer_id": "severstal", "sector": "materials", "risk_cluster": "cyclical_exporters", "asset_class": "share", "verified_at": "2026-08-18T11:12:18+03:00", "verification_source": "MOEX ISS TQBR + official T-Invest read-only MCP"
+  },
+  {
+    "secid": "YDEX", "board": "TQBR", "t_invest_uid": "7de75794-a27f-4d81-a39b-492345813822", "isin": "RU000A107T19", "class_code": "TQBR", "lot_size_verified": 1, "api_trade_available": true,
+    "issuer_id": "yandex", "sector": "technology", "risk_cluster": "domestic_growth", "asset_class": "share", "verified_at": "2026-08-18T11:12:18+03:00", "verification_source": "MOEX ISS TQBR + official T-Invest read-only MCP"
+  },
+  {
+    "secid": "X5", "board": "TQBR", "t_invest_uid": "0964acd0-e2cb-4810-a177-ef4ad8856ff0", "isin": "RU000A108X38", "class_code": "TQBR", "lot_size_verified": 1, "api_trade_available": true,
+    "issuer_id": "x5_group", "sector": "consumer_staples", "risk_cluster": "domestic_consumer", "asset_class": "share", "verified_at": "2026-08-18T11:12:18+03:00", "verification_source": "MOEX ISS TQBR + official T-Invest read-only MCP"
+  },
+  {
+    "secid": "MTSS", "board": "TQBR", "t_invest_uid": "cd8063ad-73ad-4b31-bd0d-93138d9e99a2", "isin": "RU0007775219", "class_code": "TQBR", "lot_size_verified": 10, "api_trade_available": true,
+    "issuer_id": "mts", "sector": "telecommunications", "risk_cluster": "domestic_defensive", "asset_class": "share", "verified_at": "2026-08-18T11:12:18+03:00", "verification_source": "MOEX ISS TQBR + official T-Invest read-only MCP"
   }
 ]

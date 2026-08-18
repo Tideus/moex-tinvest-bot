@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from datetime import datetime
 from decimal import Decimal
 from pathlib import Path
@@ -42,6 +42,10 @@ class UniverseEntry:
     t_invest_uid: str
     lot_size_verified: int
     api_trade_available: bool
+    issuer_id: str
+    sector: str
+    risk_cluster: str
+    asset_class: str
 
     def validate(self) -> None:
         UUID(self.t_invest_uid)
@@ -51,6 +55,10 @@ class UniverseEntry:
             raise ValueError("verified lot must be positive")
         if not self.api_trade_available:
             raise ValueError(f"instrument is not API-tradeable: {self.secid}")
+        if not self.issuer_id or not self.sector or not self.risk_cluster:
+            raise ValueError(f"diversification identity is incomplete: {self.secid}")
+        if self.asset_class != "share":
+            raise ValueError(f"only shares are supported by the current strategy: {self.secid}")
 
 
 def _decimal(value: Any) -> Decimal:
@@ -73,6 +81,10 @@ def load_universe(path: Path) -> tuple[UniverseEntry, ...]:
                 t_invest_uid=str(item["t_invest_uid"]),
                 lot_size_verified=int(item["lot_size_verified"]),
                 api_trade_available=trade_available,
+                issuer_id=str(item["issuer_id"]),
+                sector=str(item["sector"]),
+                risk_cluster=str(item["risk_cluster"]),
+                asset_class=str(item.get("asset_class", "share")),
             )
         )
     entries = tuple(entries_list)
@@ -80,6 +92,8 @@ def load_universe(path: Path) -> tuple[UniverseEntry, ...]:
         entry.validate()
     if len({entry.secid for entry in entries}) != len(entries):
         raise ValueError("universe contains duplicate SECID")
+    if len({entry.t_invest_uid for entry in entries}) != len(entries):
+        raise ValueError("universe contains duplicate T-Invest UID")
     return entries
 
 
@@ -123,15 +137,25 @@ def load_portfolio(
     unknown = set(raw.get("positions", {})) - set(market)
     if unknown:
         raise ValueError(f"positions outside verified universe: {sorted(unknown)}")
-    positions = {
-        secid: Position(market[secid].instrument, int(lots))
-        for secid, lots in raw.get("positions", {}).items()
-    }
+    positions: dict[str, Position] = {}
+    for secid, position_raw in raw.get("positions", {}).items():
+        if isinstance(position_raw, dict):
+            lots = int(position_raw["lots"])
+            blocked_lots = int(position_raw.get("blocked_lots", 0))
+        else:
+            lots = int(position_raw)
+            blocked_lots = 0
+        positions[secid] = Position(market[secid].instrument, lots, blocked_lots)
     return PortfolioSnapshot(
         cash=_decimal(raw["cash"]),
         positions=positions,
         daily_turnover=_decimal(raw.get("daily_turnover", "0")),
         open_orders=int(raw.get("open_orders", 0)),
+        blocked_cash=_decimal(raw.get("blocked_cash", "0")),
+        reported_equity=(
+            None if raw.get("reported_equity") is None else _decimal(raw["reported_equity"])
+        ),
+        source=str(raw.get("source", "file")),
     )
 
 
@@ -157,6 +181,16 @@ def run_hourly_shadow(
         )
         if observation.instrument.lot_size != entry.lot_size_verified:
             raise ValueError(f"lot mismatch for {entry.secid}")
+        observation = replace(
+            observation,
+            instrument=replace(
+                observation.instrument,
+                issuer_id=entry.issuer_id,
+                sector=entry.sector,
+                risk_cluster=entry.risk_cluster,
+                asset_class=entry.asset_class,
+            ),
+        )
         market[entry.secid] = observation
     portfolio = load_portfolio(portfolio_path, market)
     geo_events, news_stale = load_geo_feed(geo_path, as_of=as_of)
@@ -174,9 +208,13 @@ def run_hourly_shadow(
         geo_events=geo_events,
         news_stale=news_stale,
     )
+    persisted = asdict(result)
+    persisted["market"] = [asdict(market[secid]) for secid in sorted(market)]
+    persisted["portfolio_input"] = asdict(portfolio)
+    persisted["config_snapshot"] = asdict(config)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(
-        json.dumps(asdict(result), ensure_ascii=False, default=str, indent=2),
+        json.dumps(persisted, ensure_ascii=False, default=str, indent=2),
         encoding="utf-8",
     )
     return result

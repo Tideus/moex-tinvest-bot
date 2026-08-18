@@ -51,6 +51,10 @@ class Instrument:
     lot_size: int
     tick_size: Decimal
     currency: str = "RUB"
+    issuer_id: str = "unknown"
+    sector: str = "unknown"
+    risk_cluster: str = "unknown"
+    asset_class: str = "share"
 
     def __post_init__(self) -> None:
         if not self.secid or not self.uid or not self.board:
@@ -59,6 +63,8 @@ class Instrument:
             raise ValueError("lot_size must be positive")
         if self.tick_size <= ZERO:
             raise ValueError("tick_size must be positive")
+        if not self.issuer_id or not self.sector or not self.risk_cluster:
+            raise ValueError("instrument diversification identity must be complete")
 
     def round_price(self, price: Decimal) -> Decimal:
         ticks = (price / self.tick_size).quantize(Decimal("1"), rounding=ROUND_HALF_UP)
@@ -92,6 +98,13 @@ class MarketObservation:
 class Position:
     instrument: Instrument
     lots: int
+    blocked_lots: int = 0
+
+    def __post_init__(self) -> None:
+        if self.blocked_lots < 0:
+            raise ValueError("blocked_lots cannot be negative")
+        if self.blocked_lots > abs(self.lots):
+            raise ValueError("blocked_lots cannot exceed absolute position lots")
 
     @property
     def units(self) -> int:
@@ -104,14 +117,29 @@ class PortfolioSnapshot:
     positions: Mapping[str, Position] = field(default_factory=dict)
     daily_turnover: Decimal = ZERO
     open_orders: int = 0
+    blocked_cash: Decimal = ZERO
+    reported_equity: Decimal | None = None
+    source: str = "file"
+
+    def __post_init__(self) -> None:
+        if not self.cash.is_finite() or not self.blocked_cash.is_finite():
+            raise ValueError("portfolio cash values must be finite")
+        if self.cash < ZERO or self.blocked_cash < ZERO:
+            raise ValueError("portfolio cash values cannot be negative")
+        if self.open_orders < 0:
+            raise ValueError("open_orders cannot be negative")
+        if self.reported_equity is not None and not self.reported_equity.is_finite():
+            raise ValueError("reported_equity must be finite")
 
     def equity(self, market: Mapping[str, MarketObservation]) -> Decimal:
-        total = self.cash
+        total = self.cash + self.blocked_cash
         for secid, position in self.positions.items():
             observation = market.get(secid)
             if observation is None:
                 raise ValueError(f"missing price for position {secid}")
             total += Decimal(position.units) * observation.price
+        if self.reported_equity is not None and self.reported_equity > ZERO:
+            return min(total, self.reported_equity)
         return total
 
 

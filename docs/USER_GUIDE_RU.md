@@ -1,6 +1,9 @@
 # Руководство пользователя MOEX + ALGOPACK + T-Invest bot
 
 Полный справочник параметров JSON: [`CONFIG_REFERENCE_RU.md`](CONFIG_REFERENCE_RU.md).
+Подробный алгоритм и разбор BUY/SELL: [`ALGORITHM_RU.md`](ALGORITHM_RU.md).
+Целевая long/short модель, derivatives и weekly review:
+[`MULTI_ASSET_STRATEGY_RU.md`](MULTI_ASSET_STRATEGY_RU.md).
 
 ## 1. Что бот умеет сейчас
 
@@ -77,6 +80,19 @@ python -m moex_bot.cli sandbox-bootstrap --top-up 300000
 Команда работает только с официальным sandbox REST endpoint; production-баланс она не меняет.
 Sandbox-деньги виртуальные, а качество исполнения заявок не моделирует реальный рынок.
 
+Проверить read-only снимок выбранного в `config/runtime.json` счёта вручную:
+
+```powershell
+python -m moex_bot.cli broker-portfolio-snapshot `
+  --runtime config/runtime.json `
+  --services config/services.json `
+  --universe config/universe.json `
+  --output artifacts/portfolio.json
+```
+
+Команда не выставляет заявки. Она сохраняет свободные/заблокированные рубли, broker equity,
+позиции и число активных заявок. Неизвестная позиция вне universe приводит к `FAIL`.
+
 ## 3. Telegram
 
 1. Создайте бота через `@BotFather`.
@@ -89,6 +105,14 @@ python -m moex_bot.cli integration-preflight
 ```
 
 Telegram используется только для исходящих отчётов. Входящие команды не управляют заявками.
+
+Отправляются два типа торговых отчётов:
+
+- каждый час — цели, виртуальные BUY/SELL данного цикла и причины risk rejection;
+- ежедневно в `23:20 Europe/Moscow` — сводка всех виртуальных BUY/SELL за день по SECID.
+
+Дневная сводка дедуплицируется ключом даты, поэтому повторный запуск не создаёт второе сообщение.
+Она описывает shadow-намерения, а не фактические fills T‑Invest.
 
 ## 4. Выбор T-Invest контура
 
@@ -187,6 +211,8 @@ Get-ScheduledTaskInfo -TaskName MOEX-TInvest-Shadow-Hourly
 - `targets`: желаемые виртуальные веса после стратегии и GeoRisk.
 - `orders`: только dry-run планы в текущем shadow-контуре.
 - `rejected`: планы, остановленные риск-лимитами.
+- `projected sector/risk-cluster exposure`: несколько нефтегазовых, металлургических или
+  финансовых бумаг считаются совместной концентрацией, даже если лимит каждой позиции соблюдён.
 - `TradeStats imbalance`: `(Σval_b − Σval_s)/(Σval_b + Σval_s)`. Выше `+0.10` — заметно
   преобладает агрессивный buy-flow; ниже `−0.10` — sell-flow; между ними — balanced.
 - `FUTOI FIZ/YUR`: gross long/short и net фьючерсов. Это не позиции конкретного фонда.
