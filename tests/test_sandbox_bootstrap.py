@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
@@ -152,6 +153,49 @@ def test_broker_snapshot_fails_closed_for_position_outside_universe() -> None:
     service = TInvestSandboxAccountService("token", transport)
     with pytest.raises(ValueError, match="outside verified universe"):
         service.broker_snapshot("sandbox-1", {})
+
+
+def test_operations_follow_cursor_and_normalize_trade() -> None:
+    transport = SequencedTransport(
+        [
+            {
+                "items": [
+                    {
+                        "id": "operation-1",
+                        "date": "2026-08-18T08:00:00Z",
+                        "type": "OPERATION_TYPE_BUY",
+                        "instrumentUid": "uid-sber",
+                        "commission": {"units": "1", "nano": 500000000},
+                        "tradesInfo": {
+                            "trades": [
+                                {
+                                    "quantity": "10",
+                                    "price": {"units": "300", "nano": 0},
+                                }
+                            ]
+                        },
+                    }
+                ],
+                "hasNext": True,
+                "nextCursor": "page-2",
+            },
+            {"items": [], "hasNext": False},
+        ]
+    )
+    service = TInvestSandboxAccountService("token", transport)
+    instrument = Instrument("SBER", "uid-sber", "TQBR", 10, Decimal("0.01"))
+    operations = service.operations(
+        "sandbox-1",
+        {instrument.uid: instrument},
+        from_time=datetime(2026, 8, 18, tzinfo=UTC),
+        to_time=datetime(2026, 8, 19, tzinfo=UTC),
+    )
+    assert len(operations) == 1
+    assert operations[0].secid == "SBER"
+    assert operations[0].side == "BUY"
+    assert operations[0].gross == Decimal("3000")
+    assert operations[0].commission == Decimal("1.5")
+    assert transport.calls[1]["payload"]["cursor"] == "page-2"
 
 
 def test_env_upsert_is_idempotent_and_removes_duplicate_keys(tmp_path: Path) -> None:

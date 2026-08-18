@@ -4,13 +4,21 @@ import argparse
 import json
 import os
 from dataclasses import asdict
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, time, timedelta
 from decimal import Decimal
 from importlib import import_module
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from .adapters import DryRunExecutionAdapter, JsonlAuditLog
+from .backtest import load_backtest_settings, run_backtest
+from .backtest_reporting import (
+    OperationalEvidence,
+    assess_promotion,
+    load_promotion_gates,
+    write_backtest_bundle,
+)
 from .config import load_config
 from .daily_report import render_daily_shadow_report, summarize_shadow_artifacts
 from .domain import GeoEvent, Instrument, MarketObservation, PortfolioSnapshot, Position
@@ -20,15 +28,18 @@ from .harness import TradingHarness
 from .integrations.algopack_flow import AlgoPackFlowAdapter
 from .integrations.moexalgo_data import MoexAlgoReadOnlyAdapter
 from .integrations.tinvest_sandbox import (
+    GET_OPERATIONS_BY_CURSOR_PATH,
     GET_ORDERS_PATH,
     GET_PORTFOLIO_PATH,
     GET_POSITIONS_PATH,
     MAX_SANDBOX_PAY_IN_RUB,
     TInvestSandboxAccountService,
+    TInvestSandboxExecutionAdapter,
     UrlLibJsonTransport,
 )
 from .notifications import SQLiteOutbox, TelegramBotApiSender, deliver_pending
 from .ownership import load_ownership_disclosures, render_ownership_report
+from .performance import render_performance_report, summarize_performance
 from .reporting import (
     render_flow_report,
     render_persisted_shadow_decisions,
@@ -39,7 +50,9 @@ from .runtime_config import (
     materialize_runtime_defaults,
     render_systemd_timer_overrides,
     set_runtime_environment,
+    set_sandbox_orders_enabled,
 )
+from .sandbox_execution import execute_shadow_plan, render_sandbox_execution_report
 from .scheduler import is_conservative_stock_window
 from .service_config import (
     TInvestEnvironment,
@@ -148,7 +161,7 @@ def preflight(config_path: Path) -> int:
         print(f"FAIL: {exc}")
         return 2
     print(f"PASS: configuration valid for mode={config.mode.value}")
-    print("Live execution is not available in this scaffold.")
+    print("Production execution is unavailable; sandbox execution has a separate runtime gate.")
     return 0
 
 
@@ -303,7 +316,12 @@ def environment_status(*, runtime_path: Path, services_path: Path) -> int:
         f"account source: {runtime.account_id_env} "
         f"({'present' if runtime.account_id else 'missing'})"
     )
-    print("live orders: DISABLED")
+    print("production orders: DISABLED")
+    print(
+        "sandbox orders: "
+        f"{'ENABLED' if config.sandbox_orders_enabled else 'DISABLED'} "
+        f"(max {config.sandbox_max_orders_per_cycle}/cycle)"
+    )
     print(
         "shadow schedule: "
         f"{config.schedule.shadow_on_calendar} {config.schedule.timezone}"
@@ -323,6 +341,57 @@ def environment_set(*, runtime_path: Path, environment: TInvestEnvironment) -> i
     if environment is TInvestEnvironment.PROD:
         print("SAFE: production server selected; live orders remain DISABLED")
     return 0
+
+
+def sandbox_orders_set(*, runtime_path: Path, enabled: bool) -> int:
+    try:
+        set_sandbox_orders_enabled(runtime_path, enabled)
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        print(f"FAIL: sandbox execution switch: {exc}")
+        return 2
+    print(f"PASS: sandbox order submission {'ENABLED' if enabled else 'DISABLED'}")
+    print("Production order submission remains impossible in this build.")
+    return 0
+
+
+def sandbox_execute(
+    *,
+    shadow_path: Path,
+    portfolio_path: Path,
+    runtime_path: Path,
+    output_path: Path,
+    outbox_path: Path | None,
+    as_of: datetime,
+) -> int:
+    try:
+        runtime = load_runtime_config(runtime_path)
+        if not runtime.sandbox_orders_enabled:
+            print("SKIP: sandbox order submission is disabled")
+            return 3
+        adapter = TInvestSandboxExecutionAdapter.from_environment()
+        result = execute_shadow_plan(
+            shadow_path=shadow_path,
+            portfolio_path=portfolio_path,
+            output_path=output_path,
+            runtime=runtime,
+            adapter=adapter,
+            as_of=as_of,
+        )
+        if outbox_path is not None:
+            SQLiteOutbox(outbox_path).enqueue(
+                kind="sandbox_execution",
+                dedupe_key=f"sandbox-execution:{result.run_id}",
+                body=render_sandbox_execution_report(result),
+                now=as_of,
+            )
+    except (OSError, ValueError, RuntimeError, json.JSONDecodeError) as exc:
+        print(f"FAIL: sandbox execution: {exc}")
+        return 2
+    print(
+        f"PASS: sandbox submitted={len(result.submitted)} "
+        f"stopped={result.stopped_reason or 'no'} result={output_path}"
+    )
+    return 2 if result.stopped_reason else 0
 
 
 def runtime_render_systemd(*, runtime_path: Path, output_dir: Path) -> int:
@@ -447,20 +516,7 @@ def broker_portfolio_snapshot(
         if not broker.token or not broker.account_id:
             raise ValueError(f"{broker.environment.value} token and account id are required")
         universe = load_universe(universe_path)
-        instruments = {
-            item.t_invest_uid: Instrument(
-                item.secid,
-                item.t_invest_uid,
-                item.board,
-                item.lot_size_verified,
-                Decimal("0.01"),
-                issuer_id=item.issuer_id,
-                sector=item.sector,
-                risk_cluster=item.risk_cluster,
-                asset_class=item.asset_class,
-            )
-            for item in universe
-        }
+        instruments = _verified_instruments(universe)
         service = TInvestSandboxAccountService(broker.token, transport=UrlLibJsonTransport())
         method_paths = (
             {}
@@ -478,9 +534,33 @@ def broker_portfolio_snapshot(
             source=f"t_invest_{broker.environment.value}",
             **method_paths,
         )
+        zone = ZoneInfo(runtime_config.schedule.timezone)
+        now = datetime.now(UTC)
+        local_day = now.astimezone(zone).date()
+        day_start = datetime.combine(local_day, time.min, zone)
+        operations_path = (
+            None
+            if broker.environment is TInvestEnvironment.SANDBOX
+            else GET_OPERATIONS_BY_CURSOR_PATH
+        )
+        operations = service.operations(
+            broker.account_id,
+            instruments,
+            from_time=day_start,
+            to_time=now + timedelta(seconds=1),
+            base_url=broker.rest_endpoint,
+            **({} if operations_path is None else {"operations_path": operations_path}),
+        )
+        daily_turnover = sum(
+            (item.gross for item in operations if item.side in {"BUY", "SELL"}), Decimal("0")
+        )
         output_path.parent.mkdir(parents=True, exist_ok=True)
         output_path.write_text(
-            json.dumps(snapshot.as_portfolio_payload(), ensure_ascii=False, indent=2),
+            json.dumps(
+                snapshot.as_portfolio_payload(daily_turnover=daily_turnover),
+                ensure_ascii=False,
+                indent=2,
+            ),
             encoding="utf-8",
         )
     except (RuntimeError, ValueError, OSError, json.JSONDecodeError) as exc:
@@ -490,10 +570,27 @@ def broker_portfolio_snapshot(
         f"PASS: {broker.environment.value} broker portfolio snapshot "
         f"cash={snapshot.cash_available} blocked={snapshot.cash_blocked} "
         f"equity={snapshot.reported_equity} positions={len(snapshot.positions_lots)} "
-        f"open_orders={snapshot.open_orders}"
+        f"open_orders={snapshot.open_orders} daily_turnover={daily_turnover}"
     )
     print(f"result={output_path}")
     return 0
+
+
+def _verified_instruments(universe: tuple[Any, ...]) -> dict[str, Instrument]:
+    return {
+        item.t_invest_uid: Instrument(
+            item.secid,
+            item.t_invest_uid,
+            item.board,
+            item.lot_size_verified,
+            Decimal("0.01"),
+            issuer_id=item.issuer_id,
+            sector=item.sector,
+            risk_cluster=item.risk_cluster,
+            asset_class=item.asset_class,
+        )
+        for item in universe
+    }
 
 
 def shadow_decisions(*, input_path: Path) -> int:
@@ -616,6 +713,196 @@ def daily_trade_report(
         f"PASS: daily report date={report_date} cycles={summary.cycles} "
         f"trade_rows={len(summary.rows)} output={output_path}"
     )
+    return 0
+
+
+def account_performance_report(
+    *,
+    artifacts_dir: Path,
+    start_date: date,
+    end_date: date,
+    timezone: str,
+    universe_path: Path,
+    runtime_path: Path,
+    services_path: Path,
+    output_path: Path,
+    outbox_path: Path | None,
+    weekly: bool,
+    as_of: datetime,
+) -> int:
+    try:
+        if start_date > end_date:
+            raise ValueError("report start date must not be after end date")
+        runtime_config = load_runtime_config(runtime_path)
+        broker = resolve_tinvest_runtime(
+            load_service_config(services_path), environment=runtime_config.environment
+        )
+        if not broker.token or not broker.account_id:
+            raise ValueError("sandbox token and account id are required")
+        instruments = _verified_instruments(load_universe(universe_path))
+        zone = ZoneInfo(timezone)
+        from_time = datetime.combine(start_date, time.min, zone)
+        to_time = datetime.combine(end_date + timedelta(days=1), time.min, zone)
+        service = TInvestSandboxAccountService(broker.token, UrlLibJsonTransport())
+        operations_path = (
+            None
+            if broker.environment is TInvestEnvironment.SANDBOX
+            else GET_OPERATIONS_BY_CURSOR_PATH
+        )
+        operations = service.operations(
+            broker.account_id,
+            instruments,
+            from_time=from_time,
+            to_time=to_time,
+            base_url=broker.rest_endpoint,
+            **({} if operations_path is None else {"operations_path": operations_path}),
+        )
+        label = (
+            f"{start_date.strftime('%d.%m.%Y')} — {end_date.strftime('%d.%m.%Y')}"
+            if weekly
+            else start_date.strftime("%d.%m.%Y")
+        )
+        summary = summarize_performance(
+            artifacts_dir.glob("shadow-*.json"),
+            operations,
+            start_date=start_date,
+            end_date=end_date,
+            timezone=timezone,
+            label=label,
+        )
+        report = render_performance_report(summary, weekly=weekly)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_text(report + "\n", encoding="utf-8")
+        output_path.with_suffix(".json").write_text(
+            json.dumps(asdict(summary), ensure_ascii=False, default=str, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        if outbox_path is not None:
+            period = "weekly" if weekly else "daily"
+            SQLiteOutbox(outbox_path).enqueue(
+                kind=f"{period}_account_performance",
+                dedupe_key=f"{period}-account-performance:{start_date}:{end_date}",
+                body=report,
+                now=as_of,
+            )
+    except ValueError as exc:
+        if "requires at least two portfolio snapshots" in str(exc):
+            print(f"SKIP: account performance report: {exc}")
+            return 3
+        print(f"FAIL: account performance report: {exc}")
+        return 2
+    except (OSError, RuntimeError, json.JSONDecodeError) as exc:
+        print(f"FAIL: account performance report: {exc}")
+        return 2
+    print(
+        f"PASS: {'weekly' if weekly else 'daily'} account report "
+        f"period={start_date}:{end_date} output={output_path}"
+    )
+    return 0
+
+
+def historical_backtest(
+    *,
+    strategy_config_path: Path,
+    backtest_config_path: Path,
+    promotion_gates_path: Path,
+    universe_path: Path,
+    output_dir: Path,
+    require_token: bool,
+    sandbox_weeks: int,
+    reconciled_orders: int,
+    unresolved_orders: int,
+) -> int:
+    try:
+        bot_config = load_config(strategy_config_path)
+        settings = load_backtest_settings(backtest_config_path)
+        gates = load_promotion_gates(promotion_gates_path)
+        universe = load_universe(universe_path)
+        adapter = MoexAlgoReadOnlyAdapter.from_environment(require_token=require_token)
+        candles = {}
+        for entry in universe:
+            print(f"FETCH: {entry.secid} {settings.start_date}:{settings.end_date}")
+            series = adapter.historical_daily_candles(
+                secid=entry.secid,
+                board=entry.board,
+                start=settings.start_date,
+                end=settings.end_date,
+            )
+            if not series:
+                raise ValueError(f"no historical daily candles for {entry.secid}")
+            candles[entry.secid] = series
+        benchmark = adapter.historical_daily_candles(
+            secid=settings.benchmark_secid,
+            board=settings.benchmark_board,
+            start=settings.start_date,
+            end=settings.end_date,
+        )
+        if not benchmark:
+            raise ValueError(f"no benchmark candles for {settings.benchmark_secid}")
+        output_dir.mkdir(parents=True, exist_ok=True)
+        (output_dir / "market-data.json").write_text(
+            json.dumps(
+                {
+                    "source": "MOEX via moexalgo Ticker.candles(period='1D')",
+                    "fetched_at": datetime.now(UTC).isoformat(),
+                    "requested_period": {
+                        "start": settings.start_date.isoformat(),
+                        "end": settings.end_date.isoformat(),
+                    },
+                    "securities": {
+                        secid: [asdict(item) for item in series]
+                        for secid, series in candles.items()
+                    },
+                    "benchmark": {
+                        "secid": settings.benchmark_secid,
+                        "board": settings.benchmark_board,
+                        "candles": [asdict(item) for item in benchmark],
+                    },
+                },
+                ensure_ascii=False,
+                default=str,
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        base = run_backtest(
+            bot_config=bot_config,
+            settings=settings,
+            universe=universe,
+            candles=candles,
+            benchmark_candles=benchmark,
+        )
+        stress = run_backtest(
+            bot_config=bot_config,
+            settings=settings,
+            universe=universe,
+            candles=candles,
+            benchmark_candles=benchmark,
+            cost_multiplier=settings.cost_stress_multiplier,
+        )
+        assessment = assess_promotion(
+            base,
+            stress,
+            gates,
+            OperationalEvidence(sandbox_weeks, reconciled_orders, unresolved_orders),
+        )
+        write_backtest_bundle(
+            output_dir=output_dir,
+            base=base,
+            stress=stress,
+            assessment=assessment,
+        )
+    except (OSError, RuntimeError, ValueError, json.JSONDecodeError) as exc:
+        print(f"FAIL: historical backtest: {exc}")
+        return 2
+    print(
+        f"PASS: backtest OOS={base.oos_metrics.return_pct:+.2f}% "
+        f"benchmark={base.oos_metrics.benchmark_return_pct} "
+        f"promotion={'PASS' if assessment.passed else 'BLOCKED'}"
+    )
+    print(f"report={output_dir / 'REPORT.md'}")
+    print(f"chart={output_dir / 'equity-curve.html'}")
     return 0
 
 
@@ -743,6 +1030,13 @@ def build_parser() -> argparse.ArgumentParser:
     runtime_normalize_parser.add_argument(
         "--runtime", type=Path, default=Path("config/runtime.json")
     )
+    sandbox_switch_parser = sub.add_parser("sandbox-orders-set")
+    sandbox_switch_parser.add_argument(
+        "--enabled", action=argparse.BooleanOptionalAction, required=True
+    )
+    sandbox_switch_parser.add_argument(
+        "--runtime", type=Path, default=Path("config/runtime.json")
+    )
     config_parser = sub.add_parser("config-check")
     config_parser.add_argument("--root", type=Path, default=Path("."))
     snapshot_parser = sub.add_parser("moex-snapshot")
@@ -763,6 +1057,15 @@ def build_parser() -> argparse.ArgumentParser:
     shadow_parser.add_argument("--as-of", type=datetime.fromisoformat)
     shadow_parser.add_argument("--require-token", action="store_true")
     shadow_parser.add_argument("--outbox", type=Path)
+    sandbox_execute_parser = sub.add_parser("sandbox-execute")
+    sandbox_execute_parser.add_argument("--shadow", type=Path, required=True)
+    sandbox_execute_parser.add_argument("--portfolio", type=Path, required=True)
+    sandbox_execute_parser.add_argument(
+        "--runtime", type=Path, default=Path("config/runtime.json")
+    )
+    sandbox_execute_parser.add_argument("--output", type=Path, required=True)
+    sandbox_execute_parser.add_argument("--outbox", type=Path)
+    sandbox_execute_parser.add_argument("--as-of", type=datetime.fromisoformat)
     decisions_parser = sub.add_parser("shadow-decisions")
     decisions_parser.add_argument("--input", type=Path, required=True)
     flow_parser = sub.add_parser("algopack-flow")
@@ -792,6 +1095,50 @@ def build_parser() -> argparse.ArgumentParser:
     daily_parser.add_argument("--output", type=Path, required=True)
     daily_parser.add_argument("--outbox", type=Path)
     daily_parser.add_argument("--as-of", type=datetime.fromisoformat)
+    performance_parser = sub.add_parser(
+        "account-performance-report",
+        help="Build daily/weekly account P&L from broker operations and portfolio snapshots",
+    )
+    performance_parser.add_argument("--artifacts", type=Path, required=True)
+    performance_parser.add_argument("--start-date", type=date.fromisoformat, required=True)
+    performance_parser.add_argument("--end-date", type=date.fromisoformat, required=True)
+    performance_parser.add_argument("--timezone", default="Europe/Moscow")
+    performance_parser.add_argument(
+        "--universe", type=Path, default=Path("config/universe.json")
+    )
+    performance_parser.add_argument(
+        "--runtime", type=Path, default=Path("config/runtime.json")
+    )
+    performance_parser.add_argument(
+        "--services", type=Path, default=Path("config/services.json")
+    )
+    performance_parser.add_argument("--output", type=Path, required=True)
+    performance_parser.add_argument("--outbox", type=Path)
+    performance_parser.add_argument("--weekly", action="store_true")
+    performance_parser.add_argument("--as-of", type=datetime.fromisoformat)
+    backtest_parser = sub.add_parser(
+        "historical-backtest",
+        help="Fetch real MOEX daily candles and run a next-session cost-aware backtest",
+    )
+    backtest_parser.add_argument(
+        "--strategy-config", type=Path, default=Path("config/shadow.json")
+    )
+    backtest_parser.add_argument(
+        "--backtest-config", type=Path, default=Path("config/backtest.json")
+    )
+    backtest_parser.add_argument(
+        "--promotion-gates", type=Path, default=Path("config/promotion_gates.json")
+    )
+    backtest_parser.add_argument(
+        "--universe", type=Path, default=Path("config/universe.json")
+    )
+    backtest_parser.add_argument(
+        "--output-dir", type=Path, default=Path("artifacts/historical-backtest")
+    )
+    backtest_parser.add_argument("--require-token", action="store_true")
+    backtest_parser.add_argument("--sandbox-weeks", type=int, default=0)
+    backtest_parser.add_argument("--reconciled-orders", type=int, default=0)
+    backtest_parser.add_argument("--unresolved-orders", type=int, default=0)
     outbox_parser = sub.add_parser("outbox-health")
     outbox_parser.add_argument("--outbox", type=Path, default=Path("data/notifications.sqlite3"))
     outbox_parser.add_argument("--as-of", type=datetime.fromisoformat)
@@ -843,6 +1190,8 @@ def main() -> int:
         )
     if args.command == "runtime-normalize":
         return runtime_normalize(runtime_path=args.runtime)
+    if args.command == "sandbox-orders-set":
+        return sandbox_orders_set(runtime_path=args.runtime, enabled=args.enabled)
     if args.command == "config-check":
         return config_check(root=args.root)
     if args.command == "shadow-decisions":
@@ -899,6 +1248,39 @@ def main() -> int:
             outbox_path=args.outbox,
             as_of=as_of,
         )
+    if args.command == "account-performance-report":
+        as_of = args.as_of or datetime.now(UTC)
+        if as_of.tzinfo is None:
+            print("FAIL: --as-of must include a timezone offset")
+            return 2
+        return account_performance_report(
+            artifacts_dir=args.artifacts,
+            start_date=args.start_date,
+            end_date=args.end_date,
+            timezone=args.timezone,
+            universe_path=args.universe,
+            runtime_path=args.runtime,
+            services_path=args.services,
+            output_path=args.output,
+            outbox_path=args.outbox,
+            weekly=args.weekly,
+            as_of=as_of,
+        )
+    if args.command == "historical-backtest":
+        if min(args.sandbox_weeks, args.reconciled_orders, args.unresolved_orders) < 0:
+            print("FAIL: operational evidence values must be non-negative")
+            return 2
+        return historical_backtest(
+            strategy_config_path=args.strategy_config,
+            backtest_config_path=args.backtest_config,
+            promotion_gates_path=args.promotion_gates,
+            universe_path=args.universe,
+            output_dir=args.output_dir,
+            require_token=args.require_token,
+            sandbox_weeks=args.sandbox_weeks,
+            reconciled_orders=args.reconciled_orders,
+            unresolved_orders=args.unresolved_orders,
+        )
     if args.command == "outbox-health":
         as_of = args.as_of or datetime.now(UTC)
         if as_of.tzinfo is None:
@@ -925,6 +1307,19 @@ def main() -> int:
             as_of=as_of,
             require_token=args.require_token,
             outbox_path=args.outbox,
+        )
+    if args.command == "sandbox-execute":
+        as_of = args.as_of or datetime.now(UTC)
+        if as_of.tzinfo is None:
+            print("FAIL: --as-of must include a timezone offset")
+            return 2
+        return sandbox_execute(
+            shadow_path=args.shadow,
+            portfolio_path=args.portfolio,
+            runtime_path=args.runtime,
+            output_path=args.output,
+            outbox_path=args.outbox,
+            as_of=as_of,
         )
     if args.command == "geo-refresh":
         as_of = args.as_of or datetime.now(UTC)

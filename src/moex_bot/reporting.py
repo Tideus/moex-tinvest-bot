@@ -197,7 +197,12 @@ def render_shadow_report(result: HarnessResult, as_of: datetime) -> str:
             )
             lines.append(f"   лимит {_money(intent.limit_price)} · сектор: {sector}")
     elif result.quality.passed:
-        lines.extend(("", "🧾 ВИРТУАЛЬНЫЕ СДЕЛКИ", "Нет сделок, прошедших риск-контроль."))
+        message = (
+            "Мониторинг: сейчас не час плановой ребалансировки."
+            if not result.rebalance_allowed
+            else "Нет сделок, прошедших риск-контроль."
+        )
+        lines.extend(("", "🧾 ПЛАН СДЕЛОК", message))
     if result.rejected:
         lines.extend(("", "⛔ НЕ ПРОШЛИ РИСК-КОНТРОЛЬ"))
         for item in result.rejected[:12]:
@@ -214,7 +219,8 @@ def render_shadow_report(result: HarnessResult, as_of: datetime) -> str:
     lines.extend(
         (
             "",
-            "ℹ️ SHADOW: это расчёт возможных действий. Реальные заявки брокеру не отправлялись.",
+            "ℹ️ SHADOW: Реальные заявки брокеру не отправлялись на этом шаге; "
+            "Sandbox-исполнение подтверждается отдельным сообщением.",
             "Импульс — изменение цены в окне стратегии; "
             "тренд — средняя цена для фильтра направления.",
         )

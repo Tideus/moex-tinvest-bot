@@ -2,9 +2,10 @@
 
 ## Граница готовности
 
-Этот пакет предназначен для постоянного `replay/shadow` и наблюдения. Он не выставляет реальные
-заявки: `LIVE` запрещён конфигурацией и кодом. Выбор T-Invest `prod` лишь выбирает сервер и
-production credentials для будущих read-only/preflight-интеграций.
+Пакет предназначен для постоянного `replay/shadow`, наблюдения и явно разрешаемых заявок на
+виртуальном T-Invest Sandbox. `LIVE`/production execution запрещён конфигурацией и кодом.
+Выбор `prod` разрешает только чтение портфеля и отчётность; единственный mutation adapter
+жёстко привязан к официальному sandbox-host.
 
 ## Рекомендуемый сервер
 
@@ -197,10 +198,17 @@ Healthcheck запускается каждые 15 минут и требует 
 Вне консервативного торгового окна freshness artifact не проверяется, поэтому ночь и выходные
 не создают ложную тревогу. Конфиги и обязательные credentials проверяются всегда.
 
-В `23:20 Europe/Moscow` отдельный timer агрегирует все `shadow-*.json` за московский день,
-сохраняет `daily-trades-YYYY-MM-DD.txt` и через тот же SQLite outbox отправляет Telegram-сводку:
-число циклов, blocked/rejected, суммарные BUY/SELL и агрегат по SECID. Это виртуальные намерения,
-не подтверждение исполнения брокером. Проверить timer:
+В `23:20 Europe/Moscow` отдельный timer сопоставляет почасовые снимки broker equity с
+исполненными sandbox-операциями. Он сохраняет `daily-performance-YYYY-MM-DD.txt` и отправляет
+в Telegram начальный/конечный баланс, общий P&L, просадку и вклад каждой бумаги. Пополнения и
+выводы исключаются из результата. В пятницу тем же запуском создаётся
+`weekly-performance-MONDAY-FRIDAY.txt` с процессными метриками и консервативным выводом
+`COLLECT_MORE`, `REVIEW_DATA`, `REVIEW_RISK`, `OBSERVE` либо `CONTINUE_OOS`.
+Рядом с каждым `.txt` сохраняется полный структурированный `.json`; его и соответствующие
+`shadow-*.json` следует передавать Codex для недельного разбора причин и проверки гипотез.
+
+Sandbox не моделирует реальную ликвидность и маржинальные расходы, поэтому недельный вывод не
+меняет параметры автоматически. Проверить timer:
 
 ```bash
 systemctl status moex-tinvest-daily-report.timer
@@ -215,7 +223,19 @@ sudo moex-botctl contour sandbox
 sudo moex-botctl contour prod
 ```
 
-Переключение контура не включает live orders, но меняет счёт, из которого shadow читает портфель.
+Переключение контура само по себе не включает заявки. Чтобы после shadow-проверок разрешить
+виртуальные сделки только на sandbox-счёте:
+
+```bash
+sudo moex-botctl sandbox-enable --confirm-sandbox
+# немедленно вернуть расчётный режим
+sudo moex-botctl sandbox-disable
+```
+
+При включении проверяются sandbox credentials. Следующий успешный часовой цикл может отправить
+не более `sandbox_max_orders_per_cycle` лимитных заявок. Активная заявка, stale-план, ошибка
+данных, несовпадение account ID или неопределённый статус блокируют дальнейшее исполнение.
+Production orders отсутствуют.
 После изменения снова выполните `prelaunch` и `start`, чтобы проверить соответствующую пару
 token/account ID.
 
@@ -249,8 +269,20 @@ sudo moex-botctl diagnose --watch
 sudo moex-botctl diagnose --watch --interval 30
 ```
 
-Диагностика проверяет окружение, credentials, оба timer, Telegram outbox и свежесть последнего
+Диагностика проверяет окружение, credentials, три timer, Telegram outbox и свежесть последнего
 shadow artifact. При ошибке показывает комментарий и последние сообщения units.
+
+Историческая проверка текущей стратегии на реальных дневных свечах MOEX запускается одной
+командой:
+
+```bash
+sudo moex-botctl backtest
+```
+
+Результаты сохраняются в
+`/var/lib/moex-tinvest-bot/artifacts/historical-backtest/`: исходные OHLCV, сделки, equity CSV,
+интерактивный HTML-график, Markdown-отчёт и fail-closed gate допуска к production. Команда ничего
+не покупает и не меняет Sandbox-счёт.
 
 Если сервис упал:
 
@@ -312,7 +344,7 @@ sudo /opt/moex-tinvest-bot/scripts/ubuntu/uninstall.sh --purge
 
 Серверный shadow считается здоровым, если:
 
-- оба timers enabled/active;
+- три timers (`shadow`, `health`, `daily-report`) enabled/active;
 - последний service result `success`;
 - healthcheck проходит;
 - новый artifact появляется каждый торговый час;

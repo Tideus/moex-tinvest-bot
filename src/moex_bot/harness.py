@@ -31,6 +31,7 @@ class HarnessResult:
     orders: tuple[OrderRecord, ...]
     rejected: tuple[dict[str, object], ...]
     portfolio: PortfolioSnapshot | None = None
+    rebalance_allowed: bool = True
 
 
 class TradingHarness:
@@ -48,6 +49,7 @@ class TradingHarness:
         portfolio: PortfolioSnapshot,
         geo_events: tuple[GeoEvent, ...],
         news_stale: bool = False,
+        allow_rebalance: bool = True,
     ) -> HarnessResult:
         quality = validate_market(market, as_of, self.config.max_data_age_seconds)
         geo = assess_geo_risk(geo_events, news_stale=news_stale)
@@ -56,9 +58,17 @@ class TradingHarness:
         )
         if not quality.passed:
             self.audit.write({"type": "quality_block", "run_id": run_id, "errors": quality.errors})
-            return HarnessResult(run_id, quality, geo, (), (), (), portfolio)
+            return HarnessResult(
+                run_id, quality, geo, (), (), (), portfolio, allow_rebalance
+            )
 
-        raw_targets = calculate_targets(market.values(), self.config.strategy)
+        raw_targets = calculate_targets(
+            market.values(),
+            self.config.strategy,
+            held_secids=frozenset(
+                secid for secid, position in portfolio.positions.items() if position.lots > 0
+            ),
+        )
         targets = tuple(
             Target(
                 target.secid,
@@ -68,13 +78,17 @@ class TradingHarness:
             for target in raw_targets
             if target.secid not in geo.blocked_secids
         )
-        intents = build_order_intents(
-            run_id,
-            targets,
-            portfolio,
-            market,
-            self.config.min_trade_notional,
-            self.config.max_order_notional,
+        intents = (
+            build_order_intents(
+                run_id,
+                targets,
+                portfolio,
+                market,
+                self.config.min_trade_notional,
+                self.config.max_order_notional,
+            )
+            if allow_rebalance
+            else ()
         )
         equity = portfolio.equity(market)
         gross_exposure = sum(
@@ -173,8 +187,16 @@ class TradingHarness:
                 "targets": [asdict(item) for item in targets],
                 "orders": len(orders),
                 "rejected": len(rejected),
+                "rebalance_allowed": allow_rebalance,
             }
         )
         return HarnessResult(
-            run_id, quality, geo, targets, tuple(orders), tuple(rejected), portfolio
+            run_id,
+            quality,
+            geo,
+            targets,
+            tuple(orders),
+            tuple(rejected),
+            portfolio,
+            allow_rebalance,
         )

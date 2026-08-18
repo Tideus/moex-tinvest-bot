@@ -19,6 +19,9 @@ class FakeMarketData:
         trend_window: int = 20,
         momentum_window: int = 5,
         lookback_days: int = 30,
+        period: str = "1h",
+        momentum_windows: tuple[int, ...] | None = None,
+        volatility_window: int | None = None,
     ) -> MarketObservation:
         return MarketObservation(
             Instrument(secid, uid, board, 1, Decimal("0.01")),

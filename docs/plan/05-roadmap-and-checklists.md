@@ -68,26 +68,26 @@ DoD: фильтр воспроизводим и не использует буд
 
 ## Этап 5. Risk и execution — 1–2 недели
 
-- [ ] Pre-trade checks.
-- [ ] Idempotency persistence.
-- [ ] Order state machine.
+- [x] Pre-trade checks.
+- [x] Stable request idempotency UUID.
+- [x] Базовая order state machine и остановка на `unknown/rejected`.
 - [ ] Partial fills.
 - [ ] Reconciliation.
 - [ ] Restart recovery.
-- [ ] Kill switch.
+- [x] Operator gate/kill switch для новых sandbox-заявок.
 - [ ] Rate limiter/circuit breaker.
 
 DoD: fault/replay тесты не создают дубликаты и заканчиваются известным состоянием.
 
 ## Этап 6. Sandbox — 1 неделя
 
-- [ ] Read-only portfolio/positions/orders/operations.
-- [ ] Forecast snapshot связан с broker snapshot.
-- [ ] Все операции sandbox.
+- [x] Portfolio/positions/orders/operations.
+- [x] Forecast snapshot связан с broker snapshot.
+- [x] Mutation adapter жёстко ограничен sandbox-host.
 - [ ] Reconnect и restart.
 - [ ] Отмена/замена.
 - [ ] Rate limit.
-- [ ] Дневное завершение.
+- [x] Дневной P&L и пятничный недельный отчёт.
 - [ ] Recovery drill.
 
 DoD: механика API стабильна; результат не интерпретируется как доходность.
@@ -96,24 +96,24 @@ DoD: механика API стабильна; результат не интер
 
 - [ ] Forecast ledger с data cutoff, horizon и config hash.
 - [ ] Directional/return/probability score по каждому горизонту.
-- [ ] MAE/MFE, gross/net P&L и издержки.
+- [ ] MAE/MFE и полная модель spread/slippage; broker-equity P&L и комиссии уже есть.
 - [ ] Attribution data/model/risk/execution/event/process.
 - [ ] Counterfactual hedge только по доступным тогда данным и ценам.
-- [ ] Equity/cash/margin utilization и blocked amounts.
+- [x] Equity/cash и blocked amounts; margin utilization ждёт short/derivatives.
 - [ ] Issuer/sector/underlying/correlation concentration.
 - [ ] Marginal contribution to risk и причины урезания размера.
-- [ ] Автоматический отчёт не меняет параметры стратегии.
+- [x] Автоматический отчёт не меняет параметры стратегии.
 
 DoD: каждое решение воспроизводимо, а недельный отчёт отделяет ошибку прогноза от sizing,
 execution и внешнего шока.
 
 ## Этап 6B. Акции long/short sandbox
 
-- [ ] Long BUY/SELL и reconciliation.
+- [x] Long BUY и сокращающий SELL; поштучное reconciliation ещё не реализовано.
 - [ ] Short availability и margin policy.
 - [ ] Отдельные gross/net/borrow/stress limits.
-- [ ] Sizing от broker equity/free cash/free margin с обязательным cash reserve.
-- [ ] Issuer/sector/correlation diversification limits.
+- [x] Sizing от broker equity/free cash с обязательным cash reserve; free margin ещё не используется.
+- [x] Issuer/sector/correlation diversification limits для текущего universe.
 - [ ] Short включается отдельным config gate.
 
 DoD: рестарт, partial fills и неизвестные заявки не создают непреднамеренную short-позицию.
@@ -136,8 +136,8 @@ DoD: derivatives P&L и риск воспроизводимы; naked short optio
 - [ ] Real spread/slippage.
 - [ ] Георежимы.
 - [ ] Реконнекты.
-- [ ] Ежедневная сверка.
-- [ ] Нет реальных заявок.
+- [x] Ежедневная сверка broker equity/operations и недельная агрегация.
+- [x] Production-заявок нет; Sandbox включается отдельным ручным gate.
 
 DoD: выполнены заранее определённые SLA и пределы расхождений.
 

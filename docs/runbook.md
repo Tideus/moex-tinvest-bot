@@ -46,8 +46,9 @@ powershell -ExecutionPolicy Bypass -File scripts\register_hourly_task.ps1
 Get-ScheduledTask -TaskName MOEX-TInvest-Shadow-Hourly
 ```
 
-Each run creates timestamped files under `artifacts/` and `logs/`. The task executes only the
-shadow adapter. To replace an existing task, inspect it first and then use `-Replace` explicitly.
+Each run creates timestamped files under `artifacts/` and `logs/`. The Windows wrapper remains
+shadow-oriented; automatic Sandbox execution is supported by the reviewed Ubuntu runner. To
+replace an existing Windows task, inspect it first and then use `-Replace` explicitly.
 The wrapper refreshes allowlisted primary-source RSS feeds before market analysis. Any unavailable
 source makes the feed stale and therefore reduces new risk; it never silently reports `normal`.
 RSS is polled every hour. Market analysis is conservatively skipped outside 07:05–23:05 Moscow
@@ -62,16 +63,38 @@ sources must be added and independently tested before restricted live operation.
 
 1. Block new intents.
 2. Preserve current audit logs and configuration hash.
-3. Obtain broker truth through a separately reviewed read-only adapter.
+3. Obtain broker truth through Portfolio, Positions, Orders and OperationsByCursor.
 4. Reconcile orders, fills, cash and positions.
 5. Never retry an unknown order solely because of a timeout.
 6. Rotate a token if leakage is suspected.
 7. Add a replay regression before resuming.
 8. Require manual approval to leave the safe state.
 
-## Live status
+## Sandbox execution
 
-Live is intentionally unavailable. Do not work around the interlock by changing the mode string or wiring tokens into the dry-run adapter.
+On Ubuntu, after a successful prelaunch:
+
+```bash
+sudo moex-botctl sandbox-enable --confirm-sandbox
+sudo moex-botctl start
+```
+
+Emergency stop for new submissions:
+
+```bash
+sudo moex-botctl sandbox-disable
+sudo moex-botctl stop
+```
+
+`sandbox-disable` does not cancel an already active broker order. Reconcile it before restarting.
+Never retry an `unknown` order blindly. Review `sandbox-execution-*.json`, the broker account and
+the service journal first.
+
+## Production status
+
+Production order execution is intentionally unavailable. Do not work around the interlock by
+changing the mode string, endpoint or adapter wiring.
+
 # Секреты и адреса сервисов
 
 Секреты хранятся только в локальном `.env`; безопасный перечень имён находится в

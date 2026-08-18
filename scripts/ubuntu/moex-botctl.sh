@@ -20,10 +20,13 @@ Usage:
   sudo moex-botctl prelaunch
   sudo moex-botctl start
   sudo moex-botctl stop
+  sudo moex-botctl sandbox-enable --confirm-sandbox
+  sudo moex-botctl sandbox-disable
   sudo moex-botctl diagnose [--once|--watch] [--interval SECONDS]
   sudo moex-botctl status
   sudo moex-botctl portfolio
   sudo moex-botctl decisions [SHADOW_JSON]
+  sudo moex-botctl backtest
   sudo moex-botctl contour sandbox|prod
 EOF
 }
@@ -216,7 +219,12 @@ start_bot() {
     printf '\033[1;31mPARTIAL/FAILED\033[0m: ошибок при запуске: %s.\n' "${FAILURES}"
     return 2
   fi
-  printf '\033[1;32mSTARTED\033[0m: shadow, daily-report и health timers активны; live orders отключены.\n'
+  local sandbox_state="DISABLED"
+  sandbox_state="$("${PYTHON_BIN}" -c \
+    'import sys; from pathlib import Path; from moex_bot.runtime_config import load_runtime_config; print("ENABLED" if load_runtime_config(Path(sys.argv[1])).sandbox_orders_enabled else "DISABLED")' \
+    "${RUNTIME_FILE}")"
+  printf '\033[1;32mSTARTED\033[0m: timers активны; production orders DISABLED; sandbox orders %s.\n' \
+    "${sandbox_state}"
 }
 
 timers_are_stopped() {
@@ -374,6 +382,48 @@ set_contour() {
   printf 'Contour saved. Run sudo moex-botctl prelaunch, then start.\n'
 }
 
+set_sandbox_execution() {
+  local enabled="$1"
+  local confirmation="${2:-}"
+  if [[ "${enabled}" == "true" && "${confirmation}" != "--confirm-sandbox" ]]; then
+    printf 'FAIL: enabling orders requires --confirm-sandbox.\n' >&2
+    return 2
+  fi
+  if [[ "${enabled}" == "true" ]]; then
+    load_secrets || { printf 'FAIL: cannot load %s\n' "${ENV_FILE}" >&2; return 2; }
+    as_service "${PYTHON_BIN}" -m moex_bot.cli integration-preflight \
+      --services "${SERVICES_FILE}" --runtime "${RUNTIME_FILE}" \
+      --require tinvest_sandbox || return 2
+  fi
+  local flag="--no-enabled"
+  if [[ "${enabled}" == "true" ]]; then flag="--enabled"; fi
+  "${PYTHON_BIN}" -m moex_bot.cli sandbox-orders-set \
+    "${flag}" \
+    --runtime "${RUNTIME_FILE}"
+  chown root:"${SERVICE_USER}" "${RUNTIME_FILE}"
+  chmod 0644 "${RUNTIME_FILE}"
+  if [[ "${enabled}" == "true" ]]; then
+    printf 'SANDBOX ENABLED: next successful cycle may submit virtual-account orders.\n'
+  else
+    printf 'SANDBOX DISABLED: future cycles remain shadow-only.\n'
+  fi
+}
+
+historical_backtest() {
+  load_secrets || {
+    printf 'FAIL: cannot load %s\n' "${ENV_FILE}" >&2
+    return 2
+  }
+  heading "Историческая проверка Strategy v2"
+  as_service "${PYTHON_BIN}" -m moex_bot.cli historical-backtest \
+    --strategy-config "${APP_DIR}/config/shadow.json" \
+    --backtest-config "${APP_DIR}/config/backtest.json" \
+    --promotion-gates "${APP_DIR}/config/promotion_gates.json" \
+    --universe "${APP_DIR}/config/universe.json" \
+    --output-dir "${STATE_DIR}/artifacts/historical-backtest" "$@"
+  printf 'Готово: %s\n' "${STATE_DIR}/artifacts/historical-backtest/REPORT.md"
+}
+
 require_root
 command="${1:-}"
 if [[ $# -gt 0 ]]; then shift; fi
@@ -385,7 +435,10 @@ case "${command}" in
   status) status_bot ;;
   portfolio) show_portfolio ;;
   decisions) show_decisions "$@" ;;
+  backtest) historical_backtest "$@" ;;
   contour) set_contour "$@" ;;
+  sandbox-enable) set_sandbox_execution true "$@" ;;
+  sandbox-disable) set_sandbox_execution false "$@" ;;
   -h|--help|help) usage ;;
   *) usage >&2; exit 2 ;;
 esac

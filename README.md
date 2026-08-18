@@ -1,8 +1,7 @@
 ﻿# MOEX + ALGOPACK + T-Invest bot harness
 
-Safety-first Python 3.12 scaffold for research, deterministic replay and shadow operation with
-read-only T-Invest portfolio synchronization. It implements the control plane described in
-`docs/plan` and deliberately does **not** implement live order submission.
+Safety-first Python 3.12 harness for research, deterministic replay, shadow operation and
+explicitly gated execution on a T-Invest sandbox account. Production order submission is absent.
 
 Полная инструкция оператора на русском: [`docs/USER_GUIDE_RU.md`](docs/USER_GUIDE_RU.md).
 Установка на Ubuntu Server 24.04 LTS: [`docs/UBUNTU_24_SERVER_RU.md`](docs/UBUNTU_24_SERVER_RU.md).
@@ -10,6 +9,8 @@ read-only T-Invest portfolio synchronization. It implements the control plane de
 Алгоритм и чтение BUY/SELL: [`docs/ALGORITHM_RU.md`](docs/ALGORITHM_RU.md).
 Целевая long/short модель, derivatives и weekly review:
 [`docs/MULTI_ASSET_STRATEGY_RU.md`](docs/MULTI_ASSET_STRATEGY_RU.md).
+Sandbox execution, дневной P&L и недельный review:
+[`docs/REPORTS_AND_SANDBOX_RU.md`](docs/REPORTS_AND_SANDBOX_RU.md).
 
 После серверной установки операционные команды сведены к одному интерфейсу:
 
@@ -21,6 +22,8 @@ sudo moex-botctl diagnose
 sudo moex-botctl diagnose --watch
 sudo moex-botctl portfolio
 sudo moex-botctl decisions
+sudo moex-botctl sandbox-enable --confirm-sandbox
+sudo moex-botctl sandbox-disable
 ```
 
 Проверка Ubuntu deployment без изменения системы:
@@ -46,7 +49,8 @@ bash scripts/ubuntu/test-deployment.sh
 - cash-reserve, position-weight and gross-exposure diversification gates;
 - 13 independently cross-checked TQBR shares with sector and correlated-risk limits;
 - verified Russian Trusted CA bundle installed by Ubuntu install/update scripts;
-- T-Invest sandbox-only REST adapter with timeout-to-UNKNOWN semantics;
+- T-Invest sandbox-only REST execution adapter with timeout-to-UNKNOWN semantics;
+- broker-operation recovery of daily turnover, per-security daily P&L and Friday weekly review;
 - unit and integration-style replay tests;
 - CI workflow.
 - durable SQLite notification outbox with idempotent one-way Telegram delivery;
@@ -55,9 +59,11 @@ bash scripts/ubuntu/test-deployment.sh
 
 ## Safety boundary
 
-`ExecutionMode.LIVE` is denied by configuration validation and by the executor. No T-Invest mutation API is called. Adding real execution requires a separately reviewed adapter, sandbox verification, shadow evidence, a recovery drill and an explicit code/config change.
-Production credentials may be configured for read-only shadow synchronization, but they do not
-enable order submission.
+`ExecutionMode.LIVE` remains denied by configuration validation and the executor. The only
+mutation path is hard-wired to the official T-Invest sandbox REST host, uses limit orders,
+verified instrument UID and idempotency UUID, and requires both `t_invest_environment=sandbox`
+and the explicit operator switch. Production credentials may be configured for read-only shadow
+synchronization, but cannot enable order submission.
 
 ## Quick start
 
@@ -195,11 +201,15 @@ src/moex_bot/risk.py         independent pre-trade controls
 src/moex_bot/execution.py    plans, idempotency, state machine
 src/moex_bot/harness.py      deterministic orchestration
 src/moex_bot/adapters.py     ports plus replay/no-live adapters
-src/moex_bot/integrations/   read-only MOEX and sandbox-only T-Invest adapters
+src/moex_bot/integrations/   read-only MOEX plus T-Invest account/sandbox execution adapters
 src/moex_bot/scheduler.py    Moscow-time hourly boundary calculation
 src/moex_bot/shadow.py       one-shot hourly market/risk/audit pipeline
 src/moex_bot/notifications.py durable SQLite outbox and Telegram sender
 src/moex_bot/reporting.py    shadow and ALGOPACK report formatters
+src/moex_bot/performance.py  daily/weekly broker-equity and per-security P&L
+src/moex_bot/sandbox_execution.py explicit sandbox-only submission gate
+src/moex_bot/backtest.py     next-session, lot- and cost-aware historical simulator
+src/moex_bot/backtest_reporting.py promotion gates and reproducible report/chart bundle
 src/moex_bot/ownership.py    dated ownership disclosure registry
 src/moex_bot/cli.py          replay and preflight CLI
 tests/                       control and regression tests
@@ -210,10 +220,30 @@ docs/practices.md            global control-practice mapping
 ## Next integrations
 
 1. Expand the verified instrument/futures mapping beyond SBER/SBERF.
-2. Add the current official T-Invest SDK as a read-only/sandbox dependency after pinning its contract version.
+2. Add per-order active/partial-fill reconciliation and restart recovery.
 3. Promote SQLite outbox to PostgreSQL before multi-process deployment.
 4. Add historical point-in-time datasets and event replay.
-5. Run sandbox mechanics tests, then 4–8 weeks of shadow mode.
+5. Accumulate 4–8 weeks of shadow/sandbox OOS reports before changing the baseline.
+
+## Historical proof before production
+
+Strategy v2 uses completed daily candles, a blended 5/10/20-session momentum signal, a
+60-session trend filter, inverse-volatility allocation and one scheduled rebalance hour. Run the
+same signal/risk path on real MOEX candles with next-session execution and modeled commission,
+spread and slippage:
+
+```powershell
+python -m moex_bot.cli historical-backtest `
+  --strategy-config config/shadow.json `
+  --backtest-config config/backtest.json `
+  --promotion-gates config/promotion_gates.json `
+  --universe config/universe.json `
+  --output-dir artifacts/historical-backtest
+```
+
+The bundle contains `market-data.json`, machine-readable results, trade/equity data, an HTML
+chart and a production promotion assessment. A failed gate is intentional: it keeps production
+closed. Do not tune parameters against the reported OOS interval and then call that interval OOS.
 
 Material is for research and is not individualized investment advice.
 

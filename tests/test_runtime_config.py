@@ -8,6 +8,7 @@ from moex_bot.runtime_config import (
     materialize_runtime_defaults,
     render_systemd_timer_overrides,
     set_runtime_environment,
+    set_sandbox_orders_enabled,
 )
 from moex_bot.service_config import TInvestEnvironment
 
@@ -67,6 +68,21 @@ def test_environment_switch_preserves_schedule(tmp_path: Path) -> None:
     raw = json.loads(runtime.read_text(encoding="utf-8"))
     assert raw["t_invest_environment"] == "prod"
     assert raw["schedule"]["health_interval"] == "30min"
+    assert raw["sandbox_orders_enabled"] is False
+
+
+def test_sandbox_execution_switch_cannot_be_enabled_in_prod(tmp_path: Path) -> None:
+    runtime = tmp_path / "runtime.json"
+    _write(runtime, {"t_invest_environment": "prod"})
+    with pytest.raises(ValueError, match="require t_invest_environment=sandbox"):
+        set_sandbox_orders_enabled(runtime, True)
+
+
+def test_sandbox_execution_switch_is_persisted(tmp_path: Path) -> None:
+    runtime = tmp_path / "runtime.json"
+    _write(runtime, {"t_invest_environment": "sandbox"})
+    set_sandbox_orders_enabled(runtime, True)
+    assert load_runtime_config(runtime).sandbox_orders_enabled
 
 
 def test_runtime_migration_completes_minimal_file_without_replacing_values(

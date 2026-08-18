@@ -1,7 +1,7 @@
 {
   "mode": "shadow",
   "base_currency": "RUB",
-  "max_data_age_seconds": 3900,
+  "max_data_age_seconds": 345600,
   "max_position_weight": "0.15",
   "max_order_notional": "10000",
   "max_gross_exposure": "0.80",
@@ -15,7 +15,15 @@
   "live_interlock": false,
   "strategy": {
     "top_n": 5,
-    "min_momentum": "0",
-    "require_above_trend": true
+    "min_momentum": "0.01",
+    "require_above_trend": true,
+    "candle_period": "1D",
+    "momentum_windows": [5, 10, 20],
+    "trend_window": 60,
+    "volatility_window": 20,
+    "volatility_floor": "0.005",
+    "inverse_volatility_weights": true,
+    "exit_rank_buffer": 2,
+    "rebalance_hours_moscow": [10]
   }
 }

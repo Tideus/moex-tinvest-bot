@@ -16,6 +16,7 @@ geo_path="${STATE_DIR}/artifacts/geo-${stamp}.json"
 shadow_path="${STATE_DIR}/artifacts/shadow-${stamp}.json"
 portfolio_path="${STATE_DIR}/artifacts/portfolio-${stamp}.json"
 flow_path="${STATE_DIR}/artifacts/flow-${stamp}.json"
+execution_path="${STATE_DIR}/artifacts/sandbox-execution-${stamp}.json"
 outbox_path="${STATE_DIR}/data/notifications.sqlite3"
 
 exec 3>&1 4>&2
@@ -55,6 +56,19 @@ shadow_status=0
   --geo "${geo_path}" \
   --output "${shadow_path}" \
   --outbox "${outbox_path}" || shadow_status=$?
+
+execution_status=0
+if [[ "${shadow_status}" -eq 0 ]]; then
+  "${PYTHON_BIN}" -m moex_bot.cli sandbox-execute \
+    --shadow "${shadow_path}" \
+    --portfolio "${portfolio_path}" \
+    --runtime "/etc/moex-tinvest-bot/runtime.json" \
+    --output "${execution_path}" \
+    --outbox "${outbox_path}" || execution_status=$?
+  if [[ "${execution_status}" -ne 0 && "${execution_status}" -ne 3 ]]; then
+    shadow_status="${execution_status}"
+  fi
+fi
 
 # Entitlement or network failures are visible in the log but do not replace shadow_status.
 "${PYTHON_BIN}" -m moex_bot.cli algopack-flow \

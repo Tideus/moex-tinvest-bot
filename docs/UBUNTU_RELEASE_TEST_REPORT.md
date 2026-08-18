@@ -4,18 +4,24 @@
 
 ## Итог
 
-`PASS_WITH_ENVIRONMENT_LIMIT`: deployment-пакет готов для установки и постоянного
-`replay/shadow` на чистом Ubuntu Server 24.04 LTS. Live execution намеренно отсутствует.
+`PASS_WITH_ENVIRONMENT_LIMIT`: deployment-пакет готов для постоянного `replay/shadow`,
+дневной/недельной отчётности и явно разрешаемых Sandbox-заявок на Ubuntu Server 24.04 LTS.
+Production execution намеренно отсутствует.
 
 ## Пройденные проверки
 
 - Ruff: PASS.
-- mypy strict: PASS, 24 source files.
-- pytest: 62 PASS.
-- Coverage: 77.12%, gate 75%.
-- Все 10 project JSON-конфигов: PASS.
+- mypy strict: PASS, 30 source files.
+- pytest: 110 PASS.
+- Coverage: 76.43%, gate 75%.
+- Все 12 project/example JSON-конфигов: PASS.
+- Реальный historical MOEX backtest: PASS технически; production gate закономерно BLOCKED.
+- Сохранение исходных OHLCV, сделок, equity CSV/HTML и promotion assessment: PASS.
 - Shadow config preflight: PASS.
-- T-Invest endpoint/environment resolver: PASS, `sandbox`, live disabled.
+- T-Invest endpoint/environment resolver: PASS, `sandbox`; production orders disabled.
+- Sandbox execution interlock, UUID, order cap, stale/account/open-order gates: PASS.
+- OperationsByCursor parser, daily turnover и P&L aggregation: PASS.
+- Daily/Friday report runner and structured JSON companion: PASS.
 - Russian Trusted CA assets: PASS, five PEM files verified by committed SHA-256 manifest.
 - Ubuntu CA staging: PASS, install/update scripts route certificates to the system trust store.
 - Live TLS contract: PASS, bundled RSA root validates `sandbox-invest-public-api.tbank.ru`.
@@ -59,7 +65,9 @@ shadow cycle не прошёл.
 
 ## Не проверялось без внешних секретов
 
-- реальный ALGOPACK entitlement и ответы с конкретного аккаунта;
+- реальный ALGOPACK entitlement и закрытые датасеты конкретного аккаунта (публичные дневные
+  свечи MOEX для backtest проверены);
 - реальная доставка Telegram;
-- T-Invest sandbox mutations;
-- production/live orders — отсутствуют и запрещены.
+- реальный ответ Sandbox PostOrder/OperationsByCursor конкретного аккаунта;
+- реалистичность fill/slippage Sandbox (песочница её не обеспечивает);
+- production orders — отсутствуют и запрещены.

@@ -4,6 +4,7 @@ import json
 import os
 from collections.abc import Mapping
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from decimal import ROUND_DOWN, Decimal
 from typing import Any, Protocol
 from urllib.error import HTTPError, URLError
@@ -11,6 +12,7 @@ from urllib.request import Request, urlopen
 from uuid import UUID
 
 from ..domain import ExecutionMode, Instrument, OrderIntent, OrderRecord, OrderStatus, Side
+from ..performance import TradeOperation
 from ..service_config import SANDBOX_REST
 
 SANDBOX_BASE_URL = SANDBOX_REST
@@ -22,10 +24,14 @@ GET_SANDBOX_WITHDRAW_LIMITS_PATH = f"{SANDBOX_SERVICE_PATH}/GetSandboxWithdrawLi
 GET_SANDBOX_PORTFOLIO_PATH = f"{SANDBOX_SERVICE_PATH}/GetSandboxPortfolio"
 GET_SANDBOX_POSITIONS_PATH = f"{SANDBOX_SERVICE_PATH}/GetSandboxPositions"
 GET_SANDBOX_ORDERS_PATH = f"{SANDBOX_SERVICE_PATH}/GetSandboxOrders"
+GET_SANDBOX_OPERATIONS_BY_CURSOR_PATH = (
+    f"{SANDBOX_SERVICE_PATH}/GetSandboxOperationsByCursor"
+)
 OPERATIONS_SERVICE_PATH = "/tinkoff.public.invest.api.contract.v1.OperationsService"
 ORDERS_SERVICE_PATH = "/tinkoff.public.invest.api.contract.v1.OrdersService"
 GET_PORTFOLIO_PATH = f"{OPERATIONS_SERVICE_PATH}/GetPortfolio"
 GET_POSITIONS_PATH = f"{OPERATIONS_SERVICE_PATH}/GetPositions"
+GET_OPERATIONS_BY_CURSOR_PATH = f"{OPERATIONS_SERVICE_PATH}/GetOperationsByCursor"
 GET_ORDERS_PATH = f"{ORDERS_SERVICE_PATH}/GetOrders"
 SANDBOX_PAY_IN_PATH = f"{SANDBOX_SERVICE_PATH}/SandboxPayIn"
 MAX_SANDBOX_PAY_IN_RUB = Decimal("30000000")
@@ -106,7 +112,7 @@ class SandboxBrokerSnapshot:
     open_orders: int
     source: str = "t_invest_sandbox"
 
-    def as_portfolio_payload(self) -> dict[str, object]:
+    def as_portfolio_payload(self, *, daily_turnover: Decimal = Decimal("0")) -> dict[str, object]:
         return {
             "source": self.source,
             "account_id": self.account_id,
@@ -120,7 +126,7 @@ class SandboxBrokerSnapshot:
                 }
                 for secid, lots in sorted(self.positions_lots.items())
             },
-            "daily_turnover": "0",
+            "daily_turnover": str(daily_turnover),
             "open_orders": self.open_orders,
         }
 
@@ -268,6 +274,54 @@ class TInvestSandboxAccountService:
             raise ValueError("SandboxPayIn returned a non-RUB balance")
         return money_value_to_decimal(balance)
 
+    def operations(
+        self,
+        account_id: str,
+        instruments_by_uid: Mapping[str, Instrument],
+        *,
+        from_time: datetime,
+        to_time: datetime,
+        base_url: str = SANDBOX_BASE_URL,
+        operations_path: str = GET_SANDBOX_OPERATIONS_BY_CURSOR_PATH,
+    ) -> tuple[TradeOperation, ...]:
+        """Read executed broker operations, following the official cursor contract."""
+        if from_time.tzinfo is None or to_time.tzinfo is None or from_time >= to_time:
+            raise ValueError("operation range must be ordered and timezone-aware")
+        cursor = ""
+        result: list[TradeOperation] = []
+        seen: set[str] = set()
+        for _page in range(100):
+            payload: dict[str, object] = {
+                "accountId": account_id.strip(),
+                "from": from_time.astimezone(UTC).isoformat().replace("+00:00", "Z"),
+                "to": to_time.astimezone(UTC).isoformat().replace("+00:00", "Z"),
+                "state": "OPERATION_STATE_EXECUTED",
+                "limit": 1000,
+                "withoutCommissions": False,
+                "withoutTrades": False,
+                "withoutOvernights": False,
+            }
+            if cursor:
+                payload["cursor"] = cursor
+            response = self._post(operations_path, payload, base_url=base_url)
+            raw_items = response.get("items", [])
+            if not isinstance(raw_items, list):
+                raise ValueError("unexpected operations response")
+            for raw in raw_items:
+                operation = _trade_operation(raw, instruments_by_uid)
+                if operation is not None and operation.operation_id not in seen:
+                    seen.add(operation.operation_id)
+                    result.append(operation)
+            if response.get("hasNext") is not True:
+                break
+            next_cursor = str(response.get("nextCursor", "")).strip()
+            if not next_cursor or next_cursor == cursor:
+                raise ValueError("operations cursor did not advance")
+            cursor = next_cursor
+        else:
+            raise ValueError("operations pagination exceeded 100 pages")
+        return tuple(sorted(result, key=lambda item: (item.occurred_at, item.operation_id)))
+
     def broker_snapshot(
         self,
         account_id: str,
@@ -348,6 +402,70 @@ class TInvestSandboxAccountService:
         )
 
 
+def _trade_operation(
+    raw: object, instruments_by_uid: Mapping[str, Instrument]
+) -> TradeOperation | None:
+    if not isinstance(raw, Mapping):
+        raise ValueError("unexpected operation record")
+    operation_id = str(raw.get("id", "")).strip()
+    date_raw = str(raw.get("date", "")).strip()
+    if not operation_id or not date_raw:
+        raise ValueError("operation has no id or date")
+    occurred_at = datetime.fromisoformat(date_raw.replace("Z", "+00:00"))
+    operation_type = str(raw.get("type", ""))
+    payment_raw = raw.get("payment", {})
+    payment = (
+        money_value_to_decimal(payment_raw) if isinstance(payment_raw, Mapping) else Decimal("0")
+    )
+    external_cashflow = Decimal("0")
+    if operation_type.startswith("OPERATION_TYPE_INPUT"):
+        external_cashflow = abs(payment)
+    elif operation_type.startswith("OPERATION_TYPE_OUTPUT"):
+        external_cashflow = -abs(payment)
+
+    side = None
+    if operation_type in {"OPERATION_TYPE_BUY", "OPERATION_TYPE_BUY_CARD"}:
+        side = "BUY"
+    elif operation_type == "OPERATION_TYPE_SELL":
+        side = "SELL"
+
+    uid = str(raw.get("instrumentUid", "")).strip()
+    instrument = instruments_by_uid.get(uid)
+    if side is not None and instrument is None:
+        raise ValueError(f"executed operation outside verified universe: {uid}")
+    trades_info = raw.get("tradesInfo", {})
+    trades = trades_info.get("trades", []) if isinstance(trades_info, Mapping) else []
+    if not isinstance(trades, list):
+        raise ValueError("invalid operation trades")
+    quantity = 0
+    gross = Decimal("0")
+    for trade in trades:
+        if not isinstance(trade, Mapping):
+            raise ValueError("invalid operation trade")
+        trade_quantity = int(trade.get("quantity", 0))
+        price_raw = trade.get("price", {})
+        if not isinstance(price_raw, Mapping) or trade_quantity < 0:
+            raise ValueError("invalid operation trade price or quantity")
+        quantity += trade_quantity
+        gross += money_value_to_decimal(price_raw) * trade_quantity
+    commission_raw = raw.get("commission", {})
+    commission = (
+        abs(money_value_to_decimal(commission_raw))
+        if isinstance(commission_raw, Mapping)
+        else Decimal("0")
+    )
+    return TradeOperation(
+        operation_id=operation_id,
+        occurred_at=occurred_at,
+        secid=None if instrument is None else instrument.secid,
+        side=side,
+        quantity=quantity,
+        gross=abs(gross),
+        commission=commission,
+        external_cashflow=external_cashflow,
+    )
+
+
 def _status(value: object) -> OrderStatus:
     statuses = {
         "EXECUTION_REPORT_STATUS_NEW": OrderStatus.ACCEPTED,
@@ -417,7 +535,11 @@ class TInvestSandboxExecutionAdapter:
             # Unknown delivery state: reconciliation must decide; never retry blindly.
             return OrderRecord(intent=intent, status=OrderStatus.UNKNOWN)
         status = _status(response.get("executionReportStatus"))
-        filled = intent.lots if status is OrderStatus.FILLED else 0
+        filled = int(response.get("lotsExecuted", 0))
+        if status is OrderStatus.FILLED and filled == 0:
+            filled = intent.lots
+        if not 0 <= filled <= intent.lots:
+            raise ValueError("sandbox response has invalid lotsExecuted")
         return OrderRecord(
             intent=intent,
             status=status,

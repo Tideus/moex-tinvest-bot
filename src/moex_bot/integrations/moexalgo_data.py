@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import os
 from collections.abc import Callable, Mapping, Sequence
-from datetime import datetime, timedelta
+from dataclasses import dataclass
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 from importlib import import_module
 from typing import Any, Protocol, cast
@@ -29,6 +30,24 @@ class TickerClient(Protocol):
 
 TickerFactory = Callable[[str, str], TickerClient]
 MetadataFactory = Callable[[str, str], Mapping[str, Any]]
+
+
+@dataclass(frozen=True, slots=True)
+class HistoricalCandle:
+    trading_date: date
+    open: Decimal
+    high: Decimal
+    low: Decimal
+    close: Decimal
+    volume: Decimal
+
+    def __post_init__(self) -> None:
+        if min(self.open, self.high, self.low, self.close) <= 0:
+            raise ValueError("historical OHLC prices must be positive")
+        if self.low > min(self.open, self.close) or self.high < max(self.open, self.close):
+            raise ValueError("historical candle has inconsistent OHLC")
+        if self.volume < 0:
+            raise ValueError("historical volume cannot be negative")
 
 
 def _field(row: Mapping[str, Any], *names: str) -> Any:
@@ -120,10 +139,20 @@ class MoexAlgoReadOnlyAdapter:
         trend_window: int = 20,
         momentum_window: int = 5,
         lookback_days: int = 30,
+        period: str = "1h",
+        momentum_windows: tuple[int, ...] | None = None,
+        volatility_window: int | None = None,
     ) -> MarketObservation:
         if as_of.tzinfo is None:
             raise ValueError("as_of must be timezone-aware")
-        if trend_window < 2 or momentum_window < 1:
+        selected_momentum_windows = momentum_windows or (momentum_window,)
+        selected_volatility_window = volatility_window or trend_window
+        if (
+            trend_window < 2
+            or not selected_momentum_windows
+            or any(item < 1 for item in selected_momentum_windows)
+            or selected_volatility_window < 2
+        ):
             raise ValueError("invalid signal windows")
         ticker = self._ticker_factory(secid, board)
         info = self._metadata_factory(secid, board)
@@ -137,14 +166,18 @@ class MoexAlgoReadOnlyAdapter:
         local_as_of = as_of.astimezone(MOSCOW)
         start = (local_as_of - timedelta(days=lookback_days)).date().isoformat()
         end = local_as_of.date().isoformat()
-        candle_rows = ticker.candles(start=start, end=end, period="1h").to_dict(orient="records")
+        candle_rows = ticker.candles(start=start, end=end, period=period).to_dict(orient="records")
         completed: list[tuple[datetime, Decimal]] = []
         for row in candle_rows:
             candle_end = _timestamp(_field(row, "end"))
             if candle_end <= as_of.astimezone(candle_end.tzinfo):
                 completed.append((candle_end, Decimal(str(_field(row, "close")))))
         completed.sort(key=lambda item: item[0])
-        minimum = max(trend_window, momentum_window + 1)
+        minimum = max(
+            trend_window,
+            max(selected_momentum_windows) + 1,
+            selected_volatility_window + 1,
+        )
         if len(completed) < minimum:
             raise ValueError(
                 f"insufficient completed candles for {secid}: {len(completed)} < {minimum}"
@@ -152,15 +185,53 @@ class MoexAlgoReadOnlyAdapter:
         closes = [item[1] for item in completed]
         price = closes[-1]
         trend = sum(closes[-trend_window:], start=Decimal("0")) / Decimal(trend_window)
-        momentum = price / closes[-(momentum_window + 1)] - Decimal("1")
-        volatility_window = closes[-min(len(closes), trend_window + 1) :]
+        momentum = sum(
+            (
+                price / closes[-(window + 1)] - Decimal("1")
+                for window in selected_momentum_windows
+            ),
+            Decimal("0"),
+        ) / Decimal(len(selected_momentum_windows))
+        volatility_closes = closes[-(selected_volatility_window + 1) :]
         return MarketObservation(
             instrument=instrument,
             price=price,
             trend=trend,
             momentum=momentum,
-            volatility=_volatility(volatility_window),
+            volatility=_volatility(volatility_closes),
             observed_at=completed[-1][0],
             complete=True,
             tradable=True,
         )
+
+    def historical_daily_candles(
+        self,
+        *,
+        secid: str,
+        board: str,
+        start: date,
+        end: date,
+    ) -> tuple[HistoricalCandle, ...]:
+        if start > end:
+            raise ValueError("historical start must not be after end")
+        ticker = self._ticker_factory(secid, board)
+        by_date: dict[date, HistoricalCandle] = {}
+        chunk_start = start
+        while chunk_start <= end:
+            chunk_end = min(end, chunk_start + timedelta(days=364))
+            rows = ticker.candles(
+                start=chunk_start.isoformat(), end=chunk_end.isoformat(), period="1D"
+            ).to_dict(orient="records")
+            for row in rows:
+                begin = _timestamp(_field(row, "begin", "end")).astimezone(MOSCOW).date()
+                candle = HistoricalCandle(
+                    trading_date=begin,
+                    open=Decimal(str(_field(row, "open"))),
+                    high=Decimal(str(_field(row, "high"))),
+                    low=Decimal(str(_field(row, "low"))),
+                    close=Decimal(str(_field(row, "close"))),
+                    volume=Decimal(str(_field(row, "volume"))),
+                )
+                by_date[begin] = candle
+            chunk_start = chunk_end + timedelta(days=1)
+        return tuple(by_date[item] for item in sorted(by_date))

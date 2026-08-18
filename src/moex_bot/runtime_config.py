@@ -29,6 +29,8 @@ class RuntimeSchedule:
 class RuntimeConfig:
     environment: TInvestEnvironment
     schedule: RuntimeSchedule
+    sandbox_orders_enabled: bool = False
+    sandbox_max_orders_per_cycle: int = 3
 
 
 def load_runtime_config(path: Path) -> RuntimeConfig:
@@ -59,7 +61,22 @@ def load_runtime_config(path: Path) -> RuntimeConfig:
         ),
     )
     _validate_schedule(schedule)
-    return RuntimeConfig(environment=environment, schedule=schedule)
+    sandbox_orders_enabled = raw.get("sandbox_orders_enabled", False)
+    if not isinstance(sandbox_orders_enabled, bool):
+        raise ValueError("sandbox_orders_enabled must be a boolean")
+    sandbox_max_orders = _integer(
+        raw.get("sandbox_max_orders_per_cycle", 3), "sandbox_max_orders_per_cycle"
+    )
+    if not 1 <= sandbox_max_orders <= 10:
+        raise ValueError("sandbox_max_orders_per_cycle must be between 1 and 10")
+    if sandbox_orders_enabled and environment is not TInvestEnvironment.SANDBOX:
+        raise ValueError("sandbox orders require t_invest_environment=sandbox")
+    return RuntimeConfig(
+        environment=environment,
+        schedule=schedule,
+        sandbox_orders_enabled=sandbox_orders_enabled,
+        sandbox_max_orders_per_cycle=sandbox_max_orders,
+    )
 
 
 def set_runtime_environment(path: Path, environment: TInvestEnvironment) -> None:
@@ -70,11 +87,24 @@ def set_runtime_environment(path: Path, environment: TInvestEnvironment) -> None
             raise ValueError("runtime configuration must be a JSON object")
         raw = loaded
     raw["t_invest_environment"] = environment.value
+    if environment is TInvestEnvironment.PROD:
+        raw["sandbox_orders_enabled"] = False
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_suffix(path.suffix + ".tmp")
     temporary.write_text(json.dumps(raw, indent=2) + "\n", encoding="utf-8")
     temporary.replace(path)
     materialize_runtime_defaults(path)
+
+
+def set_sandbox_orders_enabled(path: Path, enabled: bool) -> None:
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(raw, dict):
+        raise ValueError("runtime configuration must be a JSON object")
+    if enabled and raw.get("t_invest_environment") != "sandbox":
+        raise ValueError("sandbox orders require t_invest_environment=sandbox")
+    raw["sandbox_orders_enabled"] = enabled
+    _atomic_write(path, json.dumps(raw, indent=2) + "\n")
+    load_runtime_config(path)
 
 
 def materialize_runtime_defaults(path: Path) -> bool:
@@ -96,9 +126,16 @@ def materialize_runtime_defaults(path: Path) -> bool:
         "diagnostics_interval_seconds": config.schedule.diagnostics_interval_seconds,
     }
     changed = False
-    for name, value in defaults.items():
+    for name, top_level_value in (
+        ("sandbox_orders_enabled", config.sandbox_orders_enabled),
+        ("sandbox_max_orders_per_cycle", config.sandbox_max_orders_per_cycle),
+    ):
+        if name not in raw:
+            raw[name] = top_level_value
+            changed = True
+    for name, default_value in defaults.items():
         if name not in schedule:
-            schedule[name] = value
+            schedule[name] = default_value
             changed = True
     if changed:
         _atomic_write(path, json.dumps(raw, indent=2) + "\n")

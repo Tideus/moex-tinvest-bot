@@ -1,0 +1,14 @@
+{
+  "start_date": "2024-01-01",
+  "end_date": "2026-08-17",
+  "oos_start_date": "2026-01-01",
+  "initial_cash": "300000",
+  "commission_rate": "0.0005",
+  "half_spread_bps": "5",
+  "slippage_bps": "5",
+  "cost_stress_multiplier": "2",
+  "benchmark_secid": "IMOEX",
+  "benchmark_board": "SNDX",
+  "survivorship_safe": false,
+  "dividends_included": false
+}

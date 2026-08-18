@@ -14,6 +14,14 @@ class StrategyConfig:
     top_n: int
     min_momentum: Decimal
     require_above_trend: bool
+    candle_period: str = "1h"
+    momentum_windows: tuple[int, ...] = (5,)
+    trend_window: int = 20
+    volatility_window: int = 20
+    volatility_floor: Decimal = Decimal("0.005")
+    inverse_volatility_weights: bool = False
+    exit_rank_buffer: int = 0
+    rebalance_hours_moscow: tuple[int, ...] = tuple(range(24))
 
 
 @dataclass(frozen=True, slots=True)
@@ -77,6 +85,31 @@ class BotConfig:
             or self.strategy.min_momentum <= Decimal("-1")
         ):
             errors.append("strategy.min_momentum must be finite and greater than -1")
+        if self.strategy.candle_period not in {"1h", "1D"}:
+            errors.append("strategy.candle_period must be 1h or 1D")
+        if not self.strategy.momentum_windows or any(
+            item <= 0 for item in self.strategy.momentum_windows
+        ):
+            errors.append("strategy.momentum_windows must contain positive integers")
+        if tuple(sorted(set(self.strategy.momentum_windows))) != self.strategy.momentum_windows:
+            errors.append("strategy.momentum_windows must be sorted and unique")
+        if self.strategy.trend_window < 2 or self.strategy.volatility_window < 2:
+            errors.append("strategy trend/volatility windows must be at least 2")
+        if (
+            not self.strategy.volatility_floor.is_finite()
+            or self.strategy.volatility_floor <= 0
+        ):
+            errors.append("strategy.volatility_floor must be positive and finite")
+        if self.strategy.exit_rank_buffer < 0:
+            errors.append("strategy.exit_rank_buffer cannot be negative")
+        if not self.strategy.rebalance_hours_moscow or any(
+            not 0 <= item <= 23 for item in self.strategy.rebalance_hours_moscow
+        ):
+            errors.append("strategy.rebalance_hours_moscow must contain hours in [0, 23]")
+        if len(set(self.strategy.rebalance_hours_moscow)) != len(
+            self.strategy.rebalance_hours_moscow
+        ):
+            errors.append("strategy.rebalance_hours_moscow cannot contain duplicates")
         return tuple(errors)
 
 
@@ -88,6 +121,15 @@ def _boolean(value: Any, label: str) -> bool:
     if not isinstance(value, bool):
         raise ValueError(f"{label} must be a JSON boolean")
     return value
+
+
+def _integer_tuple(value: object, label: str) -> tuple[int, ...]:
+    if not isinstance(value, list) or any(isinstance(item, bool) for item in value):
+        raise ValueError(f"{label} must be a JSON integer array")
+    try:
+        return tuple(int(item) for item in value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{label} must be a JSON integer array") from exc
 
 
 def load_config(path: Path) -> BotConfig:
@@ -110,6 +152,23 @@ def load_config(path: Path) -> BotConfig:
             min_momentum=_decimal(strategy["min_momentum"]),
             require_above_trend=_boolean(
                 strategy["require_above_trend"], "strategy.require_above_trend"
+            ),
+            candle_period=str(strategy.get("candle_period", "1h")),
+            momentum_windows=_integer_tuple(
+                strategy.get("momentum_windows", [5]),
+                "strategy.momentum_windows",
+            ),
+            trend_window=int(strategy.get("trend_window", 20)),
+            volatility_window=int(strategy.get("volatility_window", 20)),
+            volatility_floor=_decimal(strategy.get("volatility_floor", "0.005")),
+            inverse_volatility_weights=_boolean(
+                strategy.get("inverse_volatility_weights", False),
+                "strategy.inverse_volatility_weights",
+            ),
+            exit_rank_buffer=int(strategy.get("exit_rank_buffer", 0)),
+            rebalance_hours_moscow=_integer_tuple(
+                strategy.get("rebalance_hours_moscow", list(range(24))),
+                "strategy.rebalance_hours_moscow",
             ),
         ),
         min_cash_reserve_weight=_decimal(raw.get("min_cash_reserve_weight", "0.10")),

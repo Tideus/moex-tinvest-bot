@@ -5,6 +5,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from .backtest import load_backtest_settings
+from .backtest_reporting import load_promotion_gates
 from .config import load_config
 from .geo_feed import load_sources
 from .ownership import load_ownership_disclosures
@@ -27,6 +29,10 @@ def validate_project_configs(root: Path) -> tuple[str, ...]:
     checks.append("config/runtime.json")
     load_universe(root / "config" / "universe.json")
     checks.append("config/universe.json")
+    load_backtest_settings(root / "config" / "backtest.json")
+    checks.append("config/backtest.json")
+    load_promotion_gates(root / "config" / "promotion_gates.json")
+    checks.append("config/promotion_gates.json")
     load_sources(root / "config" / "geo_sources.json")
     checks.append("config/geo_sources.json")
 

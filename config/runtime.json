@@ -1,5 +1,7 @@
 {
   "t_invest_environment": "sandbox",
+  "sandbox_orders_enabled": false,
+  "sandbox_max_orders_per_cycle": 3,
   "schedule": {
     "timezone": "Europe/Moscow",
     "shadow_on_calendar": "*-*-* *:05:00",

@@ -8,6 +8,7 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Any, Protocol
 from uuid import UUID
+from zoneinfo import ZoneInfo
 
 from .adapters import DryRunExecutionAdapter, JsonlAuditLog
 from .config import BotConfig
@@ -32,6 +33,9 @@ class HourlyMarketDataPort(Protocol):
         trend_window: int = 20,
         momentum_window: int = 5,
         lookback_days: int = 30,
+        period: str = "1h",
+        momentum_windows: tuple[int, ...] | None = None,
+        volatility_window: int | None = None,
     ) -> MarketObservation: ...
 
 
@@ -178,6 +182,11 @@ def run_hourly_shadow(
             uid=entry.t_invest_uid,
             board=entry.board,
             as_of=as_of,
+            trend_window=config.strategy.trend_window,
+            momentum_windows=config.strategy.momentum_windows,
+            volatility_window=config.strategy.volatility_window,
+            lookback_days=max(120, config.strategy.trend_window * 3),
+            period=config.strategy.candle_period,
         )
         if observation.instrument.lot_size != entry.lot_size_verified:
             raise ValueError(f"lot mismatch for {entry.secid}")
@@ -207,6 +216,10 @@ def run_hourly_shadow(
         portfolio=portfolio,
         geo_events=geo_events,
         news_stale=news_stale,
+        allow_rebalance=(
+            as_of.astimezone(ZoneInfo("Europe/Moscow")).hour
+            in config.strategy.rebalance_hours_moscow
+        ),
     )
     persisted = asdict(result)
     persisted["market"] = [asdict(market[secid]) for secid in sorted(market)]
