@@ -32,6 +32,7 @@ class HarnessResult:
     rejected: tuple[dict[str, object], ...]
     portfolio: PortfolioSnapshot | None = None
     rebalance_allowed: bool = True
+    rebalance_hours_moscow: tuple[int, ...] = ()
 
 
 class TradingHarness:
@@ -59,7 +60,15 @@ class TradingHarness:
         if not quality.passed:
             self.audit.write({"type": "quality_block", "run_id": run_id, "errors": quality.errors})
             return HarnessResult(
-                run_id, quality, geo, (), (), (), portfolio, allow_rebalance
+                run_id,
+                quality,
+                geo,
+                (),
+                (),
+                (),
+                portfolio,
+                allow_rebalance,
+                self.config.strategy.rebalance_hours_moscow,
             )
 
         raw_targets = calculate_targets(
@@ -199,4 +208,5 @@ class TradingHarness:
             tuple(rejected),
             portfolio,
             allow_rebalance,
+            self.config.strategy.rebalance_hours_moscow,
         )

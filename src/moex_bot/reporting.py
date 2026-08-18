@@ -137,6 +137,23 @@ def _risk_reason(reason: object) -> str:
     return _RISK_REASON_LABELS.get(raw, raw)
 
 
+def _next_rebalance_window(now: datetime, hours: tuple[int, ...]) -> str | None:
+    if not hours:
+        return None
+    local = now.astimezone(MOSCOW)
+    for day_offset in range(2):
+        candidate_date = (local + timedelta(days=day_offset)).date()
+        for hour in sorted(hours):
+            candidate = datetime.combine(
+                candidate_date,
+                datetime.min.time().replace(hour=hour),
+                tzinfo=MOSCOW,
+            )
+            if candidate > local:
+                return candidate.strftime("%d.%m.%Y · %H:00–%H:59 МСК")
+    return None
+
+
 def render_shadow_report(result: HarnessResult, as_of: datetime) -> str:
     local_time = as_of.astimezone(MOSCOW)
     quality_icon = "✅" if result.quality.passed else "⛔"
@@ -150,7 +167,7 @@ def render_shadow_report(result: HarnessResult, as_of: datetime) -> str:
         f"🌍 Геориск: {geo_label} · размер позиций ×{_number(result.geo.multiplier)}",
         "",
         "📊 ИТОГ",
-        f"Выбрано бумаг: {len(result.targets)}",
+        f"Целевых бумаг после фильтров: {len(result.targets)}",
         f"Прошло риск-контроль: {len(result.orders)}",
         f"Отклонено: {len(result.rejected)}",
     ]
@@ -185,6 +202,15 @@ def render_shadow_report(result: HarnessResult, as_of: datetime) -> str:
                     f"   импульс {_number(momentum * 100, signed=True)}% · "
                     f"цена {_money(price)} · тренд {_money(trend)}"
                 )
+    elif result.quality.passed:
+        lines.extend(
+            (
+                "",
+                "🔎 СИГНАЛ",
+                "Кандидатов нет: после momentum, trend и геориск-фильтров "
+                "целевой список пуст.",
+            )
+        )
     if result.orders:
         lines.extend(("", "🧾 ВИРТУАЛЬНЫЕ СДЕЛКИ"))
         for record in result.orders[:12]:
@@ -197,12 +223,16 @@ def render_shadow_report(result: HarnessResult, as_of: datetime) -> str:
             )
             lines.append(f"   лимит {_money(intent.limit_price)} · сектор: {sector}")
     elif result.quality.passed:
-        message = (
-            "Мониторинг: сейчас не час плановой ребалансировки."
-            if not result.rebalance_allowed
-            else "Нет сделок, прошедших риск-контроль."
-        )
-        lines.extend(("", "🧾 ПЛАН СДЕЛОК", message))
+        if not result.rebalance_allowed:
+            messages = ["Мониторинг: сейчас не час плановой ребалансировки."]
+            next_window = _next_rebalance_window(
+                local_time, result.rebalance_hours_moscow
+            )
+            if next_window is not None:
+                messages.append(f"Следующее разрешённое окно: {next_window}.")
+        else:
+            messages = ["Нет сделок, прошедших риск-контроль."]
+        lines.extend(("", "🧾 ПЛАН СДЕЛОК", *messages))
     if result.rejected:
         lines.extend(("", "⛔ НЕ ПРОШЛИ РИСК-КОНТРОЛЬ"))
         for item in result.rejected[:12]:

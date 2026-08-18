@@ -109,3 +109,22 @@ def test_persisted_shadow_decisions_show_buy_sell_and_rejections() -> None:
     assert "SELL GAZP" in report
     assert "BUY LKOH: order notional exceeds limit" in report
     assert "реальные заявки брокеру не отправлялись" in report
+
+
+def test_monitoring_report_explains_empty_signal_and_next_rebalance() -> None:
+    result = HarnessResult(
+        "shadow-monitor",
+        QualityReport(True, (), ()),
+        GeoRiskSnapshot(GeoRiskLevel.NORMAL, Decimal("1"), frozenset(), ()),
+        (),
+        (),
+        (),
+        rebalance_allowed=False,
+        rebalance_hours_moscow=(10,),
+    )
+
+    report = render_shadow_report(result, datetime(2026, 8, 18, 13, 53, tzinfo=UTC))
+
+    assert "Целевых бумаг после фильтров: 0" in report
+    assert "Кандидатов нет" in report
+    assert "Следующее разрешённое окно: 19.08.2026 · 10:00–10:59 МСК" in report
