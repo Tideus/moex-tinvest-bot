@@ -623,12 +623,25 @@ def outbox_health(*, outbox_path: Path, as_of: datetime, max_pending_due: int) -
     if max_pending_due < 0:
         print("FAIL: max_pending_due must be non-negative")
         return 2
-    health = SQLiteOutbox(outbox_path).health(now=as_of)
+    outbox = SQLiteOutbox(outbox_path)
+    health = outbox.health(now=as_of)
     print(f"outbox pending_due={health['pending_due']} dead={health['dead']}")
     if health["dead"] or health["pending_due"] > max_pending_due:
+        for issue in outbox.issues(now=as_of):
+            reason = issue.last_error or "unknown"
+            print(
+                f"- {issue.status} kind={issue.kind} key={issue.dedupe_key} "
+                f"attempts={issue.attempts} error={reason}"
+            )
         print("FAIL: Telegram outbox is unhealthy")
         return 2
     print("PASS: Telegram outbox is healthy")
+    return 0
+
+
+def outbox_retry_dead(*, outbox_path: Path, as_of: datetime) -> int:
+    count = SQLiteOutbox(outbox_path).requeue_dead(now=as_of)
+    print(f"PASS: requeued dead Telegram messages={count}")
     return 0
 
 
@@ -783,6 +796,11 @@ def build_parser() -> argparse.ArgumentParser:
     outbox_parser.add_argument("--outbox", type=Path, default=Path("data/notifications.sqlite3"))
     outbox_parser.add_argument("--as-of", type=datetime.fromisoformat)
     outbox_parser.add_argument("--max-pending-due", type=int, default=20)
+
+    retry_dead_parser = sub.add_parser("outbox-retry-dead")
+    retry_dead_parser.add_argument(
+        "--outbox", type=Path, default=Path("data/notifications.sqlite3")
+    )
     geo_parser = sub.add_parser("geo-refresh")
     geo_parser.add_argument("--sources", type=Path, default=Path("config/geo_sources.json"))
     geo_parser.add_argument("--output", type=Path, default=Path("artifacts/geo_events.json"))
@@ -891,6 +909,8 @@ def main() -> int:
             as_of=as_of,
             max_pending_due=args.max_pending_due,
         )
+    if args.command == "outbox-retry-dead":
+        return outbox_retry_dead(outbox_path=args.outbox, as_of=datetime.now(UTC))
     if args.command == "hourly-shadow":
         as_of = args.as_of or datetime.now(UTC)
         if as_of.tzinfo is None:

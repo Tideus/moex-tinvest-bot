@@ -46,3 +46,32 @@ def test_outbox_rejects_oversized_telegram_message(tmp_path: Path) -> None:
         assert "4096" in str(exc)
     else:
         raise AssertionError("oversized message should fail")
+
+
+def test_dead_messages_can_be_inspected_and_requeued(tmp_path: Path) -> None:
+    outbox = SQLiteOutbox(tmp_path / "outbox.sqlite3")
+    outbox.enqueue(kind="shadow", dedupe_key="run-dead", body="body", now=NOW)
+    for attempt in range(8):
+        retry_at = NOW + timedelta(hours=attempt)
+        claimed = outbox.claim(now=retry_at)
+        assert len(claimed) == 1
+        outbox.mark_failed(claimed[0], now=retry_at, reason="RuntimeError")
+
+    issues = outbox.issues(now=NOW + timedelta(days=1))
+    assert len(issues) == 1
+    assert issues[0].status == "dead"
+    assert issues[0].dedupe_key == "run-dead"
+    assert issues[0].attempts == 8
+    assert issues[0].last_error == "RuntimeError"
+
+    assert outbox.requeue_dead(now=NOW + timedelta(days=1)) == 1
+    assert outbox.health(now=NOW + timedelta(days=1)) == {
+        "pending_due": 1,
+        "dead": 0,
+    }
+    assert deliver_pending(
+        outbox,
+        RecordingSender(),
+        chat_id="42",
+        now=NOW + timedelta(days=1),
+    ) == (1, 0)

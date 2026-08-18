@@ -306,6 +306,25 @@ sudo /opt/moex-tinvest-bot/scripts/ubuntu/uninstall.sh --purge
 - healthcheck проходит;
 - новый artifact появляется каждый торговый час;
 - Telegram outbox не накапливает `dead` сообщения;
+
+Если health-check показывает `dead`, сначала исправьте доступ к Telegram, затем
+повторно поставьте сохранённые сообщения в очередь и запустите доставку:
+
+```bash
+sudo -u moexbot bash -c '
+set -a
+source /etc/moex-tinvest-bot/bot.env
+set +a
+exec /opt/moex-tinvest-bot/.venv/bin/python -m moex_bot.cli outbox-retry-dead \
+  --outbox /var/lib/moex-tinvest-bot/data/notifications.sqlite3
+'
+
+sudo systemctl start moex-tinvest-shadow.service
+sudo systemctl start moex-tinvest-health.service
+```
+
+`outbox-health` выводит только служебные ключи, число попыток и безопасную
+категорию последней ошибки; текст сообщений и секреты не печатаются.
 - нет stale-data, дисковых, временных и permission-инцидентов;
 - недельная оценка проводится по правилам `USER_GUIDE_RU.md`.
 

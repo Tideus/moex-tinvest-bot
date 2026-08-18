@@ -19,6 +19,15 @@ class Notification:
     attempts: int
 
 
+@dataclass(frozen=True, slots=True)
+class OutboxIssue:
+    kind: str
+    dedupe_key: str
+    status: str
+    attempts: int
+    last_error: str | None
+
+
 class MessageSender(Protocol):
     def send_text(self, chat_id: str, text: str) -> None: ...
 
@@ -148,6 +157,39 @@ class SQLiteOutbox:
             "pending_due": 0 if pending_due is None else int(pending_due[0]),
             "dead": 0 if dead is None else int(dead[0]),
         }
+
+    def issues(self, *, now: datetime, limit: int = 20) -> tuple[OutboxIssue, ...]:
+        _aware(now)
+        if limit <= 0:
+            raise ValueError("limit must be positive")
+        stamp = _stamp(now)
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT kind, dedupe_key, status, attempts, last_error
+                FROM notification_outbox
+                WHERE status='dead'
+                   OR (status='pending' AND available_at <= ?)
+                ORDER BY created_at, notification_id
+                LIMIT ?
+                """,
+                (stamp, limit),
+            ).fetchall()
+        return tuple(OutboxIssue(*row) for row in rows)
+
+    def requeue_dead(self, *, now: datetime) -> int:
+        _aware(now)
+        with self._connect() as conn:
+            cursor = conn.execute(
+                """
+                UPDATE notification_outbox
+                SET status='pending', attempts=0, available_at=?, lease_until=NULL,
+                    last_error=NULL
+                WHERE status='dead'
+                """,
+                (_stamp(now),),
+            )
+        return cursor.rowcount
 
 
 class TelegramBotApiSender:

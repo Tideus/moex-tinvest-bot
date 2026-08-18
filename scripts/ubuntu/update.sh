@@ -36,8 +36,15 @@ trap restart_timers EXIT
 
 "${APP_DIR}/.venv/bin/python" -m moex_bot.cli preflight \
   --config "${APP_DIR}/config/shadow.json"
-systemctl stop moex-tinvest-shadow.timer moex-tinvest-health.timer \
-  moex-tinvest-daily-report.timer
+stop_timer_if_installed() {
+  local unit="$1"
+  if systemctl cat "${unit}" >/dev/null 2>&1; then
+    systemctl stop "${unit}"
+  fi
+}
+stop_timer_if_installed moex-tinvest-shadow.timer
+stop_timer_if_installed moex-tinvest-health.timer
+stop_timer_if_installed moex-tinvest-daily-report.timer
 rsync -a --delete \
   --exclude '.git' --exclude '.venv' --exclude '.env' --exclude 'artifacts/*' \
   --exclude 'logs/*' --exclude 'data' --exclude 'work' \

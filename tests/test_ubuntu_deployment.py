@@ -115,6 +115,18 @@ def test_install_and_update_materialize_full_runtime_config() -> None:
         assert "runtime-normalize" in text
 
 
+def test_update_tolerates_a_new_timer_not_installed_yet() -> None:
+    text = (PROJECT_ROOT / "scripts" / "ubuntu" / "update.sh").read_text(
+        encoding="utf-8"
+    )
+    assert "stop_timer_if_installed" in text
+    assert 'systemctl cat "${unit}"' in text
+    assert (
+        "systemctl stop moex-tinvest-shadow.timer moex-tinvest-health.timer"
+        not in text
+    )
+
+
 def test_control_tool_exposes_safe_operator_workflow() -> None:
     text = (PROJECT_ROOT / "scripts" / "ubuntu" / "moex-botctl.sh").read_text(
         encoding="utf-8"
