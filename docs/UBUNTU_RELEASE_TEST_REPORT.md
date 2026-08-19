@@ -12,14 +12,16 @@ Production execution намеренно отсутствует.
 
 - Ruff: PASS.
 - mypy strict: PASS, 30 source files.
-- pytest: 110 PASS.
-- Coverage: 76.43%, gate 75%.
+- pytest: 119 PASS.
+- Coverage: 76.90%, gate 75%.
 - Все 12 project/example JSON-конфигов: PASS.
 - Реальный historical MOEX backtest: PASS технически; production gate закономерно BLOCKED.
 - Сохранение исходных OHLCV, сделок, equity CSV/HTML и promotion assessment: PASS.
 - Shadow config preflight: PASS.
 - T-Invest endpoint/environment resolver: PASS, `sandbox`; production orders disabled.
 - Sandbox execution interlock, UUID, order cap, stale/account/open-order gates: PASS.
+- Sandbox short: signed targets, close-before-reverse, per-name/gross caps, dynamic T-Invest
+  short flag and explicit margin confirmation: PASS.
 - OperationsByCursor parser, daily turnover и P&L aggregation: PASS.
 - Daily/Friday report runner and structured JSON companion: PASS.
 - Russian Trusted CA assets: PASS, five PEM files verified by committed SHA-256 manifest.

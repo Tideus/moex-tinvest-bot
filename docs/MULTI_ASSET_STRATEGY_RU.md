@@ -3,7 +3,8 @@
 ## 1. Назначение
 
 Целевая система прогнозирует распределение изменения цены российских биржевых инструментов и
-выражает прогноз через акции, фьючерсы и опционы. Текущий long-only shadow — первый контрольный
+выражает прогноз через акции, фьючерсы и опционы. Текущий ограниченный Sandbox long/short —
+второй контрольный
 baseline, а не конечная стратегия.
 
 Система должна поддерживать:
@@ -349,7 +350,7 @@ Counterfactual hedge рассчитывается только по инстру
 
 ### Этап B — акции long/short в sandbox
 
-- long-only BUY/SELL и reconciliation;
+- long/short BUY/SELL/COVER и reconciliation;
 - затем отдельный short policy, borrow/margin limits и confirm-margin gate;
 - sandbox orders остаются выключенными по умолчанию до ручного включения.
 

@@ -6,6 +6,7 @@
   "commission_rate": "0.0005",
   "half_spread_bps": "5",
   "slippage_bps": "5",
+  "short_financing_rate_annual": "0.20",
   "cost_stress_multiplier": "2",
   "benchmark_secid": "IMOEX",
   "benchmark_board": "SNDX",

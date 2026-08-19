@@ -195,3 +195,42 @@ def test_broker_snapshot_with_active_orders_blocks_new_intents() -> None:
     )
     assert not decision.allowed
     assert "active broker orders" in " ".join(decision.reasons)
+
+
+def test_risk_allows_bounded_verified_short_with_margin_confirmation() -> None:
+    instrument = Instrument(
+        "AAA", "uid", "TQBR", 1, Decimal("0.01"), short_enabled=True
+    )
+    intent = OrderIntent(
+        "request",
+        instrument,
+        Side.SELL,
+        5,
+        Decimal("100"),
+        Decimal("500"),
+        "direction=short",
+        confirm_margin_trade=True,
+    )
+    strategy = replace(
+        _config().strategy,
+        shorts_enabled=True,
+        short_top_n=1,
+        short_target_gross=Decimal("0.10"),
+    )
+    config = replace(
+        _config(),
+        allow_margin=True,
+        strategy=strategy,
+        max_short_position_weight=Decimal("0.10"),
+        max_short_gross_exposure=Decimal("0.20"),
+    )
+    decision = evaluate_intent(
+        intent,
+        PortfolioSnapshot(Decimal("10000")),
+        config,
+        GeoRiskSnapshot(GeoRiskLevel.NORMAL, Decimal("1"), frozenset(), ()),
+        equity=Decimal("10000"),
+        gross_exposure=Decimal("0"),
+        short_exposure=Decimal("0"),
+    )
+    assert decision.allowed

@@ -29,6 +29,7 @@ class BacktestSettings:
     benchmark_board: str
     survivorship_safe: bool
     dividends_included: bool
+    short_financing_rate_annual: Decimal = Decimal("0")
 
 
 @dataclass(frozen=True, slots=True)
@@ -67,6 +68,7 @@ class BacktestMetrics:
     annualized_sharpe: Decimal
     turnover: Decimal
     commissions: Decimal
+    short_financing: Decimal
 
 
 @dataclass(frozen=True, slots=True)
@@ -102,6 +104,9 @@ def load_backtest_settings(path: Path) -> BacktestSettings:
         benchmark_board=str(raw.get("benchmark_board", "SNDX")),
         survivorship_safe=_bool(raw.get("survivorship_safe", False), "survivorship_safe"),
         dividends_included=_bool(raw.get("dividends_included", False), "dividends_included"),
+        short_financing_rate_annual=Decimal(
+            str(raw.get("short_financing_rate_annual", "0"))
+        ),
     )
     if not settings.start_date < settings.end_date:
         raise ValueError("backtest start_date must be before end_date")
@@ -117,6 +122,7 @@ def load_backtest_settings(path: Path) -> BacktestSettings:
         ("commission_rate", settings.commission_rate),
         ("half_spread_bps", settings.half_spread_bps),
         ("slippage_bps", settings.slippage_bps),
+        ("short_financing_rate_annual", settings.short_financing_rate_annual),
     ):
         if not value.is_finite() or value < 0:
             raise ValueError(f"{label} must be non-negative and finite")
@@ -145,6 +151,7 @@ def run_backtest(
             sector=item.sector,
             risk_cluster=item.risk_cluster,
             asset_class=item.asset_class,
+            short_enabled=item.short_enabled_verified,
         )
         for item in universe
     }
@@ -172,8 +179,27 @@ def run_backtest(
     benchmark_base: Decimal | None = None
     last_benchmark: Decimal | None = None
     last_closes: dict[str, Decimal] = {}
+    financing_costs: list[tuple[date, Decimal]] = []
+    previous_trading_date: date | None = None
 
     for trading_date in dates:
+        if previous_trading_date is not None:
+            elapsed_days = (trading_date - previous_trading_date).days
+            financing = sum(
+                (
+                    abs(Decimal(lots * instruments[secid].lot_size))
+                    * last_closes[secid]
+                    * settings.short_financing_rate_annual
+                    * cost_multiplier
+                    * Decimal(elapsed_days)
+                    / Decimal("365")
+                    for secid, lots in positions.items()
+                    if lots < 0 and secid in last_closes
+                ),
+                Decimal("0"),
+            )
+            cash -= financing
+            financing_costs.append((trading_date, financing))
         day_rows = {
             secid: rows[trading_date]
             for secid, rows in indexed.items()
@@ -217,7 +243,7 @@ def run_backtest(
         portfolio_positions = {
             secid: Position(instruments[secid], lots)
             for secid, lots in positions.items()
-            if lots > 0
+            if lots != 0
         }
         portfolio = PortfolioSnapshot(cash, portfolio_positions, source="backtest")
         as_of = datetime.combine(trading_date, datetime.min.time(), tzinfo=UTC)
@@ -237,15 +263,23 @@ def run_backtest(
             geo_events=(),
         )
         pending = result.orders
+        previous_trading_date = trading_date
 
     if len(points) < 2:
         raise ValueError("backtest produced fewer than two equity points")
-    metrics = _metrics(tuple(points), tuple(trades), unfilled)
+    metrics = _metrics(
+        tuple(points), tuple(trades), unfilled, tuple(financing_costs)
+    )
     oos_points = tuple(item for item in points if item.trading_date >= settings.oos_start_date)
     if len(oos_points) < 2:
         raise ValueError("backtest produced fewer than two OOS equity points")
     oos_trades = tuple(item for item in trades if item.trading_date >= settings.oos_start_date)
-    oos_metrics = _metrics(oos_points, oos_trades, 0)
+    oos_metrics = _metrics(
+        oos_points,
+        oos_trades,
+        0,
+        tuple(item for item in financing_costs if item[0] >= settings.oos_start_date),
+    )
     security_pnl = _security_pnl(trades, positions, last_closes, instruments)
     return BacktestResult(
         settings=settings,
@@ -356,16 +390,22 @@ def _execute_pending(
         current_lots = next_positions.get(intent.instrument.secid, 0)
         if intent.side is Side.BUY:
             required = gross + commission
-            reserve = settings.initial_cash * config.min_cash_reserve_weight
+            resulting_lots = current_lots + intent.lots
+            reducing_short = current_lots < 0 and abs(resulting_lots) < abs(current_lots)
+            reserve = (
+                Decimal("0")
+                if reducing_short
+                else settings.initial_cash * config.min_cash_reserve_weight
+            )
             if required > max(Decimal("0"), cash - reserve):
                 missed += 1
                 continue
             cash -= required
-            next_positions[intent.instrument.secid] = current_lots + intent.lots
+            if resulting_lots:
+                next_positions[intent.instrument.secid] = resulting_lots
+            else:
+                next_positions.pop(intent.instrument.secid, None)
         else:
-            if intent.lots > current_lots:
-                missed += 1
-                continue
             cash += gross - commission
             remaining = current_lots - intent.lots
             if remaining:
@@ -389,7 +429,10 @@ def _execute_pending(
 
 
 def _metrics(
-    points: Sequence[EquityPoint], trades: Sequence[BacktestTrade], unfilled: int
+    points: Sequence[EquityPoint],
+    trades: Sequence[BacktestTrade],
+    unfilled: int,
+    financing_costs: Sequence[tuple[date, Decimal]],
 ) -> BacktestMetrics:
     start, end = points[0], points[-1]
     strategy_return = (end.strategy_equity / start.strategy_equity - 1) * 100
@@ -418,6 +461,7 @@ def _metrics(
             )
     turnover = sum((item.gross for item in trades), Decimal("0"))
     commissions = sum((item.commission for item in trades), Decimal("0"))
+    short_financing = sum((item[1] for item in financing_costs), Decimal("0"))
     return BacktestMetrics(
         start.trading_date,
         end.trading_date,
@@ -433,6 +477,7 @@ def _metrics(
         sharpe,
         turnover,
         commissions,
+        short_financing,
     )
 
 

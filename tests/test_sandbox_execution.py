@@ -18,7 +18,9 @@ class FakeAdapter:
         return OrderRecord(intent=intent, status=OrderStatus.ACCEPTED)  # type: ignore[arg-type]
 
 
-def _write_inputs(tmp_path: Path, *, open_orders: int = 0) -> tuple[Path, Path]:
+def _write_inputs(
+    tmp_path: Path, *, open_orders: int = 0, short: bool = False
+) -> tuple[Path, Path]:
     shadow = tmp_path / "shadow.json"
     portfolio = tmp_path / "portfolio.json"
     instrument = {
@@ -28,6 +30,7 @@ def _write_inputs(tmp_path: Path, *, open_orders: int = 0) -> tuple[Path, Path]:
         "lot_size": 1,
         "tick_size": "0.01",
         "asset_class": "share",
+        "short_enabled": short,
     }
     shadow.write_text(
         json.dumps(
@@ -40,10 +43,11 @@ def _write_inputs(tmp_path: Path, *, open_orders: int = 0) -> tuple[Path, Path]:
                         "intent": {
                             "order_request_id": str(uuid4()),
                             "instrument": instrument,
-                            "side": "buy",
+                            "side": "sell" if short else "buy",
                             "lots": 1,
                             "limit_price": "300",
                             "notional": "300",
+                            "confirm_margin_trade": short,
                         },
                     }
                 ],
@@ -91,3 +95,18 @@ def test_active_orders_block_new_sandbox_submission(tmp_path: Path) -> None:
             adapter=FakeAdapter(),
             as_of=datetime(2026, 8, 18, 10, 1, tzinfo=UTC),
         )
+
+
+def test_enabled_sandbox_accepts_verified_explicit_short_plan(tmp_path: Path) -> None:
+    shadow, portfolio = _write_inputs(tmp_path, short=True)
+    runtime = RuntimeConfig(TInvestEnvironment.SANDBOX, RuntimeSchedule(), True, 3)
+    result = execute_shadow_plan(
+        shadow_path=shadow,
+        portfolio_path=portfolio,
+        output_path=tmp_path / "short-result.json",
+        runtime=runtime,
+        adapter=FakeAdapter(),
+        as_of=datetime(2026, 8, 18, 10, 1, tzinfo=UTC),
+    )
+    assert result.submitted[0].intent.confirm_margin_trade
+    assert result.submitted[0].intent.side.value == "sell"

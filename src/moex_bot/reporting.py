@@ -42,6 +42,19 @@ _RISK_REASON_LABELS = {
     "sell quantity exceeds unblocked long position; shorting forbidden": (
         "объём продажи превышает свободный остаток позиции"
     ),
+    "sell requires an existing long position; shorting is disabled": (
+        "нет длинной позиции, а short-стратегия выключена"
+    ),
+    "instrument is not verified as short-enabled": (
+        "T-Invest short_enabled для бумаги не подтверждён"
+    ),
+    "short order requires explicit margin confirmation": (
+        "не подтверждён маржинальный характер short-заявки"
+    ),
+    "position reversal must close the current side before opening another": (
+        "сначала нужно закрыть текущую сторону позиции"
+    ),
+    "projected short exposure exceeds limit": "превышен общий лимит short-экспозиции",
     "insufficient spendable cash after mandatory reserve; margin forbidden": (
         "недостаточно свободных денег после обязательного резерва"
     ),
@@ -117,17 +130,22 @@ def _money(value: Decimal) -> str:
     return f"{_number(value, places)} ₽"
 
 
-def _rationale_metrics(rationale: str) -> tuple[Decimal, Decimal, Decimal] | None:
+def _rationale_metrics(
+    rationale: str,
+) -> tuple[str, Decimal, Decimal, Decimal] | None:
     values: dict[str, str] = {}
     for part in rationale.split(";"):
         key, separator, value = part.strip().partition("=")
         if separator:
             values[key] = value
-    price, separator, trend = values.get("price", "").partition(">trend=")
+    raw_price = values.get("price", "")
+    direction = values.get("direction", "long")
+    separator_text = ">trend=" if direction == "long" else "<trend="
+    price, separator, trend = raw_price.partition(separator_text)
     if not separator:
         return None
     try:
-        return Decimal(values["momentum"]), Decimal(price), Decimal(trend)
+        return direction, Decimal(values["momentum"]), Decimal(price), Decimal(trend)
     except (KeyError, ArithmeticError):
         return None
 
@@ -194,13 +212,18 @@ def render_shadow_report(result: HarnessResult, as_of: datetime) -> str:
     if result.targets:
         lines.extend(("", "🎯 ЦЕЛЕВОЙ ПОРТФЕЛЬ"))
         for index, target in enumerate(result.targets[:12], start=1):
-            lines.append(f"{index}. {target.secid} · цель {_number(target.weight * 100)}%")
             metrics = _rationale_metrics(target.rationale)
+            direction = "SHORT" if target.weight < 0 else "LONG"
+            lines.append(
+                f"{index}. {target.secid} · {direction} "
+                f"{_number(abs(target.weight) * 100)}%"
+            )
             if metrics is not None:
-                momentum, price, trend = metrics
+                rationale_direction, momentum, price, trend = metrics
+                relation = "выше" if rationale_direction == "long" else "ниже"
                 lines.append(
                     f"   импульс {_number(momentum * 100, signed=True)}% · "
-                    f"цена {_money(price)} · тренд {_money(trend)}"
+                    f"цена {_money(price)} {relation} тренда {_money(trend)}"
                 )
     elif result.quality.passed:
         lines.extend(
@@ -211,14 +234,33 @@ def render_shadow_report(result: HarnessResult, as_of: datetime) -> str:
                 "целевой список пуст.",
             )
         )
+        if result.signal_diagnostics:
+            lines.append("Ближе всего к входу:")
+            for diagnostic in result.signal_diagnostics[:5]:
+                trend_sign = ">" if diagnostic.price > diagnostic.trend else "≤"
+                lines.append(
+                    f"• {diagnostic.secid}: импульс "
+                    f"{_number(diagnostic.momentum * 100, signed=True)}% "
+                    f"(нужно >"
+                    f"{_number(diagnostic.momentum_threshold * 100, signed=True)}%); "
+                    f"цена {trend_sign} тренда"
+                )
     if result.orders:
         lines.extend(("", "🧾 ВИРТУАЛЬНЫЕ СДЕЛКИ"))
         for record in result.orders[:12]:
             intent = record.intent
             icon = "🟢" if intent.side.value == "buy" else "🔴"
+            if intent.confirm_margin_trade:
+                action = "OPEN SHORT"
+            elif intent.side.value == "buy" and "direction=short" in intent.rationale:
+                action = "COVER SHORT"
+            elif intent.side.value == "sell" and intent.rationale == "exit target":
+                action = "CLOSE LONG"
+            else:
+                action = intent.side.value.upper()
             sector = _SECTOR_LABELS.get(intent.instrument.sector, intent.instrument.sector)
             lines.append(
-                f"{icon} {intent.side.value.upper()} {intent.instrument.secid} · "
+                f"{icon} {action} {intent.instrument.secid} · "
                 f"{intent.lots} лот. · {_money(intent.notional)}"
             )
             lines.append(f"   лимит {_money(intent.limit_price)} · сектор: {sector}")
@@ -231,7 +273,14 @@ def render_shadow_report(result: HarnessResult, as_of: datetime) -> str:
             if next_window is not None:
                 messages.append(f"Следующее разрешённое окно: {next_window}.")
         else:
-            messages = ["Нет сделок, прошедших риск-контроль."]
+            messages = [
+                (
+                    "Нет заявок: целевой список пуст, поэтому risk-control "
+                    "нечего проверять."
+                    if not result.targets
+                    else "Нет сделок, прошедших risk-control."
+                )
+            ]
         lines.extend(("", "🧾 ПЛАН СДЕЛОК", *messages))
     if result.rejected:
         lines.extend(("", "⛔ НЕ ПРОШЛИ РИСК-КОНТРОЛЬ"))

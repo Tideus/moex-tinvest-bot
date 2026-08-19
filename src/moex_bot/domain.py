@@ -55,6 +55,7 @@ class Instrument:
     sector: str = "unknown"
     risk_cluster: str = "unknown"
     asset_class: str = "share"
+    short_enabled: bool = False
 
     def __post_init__(self) -> None:
         if not self.secid or not self.uid or not self.board:
@@ -186,6 +187,7 @@ class OrderIntent:
     limit_price: Decimal
     notional: Decimal
     rationale: str
+    confirm_margin_trade: bool = False
 
     def __post_init__(self) -> None:
         if self.lots <= 0:

@@ -96,3 +96,62 @@ def test_order_intents_prioritize_exits_then_preserve_strategy_rank() -> None:
         Decimal("10000"),
     )
     assert [item.instrument.secid for item in intents] == ["BBB", "ZZZ", "AAA"]
+
+
+def test_negative_target_opens_short_with_explicit_margin_confirmation() -> None:
+    instrument = Instrument(
+        "AAA", "uid", "TQBR", 1, Decimal("0.01"), short_enabled=True
+    )
+    market = {
+        "AAA": MarketObservation(
+            instrument,
+            Decimal("100"),
+            Decimal("110"),
+            Decimal("-0.1"),
+            Decimal("0.02"),
+            datetime.now(UTC),
+            True,
+            True,
+        )
+    }
+    intents = build_order_intents(
+        "run-short",
+        (Target("AAA", Decimal("-0.10"), "direction=short"),),
+        PortfolioSnapshot(Decimal("10000")),
+        market,
+        Decimal("100"),
+        Decimal("10000"),
+    )
+    assert len(intents) == 1
+    assert intents[0].side is Side.SELL
+    assert intents[0].confirm_margin_trade
+
+
+def test_reversal_closes_existing_long_before_opening_short() -> None:
+    instrument = Instrument(
+        "AAA", "uid", "TQBR", 1, Decimal("0.01"), short_enabled=True
+    )
+    market = {
+        "AAA": MarketObservation(
+            instrument,
+            Decimal("100"),
+            Decimal("110"),
+            Decimal("-0.1"),
+            Decimal("0.02"),
+            datetime.now(UTC),
+            True,
+            True,
+        )
+    }
+    intents = build_order_intents(
+        "run-reverse",
+        (Target("AAA", Decimal("-0.10"), "direction=short"),),
+        PortfolioSnapshot(Decimal("9000"), {"AAA": Position(instrument, 10)}),
+        market,
+        Decimal("100"),
+        Decimal("10000"),
+    )
+    assert len(intents) == 1
+    assert intents[0].side is Side.SELL
+    assert intents[0].lots == 10
+    assert not intents[0].confirm_margin_trade

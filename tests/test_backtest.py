@@ -151,3 +151,77 @@ def test_backtest_uses_next_session_costs_and_writes_comparison_bundle(tmp_path:
     assert (tmp_path / "REPORT.md").is_file()
     assert (tmp_path / "equity-curve.html").is_file()
     assert "BLOCKED" in (tmp_path / "REPORT.md").read_text(encoding="utf-8")
+
+
+def test_backtest_can_open_and_mark_to_market_bounded_short() -> None:
+    start = date(2026, 1, 1)
+    settings = BacktestSettings(
+        start,
+        start + timedelta(days=120),
+        start + timedelta(days=60),
+        Decimal("300000"),
+        Decimal("0.0005"),
+        Decimal("5"),
+        Decimal("5"),
+        Decimal("2"),
+        "IMOEX",
+        "SNDX",
+        False,
+        False,
+    )
+    universe = (
+        UniverseEntry(
+            "BEAR",
+            "TQBR",
+            "00000000-0000-0000-0000-000000000003",
+            1,
+            True,
+            "issuer-bear",
+            "sector-bear",
+            "cluster-bear",
+            "share",
+            True,
+        ),
+    )
+    base = _bot_config()
+    short_strategy = StrategyConfig(
+        1,
+        Decimal("0.01"),
+        True,
+        candle_period="1D",
+        momentum_windows=(2, 3),
+        trend_window=4,
+        volatility_window=3,
+        inverse_volatility_weights=True,
+        shorts_enabled=True,
+        short_top_n=1,
+        max_short_momentum=Decimal("-0.01"),
+        long_target_gross=Decimal("0.60"),
+        short_target_gross=Decimal("0.20"),
+    )
+    config = BotConfig(
+        mode=base.mode,
+        base_currency=base.base_currency,
+        max_data_age_seconds=base.max_data_age_seconds,
+        max_position_weight=base.max_position_weight,
+        max_order_notional=base.max_order_notional,
+        max_gross_exposure=base.max_gross_exposure,
+        max_daily_turnover=base.max_daily_turnover,
+        min_trade_notional=base.min_trade_notional,
+        max_open_orders=base.max_open_orders,
+        allow_margin=True,
+        live_interlock=False,
+        strategy=short_strategy,
+        min_cash_reserve_weight=base.min_cash_reserve_weight,
+        max_short_position_weight=Decimal("0.20"),
+        max_short_gross_exposure=Decimal("0.20"),
+    )
+    result = run_backtest(
+        bot_config=config,
+        settings=settings,
+        universe=universe,
+        candles={"BEAR": _series(start, 121, step="-0.5")},
+        benchmark_candles=_series(start, 121, step="-0.2"),
+    )
+    assert any(item.side == "sell" for item in result.trades)
+    assert result.metrics.return_pct > 0

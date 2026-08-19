@@ -291,6 +291,11 @@ Get-ScheduledTaskInfo -TaskName MOEX-TInvest-Shadow-Hourly
 ошибки и необъяснённые расхождения. Стратегия должна оставаться приемлемой в OOS и при
 повышенных издержках. Песочница проверяет API-механику, но не прибыльность.
 
+Short в текущей Sandbox v2 ограничен 8% equity на бумагу и 25% gross по портфелю. `OPEN SHORT`
+в Telegram означает SELL с `confirmMarginTrade=true`; `COVER SHORT` — уменьшающий short BUY.
+Long→short и short→long не пересекают ноль одной заявкой. Песочница T-Invest упрощает плечо,
+ликвидность и исполнение, поэтому положительный Sandbox P&L не переносится автоматически в prod.
+
 Для включения sandbox-исполнения на Ubuntu:
 
 ```bash

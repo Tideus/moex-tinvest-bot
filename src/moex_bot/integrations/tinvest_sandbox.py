@@ -17,6 +17,9 @@ from ..service_config import SANDBOX_REST
 
 SANDBOX_BASE_URL = SANDBOX_REST
 POST_ORDER_PATH = "/tinkoff.public.invest.api.contract.v1.OrdersService/PostOrder"
+GET_INSTRUMENT_PATH = (
+    "/tinkoff.public.invest.api.contract.v1.InstrumentsService/GetInstrumentBy"
+)
 SANDBOX_SERVICE_PATH = "/tinkoff.public.invest.api.contract.v1.SandboxService"
 GET_SANDBOX_ACCOUNTS_PATH = f"{SANDBOX_SERVICE_PATH}/GetSandboxAccounts"
 OPEN_SANDBOX_ACCOUNT_PATH = f"{SANDBOX_SERVICE_PATH}/OpenSandboxAccount"
@@ -507,6 +510,28 @@ class TInvestSandboxExecutionAdapter:
             UUID(intent.order_request_id)
         except ValueError as exc:
             raise ValueError("T-Invest order_request_id must be a UUID") from exc
+        if intent.confirm_margin_trade:
+            instrument_response = self.transport.post(
+                SANDBOX_BASE_URL + GET_INSTRUMENT_PATH,
+                headers={
+                    "Authorization": f"Bearer {self.token}",
+                    "Content-Type": "application/json",
+                },
+                payload={
+                    "idType": "INSTRUMENT_ID_TYPE_UID",
+                    "id": intent.instrument.uid,
+                },
+                timeout_seconds=self.timeout_seconds,
+            )
+            instrument = instrument_response.get("instrument")
+            if not isinstance(instrument, Mapping):
+                raise ValueError("T-Invest instrument availability response is incomplete")
+            if instrument.get("uid") != intent.instrument.uid:
+                raise ValueError("T-Invest instrument UID changed during short verification")
+            if instrument.get("apiTradeAvailableFlag") is not True:
+                raise ValueError("T-Invest API trading is unavailable for short instrument")
+            if instrument.get("shortEnabledFlag") is not True:
+                raise ValueError("T-Invest short is unavailable for instrument")
         payload: dict[str, object] = {
             "quantity": str(intent.lots),
             "price": decimal_to_quotation(intent.limit_price),
@@ -519,7 +544,7 @@ class TInvestSandboxExecutionAdapter:
             "instrumentId": intent.instrument.uid,
             "timeInForce": "TIME_IN_FORCE_DAY",
             "priceType": "PRICE_TYPE_CURRENCY",
-            "confirmMarginTrade": False,
+            "confirmMarginTrade": intent.confirm_margin_trade,
         }
         try:
             response = self.transport.post(

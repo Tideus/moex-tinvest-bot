@@ -170,6 +170,8 @@ def render_backtest_report(
         f"- Sharpe (без risk-free): {metrics.annualized_sharpe:.3f}",
         f"- Сделок: {metrics.trades}; неисполненных DAY-заявок: {metrics.unfilled_orders}",
         f"- Оборот: {_money(metrics.turnover)}; комиссии: {_money(metrics.commissions)}",
+        f"- Финансирование short: {_money(metrics.short_financing)} "
+        f"при годовой ставке {base.settings.short_financing_rate_annual * 100:.2f}%",
         "",
         "## Out-of-sample",
         "",
@@ -181,6 +183,7 @@ def render_backtest_report(
         f"- Sharpe: {oos.annualized_sharpe:.3f}",
         f"- Cost stress ×{base.settings.cost_stress_multiplier}: "
         f"{stress.oos_metrics.return_pct:+.2f}%",
+        f"- OOS финансирование short: {_money(oos.short_financing)}",
         "",
         "## Вклад бумаг",
         "",

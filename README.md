@@ -37,7 +37,7 @@ bash scripts/ubuntu/test-deployment.sh
 - immutable domain models using `Decimal`;
 - instrument lot/tick validation;
 - completed-candle quality gate;
-- long-only momentum/trend target generation;
+- signed long/short momentum/trend targets with independent short limits;
 - deterministic GeoRisk reduction/blocking;
 - independent pre-trade risk gate;
 - execution-plan generation with stable idempotency keys;
@@ -195,7 +195,7 @@ powershell -ExecutionPolicy Bypass -File scripts\register_hourly_task.ps1
 ```text
 src/moex_bot/domain.py       money-safe immutable models
 src/moex_bot/quality.py      freshness/completeness gate
-src/moex_bot/strategy.py     long-only momentum baseline
+src/moex_bot/strategy.py     bounded long/short momentum baseline
 src/moex_bot/geo.py          geopolitical risk policy
 src/moex_bot/risk.py         independent pre-trade controls
 src/moex_bot/execution.py    plans, idempotency, state machine
@@ -215,6 +215,7 @@ src/moex_bot/cli.py          replay and preflight CLI
 tests/                       control and regression tests
 docs/plan/                   full Russian project plan
 docs/practices.md            global control-practice mapping
+docs/GIT_WORKFLOW_RU.md      Git setup, commit, push and server update guide
 ```
 
 ## Next integrations
@@ -228,7 +229,10 @@ docs/practices.md            global control-practice mapping
 ## Historical proof before production
 
 Strategy v2 uses completed daily candles, a blended 5/10/20-session momentum signal, a
-60-session trend filter, inverse-volatility allocation and one scheduled rebalance hour. Run the
+60-session trend filter, inverse-volatility allocation and one scheduled rebalance hour. Long
+requires momentum above +1% and price above trend. Sandbox short requires momentum below −3%,
+price below trend, current T-Invest short availability, explicit margin confirmation, an 8%
+per-name cap and a 25% portfolio short-gross cap. Run the
 same signal/risk path on real MOEX candles with next-session execution and modeled commission,
 spread and slippage:
 

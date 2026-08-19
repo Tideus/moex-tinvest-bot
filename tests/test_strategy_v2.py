@@ -6,11 +6,26 @@ from moex_bot.domain import Instrument, MarketObservation
 from moex_bot.strategy import calculate_targets
 
 
-def _observation(secid: str, momentum: str, volatility: str) -> MarketObservation:
+def _observation(
+    secid: str,
+    momentum: str,
+    volatility: str,
+    *,
+    price: str = "110",
+    trend: str = "100",
+    short_enabled: bool = False,
+) -> MarketObservation:
     return MarketObservation(
-        Instrument(secid, f"uid-{secid}", "TQBR", 1, Decimal("0.01")),
-        Decimal("110"),
-        Decimal("100"),
+        Instrument(
+            secid,
+            f"uid-{secid}",
+            "TQBR",
+            1,
+            Decimal("0.01"),
+            short_enabled=short_enabled,
+        ),
+        Decimal(price),
+        Decimal(trend),
         Decimal(momentum),
         Decimal(volatility),
         datetime(2026, 8, 18, tzinfo=UTC),
@@ -43,3 +58,41 @@ def test_exit_rank_buffer_retains_existing_position_beyond_entry_cutoff() -> Non
         held_secids=frozenset({"HELD"}),
     )
     assert {item.secid for item in targets} == {"NEW", "HELD"}
+
+
+def test_short_strategy_emits_negative_targets_only_for_verified_instruments() -> None:
+    config = StrategyConfig(
+        1,
+        Decimal("0.01"),
+        True,
+        shorts_enabled=True,
+        short_top_n=2,
+        max_short_momentum=Decimal("-0.03"),
+        long_target_gross=Decimal("0.60"),
+        short_target_gross=Decimal("0.24"),
+    )
+    targets = calculate_targets(
+        [
+            _observation(
+                "SHORT",
+                "-0.10",
+                "0.02",
+                price="90",
+                trend="100",
+                short_enabled=True,
+            ),
+            _observation(
+                "DENIED",
+                "-0.20",
+                "0.02",
+                price="80",
+                trend="100",
+                short_enabled=False,
+            ),
+        ],
+        config,
+    )
+    assert len(targets) == 1
+    assert targets[0].secid == "SHORT"
+    assert targets[0].weight == Decimal("-0.24")
+    assert "direction=short" in targets[0].rationale

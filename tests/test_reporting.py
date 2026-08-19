@@ -11,7 +11,7 @@ from moex_bot.domain import (
     Side,
     Target,
 )
-from moex_bot.harness import HarnessResult
+from moex_bot.harness import HarnessResult, SignalDiagnostic
 from moex_bot.quality import QualityReport
 from moex_bot.reporting import render_persisted_shadow_decisions, render_shadow_report
 
@@ -44,7 +44,7 @@ def test_hourly_telegram_report_contains_trade_intents() -> None:
     report = render_shadow_report(result, datetime(2026, 8, 18, 10, tzinfo=UTC))
     assert "18.08.2026 · 13:00 МСК" in report
     assert "🎯 ЦЕЛЕВОЙ ПОРТФЕЛЬ" in report
-    assert "импульс +2,91% · цена 300,50 ₽ · тренд 290,25 ₽" in report
+    assert "импульс +2,91% · цена 300,50 ₽ выше тренда 290,25 ₽" in report
     assert "🧾 ВИРТУАЛЬНЫЕ СДЕЛКИ" in report
     assert "🟢 BUY SBER · 2 лот. · 600 ₽" in report
     assert "BUY LKOH — исчерпан дневной лимит оборота" in report
@@ -121,10 +121,37 @@ def test_monitoring_report_explains_empty_signal_and_next_rebalance() -> None:
         (),
         rebalance_allowed=False,
         rebalance_hours_moscow=(10,),
+        signal_diagnostics=(
+            SignalDiagnostic(
+                "SBER",
+                Decimal("-0.0088"),
+                Decimal("0.01"),
+                Decimal("277.72"),
+                Decimal("288.69"),
+                False,
+                ("momentum threshold not passed", "price is not above trend"),
+            ),
+        ),
     )
 
     report = render_shadow_report(result, datetime(2026, 8, 18, 13, 53, tzinfo=UTC))
 
     assert "Целевых бумаг после фильтров: 0" in report
     assert "Кандидатов нет" in report
+    assert "SBER: импульс -0,88% (нужно >+1,00%); цена ≤ тренда" in report
     assert "Следующее разрешённое окно: 19.08.2026 · 10:00–10:59 МСК" in report
+
+
+def test_empty_rebalance_plan_does_not_claim_risk_rejection() -> None:
+    result = HarnessResult(
+        "shadow-rebalance",
+        QualityReport(True, (), ()),
+        GeoRiskSnapshot(GeoRiskLevel.NORMAL, Decimal("1"), frozenset(), ()),
+        (),
+        (),
+        (),
+    )
+
+    report = render_shadow_report(result, datetime(2026, 8, 19, 7, 5, tzinfo=UTC))
+
+    assert "целевой список пуст, поэтому risk-control нечего проверять" in report

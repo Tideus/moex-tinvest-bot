@@ -377,7 +377,7 @@ def sandbox_execute(
             adapter=adapter,
             as_of=as_of,
         )
-        if outbox_path is not None:
+        if outbox_path is not None and (result.submitted or result.stopped_reason):
             SQLiteOutbox(outbox_path).enqueue(
                 kind="sandbox_execution",
                 dedupe_key=f"sandbox-execution:{result.run_id}",
@@ -588,6 +588,7 @@ def _verified_instruments(universe: tuple[Any, ...]) -> dict[str, Instrument]:
             sector=item.sector,
             risk_cluster=item.risk_cluster,
             asset_class=item.asset_class,
+            short_enabled=item.short_enabled_verified,
         )
         for item in universe
     }

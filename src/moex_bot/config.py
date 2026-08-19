@@ -22,6 +22,12 @@ class StrategyConfig:
     inverse_volatility_weights: bool = False
     exit_rank_buffer: int = 0
     rebalance_hours_moscow: tuple[int, ...] = tuple(range(24))
+    shorts_enabled: bool = False
+    short_top_n: int = 0
+    max_short_momentum: Decimal = Decimal("-0.01")
+    require_below_trend_for_short: bool = True
+    long_target_gross: Decimal = Decimal("1")
+    short_target_gross: Decimal = Decimal("0")
 
 
 @dataclass(frozen=True, slots=True)
@@ -41,6 +47,8 @@ class BotConfig:
     min_cash_reserve_weight: Decimal = Decimal("0")
     max_sector_weight: Decimal = Decimal("1")
     max_risk_cluster_weight: Decimal = Decimal("1")
+    max_short_position_weight: Decimal = Decimal("0")
+    max_short_gross_exposure: Decimal = Decimal("0")
 
     def validate(self) -> tuple[str, ...]:
         errors: list[str] = []
@@ -72,8 +80,10 @@ class BotConfig:
             errors.append("max_order_notional must not exceed max_daily_turnover")
         if self.max_open_orders <= 0:
             errors.append("max_open_orders must be positive")
-        if self.allow_margin:
-            errors.append("margin is forbidden in the MVP")
+        if self.strategy.shorts_enabled and not self.allow_margin:
+            errors.append("shorts require allow_margin=true")
+        if self.allow_margin and not self.strategy.shorts_enabled:
+            errors.append("allow_margin is only permitted for the reviewed short strategy")
         if self.mode is ExecutionMode.LIVE:
             errors.append("live mode is not implemented or authorized in this scaffold")
         if self.live_interlock:
@@ -110,6 +120,28 @@ class BotConfig:
             self.strategy.rebalance_hours_moscow
         ):
             errors.append("strategy.rebalance_hours_moscow cannot contain duplicates")
+        if self.strategy.shorts_enabled:
+            if self.strategy.short_top_n <= 0:
+                errors.append("strategy.short_top_n must be positive when shorts are enabled")
+            if (
+                not self.strategy.max_short_momentum.is_finite()
+                or self.strategy.max_short_momentum >= 0
+            ):
+                errors.append("strategy.max_short_momentum must be finite and negative")
+            if self.max_short_position_weight <= 0 or self.max_short_position_weight > 1:
+                errors.append("max_short_position_weight must be in (0, 1]")
+            if self.max_short_gross_exposure <= 0 or self.max_short_gross_exposure > 1:
+                errors.append("max_short_gross_exposure must be in (0, 1]")
+        elif self.strategy.short_top_n != 0 or self.strategy.short_target_gross != 0:
+            errors.append("short parameters require strategy.shorts_enabled=true")
+        for name, value in (
+            ("strategy.long_target_gross", self.strategy.long_target_gross),
+            ("strategy.short_target_gross", self.strategy.short_target_gross),
+        ):
+            if not value.is_finite() or value < 0 or value > 1:
+                errors.append(f"{name} must be in [0, 1]")
+        if self.strategy.shorts_enabled and self.strategy.short_target_gross <= 0:
+            errors.append("strategy.short_target_gross must be positive when shorts are enabled")
         return tuple(errors)
 
 
@@ -170,10 +202,23 @@ def load_config(path: Path) -> BotConfig:
                 strategy.get("rebalance_hours_moscow", list(range(24))),
                 "strategy.rebalance_hours_moscow",
             ),
+            shorts_enabled=_boolean(
+                strategy.get("shorts_enabled", False), "strategy.shorts_enabled"
+            ),
+            short_top_n=int(strategy.get("short_top_n", 0)),
+            max_short_momentum=_decimal(strategy.get("max_short_momentum", "-0.01")),
+            require_below_trend_for_short=_boolean(
+                strategy.get("require_below_trend_for_short", True),
+                "strategy.require_below_trend_for_short",
+            ),
+            long_target_gross=_decimal(strategy.get("long_target_gross", "1")),
+            short_target_gross=_decimal(strategy.get("short_target_gross", "0")),
         ),
         min_cash_reserve_weight=_decimal(raw.get("min_cash_reserve_weight", "0.10")),
         max_sector_weight=_decimal(raw.get("max_sector_weight", "0.35")),
         max_risk_cluster_weight=_decimal(raw.get("max_risk_cluster_weight", "0.45")),
+        max_short_position_weight=_decimal(raw.get("max_short_position_weight", "0")),
+        max_short_gross_exposure=_decimal(raw.get("max_short_gross_exposure", "0")),
     )
     errors = config.validate()
     if errors:

@@ -50,6 +50,7 @@ class UniverseEntry:
     sector: str
     risk_cluster: str
     asset_class: str
+    short_enabled_verified: bool = False
 
     def validate(self) -> None:
         UUID(self.t_invest_uid)
@@ -78,6 +79,9 @@ def load_universe(path: Path) -> tuple[UniverseEntry, ...]:
         trade_available = item["api_trade_available"]
         if not isinstance(trade_available, bool):
             raise ValueError("universe api_trade_available must be a JSON boolean")
+        short_enabled = item.get("short_enabled_verified", False)
+        if not isinstance(short_enabled, bool):
+            raise ValueError("universe short_enabled_verified must be a JSON boolean")
         entries_list.append(
             UniverseEntry(
                 secid=str(item["secid"]),
@@ -89,6 +93,7 @@ def load_universe(path: Path) -> tuple[UniverseEntry, ...]:
                 sector=str(item["sector"]),
                 risk_cluster=str(item["risk_cluster"]),
                 asset_class=str(item.get("asset_class", "share")),
+                short_enabled_verified=short_enabled,
             )
         )
     entries = tuple(entries_list)
@@ -198,6 +203,7 @@ def run_hourly_shadow(
                 sector=entry.sector,
                 risk_cluster=entry.risk_cluster,
                 asset_class=entry.asset_class,
+                short_enabled=entry.short_enabled_verified,
             ),
         )
         market[entry.secid] = observation

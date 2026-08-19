@@ -46,7 +46,11 @@ def build_order_intents(
         target_weight = target.weight if target is not None else Decimal("0")
         target_value = equity * target_weight
         lot_value = Decimal(instrument.lot_size) * observation.price
-        target_lots = int(target_value // lot_value)
+        target_lots = int(abs(target_value) // lot_value)
+        if target_value < 0:
+            target_lots = -target_lots
+        if current_lots * target_lots < 0:
+            target_lots = 0
         delta = target_lots - current_lots
         if delta == 0:
             continue
@@ -62,6 +66,8 @@ def build_order_intents(
         if notional < min_trade_notional:
             continue
         rationale = target.rationale if target is not None else "exit target"
+        resulting_lots = current_lots + (lots if side is Side.BUY else -lots)
+        opens_or_increases_short = resulting_lots < min(current_lots, 0)
         intents.append(
             OrderIntent(
                 order_request_id=stable_order_request_id(run_id, secid, side, lots),
@@ -71,6 +77,7 @@ def build_order_intents(
                 limit_price=price,
                 notional=notional,
                 rationale=rationale,
+                confirm_margin_trade=opens_or_increases_short,
             )
         )
     return tuple(intents)

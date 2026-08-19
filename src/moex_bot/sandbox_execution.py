@@ -68,10 +68,27 @@ def execute_shadow_plan(
         raise ValueError("shadow artifact has no order list")
     submitted: list[OrderRecord] = []
     stopped_reason: str | None = None
+    raw_positions = portfolio.get("positions", {})
+    if not isinstance(raw_positions, Mapping):
+        raise ValueError("portfolio snapshot has invalid positions")
+    projected_lots = {
+        str(secid): int(value.get("lots", 0) if isinstance(value, Mapping) else value)
+        for secid, value in raw_positions.items()
+    }
     for item in records_raw[: runtime.sandbox_max_orders_per_cycle]:
         intent = _intent(item)
+        current_lots = projected_lots.get(intent.instrument.secid, 0)
+        resulting_lots = current_lots + (
+            intent.lots if intent.side is Side.BUY else -intent.lots
+        )
+        opens_short = resulting_lots < min(current_lots, 0)
+        if opens_short != intent.confirm_margin_trade:
+            raise ValueError("margin confirmation does not match projected short exposure")
+        if opens_short and not intent.instrument.short_enabled:
+            raise ValueError("short order instrument is not verified as short-enabled")
         record = adapter.submit(intent)
         submitted.append(record)
+        projected_lots[intent.instrument.secid] = resulting_lots
         if record.status in {OrderStatus.UNKNOWN, OrderStatus.REJECTED}:
             stopped_reason = f"submission stopped after {record.status.value} order"
             break
@@ -129,6 +146,7 @@ def _intent(record: object) -> OrderIntent:
         sector=str(instrument_raw.get("sector", "unknown")),
         risk_cluster=str(instrument_raw.get("risk_cluster", "unknown")),
         asset_class=str(instrument_raw.get("asset_class", "share")),
+        short_enabled=bool(instrument_raw.get("short_enabled", False)),
     )
     if instrument.asset_class != "share":
         raise ValueError("current sandbox execution gate supports shares only")
@@ -140,4 +158,5 @@ def _intent(record: object) -> OrderIntent:
         limit_price=Decimal(str(raw["limit_price"])),
         notional=Decimal(str(raw["notional"])),
         rationale=str(raw.get("rationale", "")),
+        confirm_margin_trade=bool(raw.get("confirm_margin_trade", False)),
     )

@@ -79,7 +79,9 @@ sudo moex-botctl sandbox-disable
 | `max_daily_turnover` | конечная сумма `> 0` | Максимальный накопленный дневной оборот намерений. Не меньше `max_order_notional`. |
 | `min_trade_notional` | конечная сумма `> 0` | Изменения позиции дешевле порога не формируют заявку. Не больше `max_order_notional`. |
 | `max_open_orders` | целое `> 0` | Блокирует новую заявку при достижении лимита незавершённых заявок. |
-| `allow_margin` | только `false` | Margin/заёмные средства запрещены в MVP. `true` блокирует конфиг. |
+| `allow_margin` | JSON boolean | `true` разрешён только вместе с Sandbox short-стратегией; обычный BUY всё равно ограничен свободными деньгами и резервом. |
+| `max_short_position_weight` | доля `(0, 1]` при shorts | Максимальный абсолютный вес одной короткой позиции. |
+| `max_short_gross_exposure` | доля `(0, 1]` при shorts | Максимальная сумма абсолютных short-экспозиций к equity. |
 | `live_interlock` | только `false` | Независимая блокировка live execution. `true` отклоняется до появления проверенного live adapter. |
 | `strategy.top_n` | целое `> 0` | Максимальное число прошедших фильтр инструментов с наибольшим momentum. |
 | `strategy.min_momentum` | конечное число `> -1` | Строгий нижний порог доходности: `0.01` означает больше +1%. |
@@ -92,6 +94,12 @@ sudo moex-botctl sandbox-disable
 | `strategy.inverse_volatility_weights` | JSON boolean | При `true` менее волатильные выбранные бумаги получают больший вес до применения лимитов риска. |
 | `strategy.exit_rank_buffer` | целое `>= 0` | Удерживает уже купленную бумагу, пока её ранг не хуже `top_n + buffer`, снижая лишние перестановки. |
 | `strategy.rebalance_hours_moscow` | массив уникальных часов `0…23` | В какие московские часы разрешено создавать заявки; в остальные часы выполняются анализ и отчёт без торговли. |
+| `strategy.shorts_enabled` | JSON boolean | Включает отрицательные целевые веса; production это не открывает. |
+| `strategy.short_top_n` | положительное целое | Максимальное число одновременно выбранных short-кандидатов. |
+| `strategy.max_short_momentum` | отрицательное число | Для short momentum должен быть строго ниже порога, например `-0.03`. |
+| `strategy.require_below_trend_for_short` | JSON boolean | При `true` short возможен только при цене ниже trend. |
+| `strategy.long_target_gross` | доля `[0,1]` | Совокупный исходный бюджет long до остальных risk caps. |
+| `strategy.short_target_gross` | доля `(0,1]` при shorts | Совокупный абсолютный бюджет short до caps. |
 
 Адаптер считает blended momentum, trend и volatility только по завершённым свечам. Инструменты
 получают inverse-volatility либо равные исходные веса, после чего применяются лимит одной бумаги,
@@ -106,6 +114,7 @@ sudo moex-botctl sandbox-disable
 | `initial_cash` | Начальный модельный капитал в рублях. |
 | `commission_rate` | Комиссия с каждой исполненной стороны сделки. |
 | `half_spread_bps`, `slippage_bps` | Модельные односторонние издержки в базисных пунктах. |
+| `short_financing_rate_annual` | Сценарная годовая ставка финансирования перенесённого short; начисляется по календарным дням между сессиями. Это не обещанная ставка брокера. |
 | `cost_stress_multiplier` | Множитель всех издержек для стресс-проверки. |
 | `benchmark_secid`, `benchmark_board` | Сравниваемый ценовой индекс; текущий `IMOEX/SNDX` не включает дивиденды. |
 | `survivorship_safe` | Только evidence-флаг: `true` допустим лишь при point-in-time universe с выбывшими бумагами. |
@@ -156,6 +165,7 @@ Point-in-time список разрешённых инструментов. Сп
 | `t_invest_uid` | UUID инструмента T‑Invest; связывает MOEX и брокерскую идентичность. |
 | `lot_size_verified` | Последний проверенный размер лота; должен быть положительным. Во время чтения данных сверяется с MOEX metadata. |
 | `api_trade_available` | JSON boolean; `false` исключает инструмент и блокирует конфиг. |
+| `short_enabled_verified` | Последняя проверенная возможность short. Перед увеличивающей Sandbox short-заявкой адаптер повторно проверяет официальный T-Invest `GetInstrumentBy`. |
 | `issuer_id` | Стабильный инженерный ID эмитента; в дальнейшем объединит разные классы его бумаг и derivatives. |
 | `sector` | Инженерная отраслевая группа для `max_sector_weight`; не является официальной классификацией MOEX. |
 | `risk_cluster` | Группа общего риск-фактора для `max_risk_cluster_weight`, например углеводороды или внутренние финансы. |

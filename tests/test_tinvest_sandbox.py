@@ -80,3 +80,51 @@ def test_timeout_becomes_unknown_without_blind_retry() -> None:
     record = adapter.submit(_intent())
     assert record.status is OrderStatus.UNKNOWN
     assert transport.call is not None
+
+
+def test_sandbox_short_passes_explicit_margin_confirmation() -> None:
+    class ShortTransport(RecordingTransport):
+        def __init__(self) -> None:
+            super().__init__()
+            self.calls: list[dict[str, Any]] = []
+
+        def post(
+            self,
+            url: str,
+            *,
+            headers: dict[str, str],
+            payload: dict[str, object],
+            timeout_seconds: float,
+        ) -> dict[str, Any]:
+            self.calls.append({"url": url, "payload": payload})
+            if "GetInstrumentBy" in url:
+                return {
+                    "instrument": {
+                        "uid": "e6123145-9665-43e0-8413-cd61b8aa9b13",
+                        "apiTradeAvailableFlag": True,
+                        "shortEnabledFlag": True,
+                    }
+                }
+            self.call = {"url": url, "headers": headers, "payload": payload}
+            return {
+                "executionReportStatus": "EXECUTION_REPORT_STATUS_NEW",
+                "orderId": "short-1",
+            }
+
+    transport = ShortTransport()
+    adapter = TInvestSandboxExecutionAdapter("sandbox-token", "sandbox-account", transport)
+    original = _intent()
+    short_intent = OrderIntent(
+        original.order_request_id,
+        original.instrument,
+        Side.SELL,
+        original.lots,
+        original.limit_price,
+        original.notional,
+        "direction=short",
+        confirm_margin_trade=True,
+    )
+    adapter.submit(short_intent)
+    assert transport.call is not None
+    assert transport.call["payload"]["confirmMarginTrade"] is True
+    assert len(transport.calls) == 2
