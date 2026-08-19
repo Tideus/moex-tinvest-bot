@@ -28,13 +28,18 @@ restart_timers() {
   if [[ "${WAS_DAILY_ACTIVE}" -eq 1 ]]; then
     systemctl start moex-tinvest-daily-report.timer || true
   fi
+  if [[ "${WAS_INTRADAY_ACTIVE}" -eq 1 ]]; then
+    systemctl start moex-tinvest-intraday.timer || true
+  fi
 }
 WAS_SHADOW_ACTIVE=0
 WAS_HEALTH_ACTIVE=0
 WAS_DAILY_ACTIVE=0
+WAS_INTRADAY_ACTIVE=0
 systemctl is-active --quiet moex-tinvest-shadow.timer && WAS_SHADOW_ACTIVE=1
 systemctl is-active --quiet moex-tinvest-health.timer && WAS_HEALTH_ACTIVE=1
 systemctl is-active --quiet moex-tinvest-daily-report.timer && WAS_DAILY_ACTIVE=1
+systemctl is-active --quiet moex-tinvest-intraday.timer && WAS_INTRADAY_ACTIVE=1
 trap restart_timers EXIT
 
 "${APP_DIR}/.venv/bin/python" -m moex_bot.cli preflight \
@@ -48,6 +53,7 @@ stop_timer_if_installed() {
 stop_timer_if_installed moex-tinvest-shadow.timer
 stop_timer_if_installed moex-tinvest-health.timer
 stop_timer_if_installed moex-tinvest-daily-report.timer
+stop_timer_if_installed moex-tinvest-intraday.timer
 rsync -a --delete \
   --exclude '.git' --exclude '.venv' --exclude '.env' --exclude 'artifacts/*' \
   --exclude 'logs/*' --exclude 'data' --exclude 'work' \

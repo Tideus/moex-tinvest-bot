@@ -34,6 +34,10 @@ bash scripts/ubuntu/test-deployment.sh
 
 ## What works now
 
+Two independent Sandbox account profiles are declared in `config/accounts.json`: a 300,000 RUB
+daily long-only sleeve and a separate 300,000 RUB intraday sleeve. Intraday Sandbox permission is
+explicitly enabled and handled by its own five-minute plan, reconciliation and execution runner.
+
 - immutable domain models using `Decimal`;
 - instrument lot/tick validation;
 - completed-candle quality gate;
@@ -55,12 +59,17 @@ bash scripts/ubuntu/test-deployment.sh
 - CI workflow.
 - durable SQLite notification outbox with idempotent one-way Telegram delivery;
 - entitled ALGOPACK TradeStats/FUTOI/HI2 flow reports;
+- exact five-minute TradeStats/OrderStats/OBStats joins and a dedicated intraday signal store;
+- isolated intraday Sandbox account, pre-cycle cancellation/reconciliation and forced flat close;
+- separate intraday systemd timer and full decision artifacts;
+- compact Telegram policy: long morning/evening, intraday broker fills/evening only;
 - dated, source-linked ownership disclosure registry.
 
 ## Safety boundary
 
 `ExecutionMode.LIVE` remains denied by configuration validation and the executor. The only
-mutation path is hard-wired to the official T-Invest sandbox REST host, uses limit orders,
+mutation path is hard-wired to the official T-Invest sandbox REST host, uses limit entries and
+market exits only for the mandatory intraday flattening phase, uses
 verified instrument UID and idempotency UUID, and requires both `t_invest_environment=sandbox`
 and the explicit operator switch. Production credentials may be configured for read-only shadow
 synchronization, but cannot enable order submission.
@@ -177,6 +186,10 @@ python -m moex_bot.cli telegram-send --outbox data/notifications.sqlite3
 ```
 
 The sender is outgoing-only: no Telegram command can place, replace, or cancel an order.
+Hourly and five-minute calculations are always persisted but are not all sent. Long sends only
+the configured morning analysis and evening P&L. Intraday sends deduplicated broker BUY/SELL
+operations and an evening result; accepted/unfilled orders, plans, flow and reconciliation stay
+in the audit artifacts.
 
 `hourly-shadow` performs one cycle and exits. Use Windows Task Scheduler or another supervisor to
 invoke it hourly at `HH:05` Moscow time. It reads completed MOEX candles and writes only dry-run

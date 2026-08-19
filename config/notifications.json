@@ -1,0 +1,18 @@
+{
+  "timezone": "Europe/Moscow",
+  "long": {
+    "morning_analysis_hour": 10,
+    "evening_report_enabled": true
+  },
+  "intraday": {
+    "notify_filled_operations": true,
+    "evening_report_enabled": true
+  },
+  "audit": {
+    "persist_every_cycle": true,
+    "include_config_snapshot": true,
+    "include_market_inputs": true,
+    "include_portfolio_input": true,
+    "include_decisions_and_rejections": true
+  }
+}

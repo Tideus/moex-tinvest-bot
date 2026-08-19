@@ -5,6 +5,7 @@ from uuid import uuid4
 from moex_bot.domain import Instrument, OrderIntent, OrderStatus, Side
 from moex_bot.integrations.tinvest_sandbox import (
     SANDBOX_BASE_URL,
+    TInvestSandboxAccountService,
     TInvestSandboxExecutionAdapter,
     decimal_to_quotation,
 )
@@ -80,6 +81,58 @@ def test_timeout_becomes_unknown_without_blind_retry() -> None:
     record = adapter.submit(_intent())
     assert record.status is OrderStatus.UNKNOWN
     assert transport.call is not None
+
+
+def test_mandatory_flat_market_order_omits_limit_price() -> None:
+    transport = RecordingTransport(
+        {"executionReportStatus": "EXECUTION_REPORT_STATUS_FILL", "lotsExecuted": "2"}
+    )
+    base = _intent()
+    intent = OrderIntent(
+        base.order_request_id,
+        base.instrument,
+        base.side,
+        base.lots,
+        base.limit_price,
+        base.notional,
+        "mandatory flat",
+        order_type="market",
+    )
+    record = TInvestSandboxExecutionAdapter("token", "account", transport).submit(intent)
+    assert record.status is OrderStatus.FILLED
+    assert transport.call is not None
+    assert transport.call["payload"]["orderType"] == "ORDER_TYPE_MARKET"
+    assert "price" not in transport.call["payload"]
+
+
+def test_intraday_reconciliation_cancels_and_verifies_all_active_orders() -> None:
+    class SequenceTransport(RecordingTransport):
+        def __init__(self) -> None:
+            super().__init__()
+            self.responses = iter(
+                (
+                    {"orders": [{"orderId": "order-1"}]},
+                    {},
+                    {"orders": []},
+                )
+            )
+            self.calls: list[dict[str, Any]] = []
+
+        def post(
+            self,
+            url: str,
+            *,
+            headers: dict[str, str],
+            payload: dict[str, object],
+            timeout_seconds: float,
+        ) -> dict[str, Any]:
+            self.calls.append({"url": url, "payload": payload})
+            return next(self.responses)
+
+    transport = SequenceTransport()
+    service = TInvestSandboxAccountService("token", transport)
+    assert service.reconcile_cancel_active_orders("intraday") == ("order-1",)
+    assert "CancelSandboxOrder" in transport.calls[1]["url"]
 
 
 def test_sandbox_short_passes_explicit_margin_confirmation() -> None:

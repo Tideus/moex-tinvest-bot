@@ -73,6 +73,12 @@ load_secrets() {
   set +a
 }
 
+check_intraday_credentials() {
+  [[ -n "${T_INVEST_SANDBOX_TOKEN:-}" ]]
+  [[ -n "${T_INVEST_SANDBOX_INTRADAY_ACCOUNT_ID:-}" ]]
+  [[ -n "${MOEX_APIKEY:-}" ]]
+}
+
 as_service() {
   runuser --user "${SERVICE_USER}" --preserve-environment -- "$@"
 }
@@ -148,6 +154,9 @@ prelaunch() {
     "исправьте config/shadow.json; торговые действия останутся заблокированы" \
     as_service "${PYTHON_BIN}" -m moex_bot.cli preflight \
       --config "${APP_DIR}/config/shadow.json"
+  check "Intraday Sandbox credentials присутствуют" \
+    "выполните sandbox-bootstrap-profiles и заполните MOEX_APIKEY" \
+    check_intraday_credentials
 
   heading "3/5 Интеграции"
   local requirement="tinvest_sandbox"
@@ -168,7 +177,9 @@ prelaunch() {
       "${SYSTEMD_DIR}/moex-tinvest-health.service" \
       "${SYSTEMD_DIR}/moex-tinvest-health.timer" \
       "${SYSTEMD_DIR}/moex-tinvest-daily-report.service" \
-      "${SYSTEMD_DIR}/moex-tinvest-daily-report.timer"
+      "${SYSTEMD_DIR}/moex-tinvest-daily-report.timer" \
+      "${SYSTEMD_DIR}/moex-tinvest-intraday.service" \
+      "${SYSTEMD_DIR}/moex-tinvest-intraday.timer"
 
   heading "5/5 Итог"
   if [[ "${FAILURES}" -eq 0 ]]; then
@@ -192,7 +203,8 @@ start_bot() {
     systemd-analyze verify \
       "${SYSTEMD_DIR}/moex-tinvest-shadow.timer" \
       "${SYSTEMD_DIR}/moex-tinvest-health.timer" \
-      "${SYSTEMD_DIR}/moex-tinvest-daily-report.timer"
+      "${SYSTEMD_DIR}/moex-tinvest-daily-report.timer" \
+      "${SYSTEMD_DIR}/moex-tinvest-intraday.timer"
   if [[ "${FAILURES}" -ne 0 ]]; then
     printf '\033[1;31mBLOCKED\033[0m: расписание не применено; сервисы не запускались.\n'
     return 2
@@ -204,6 +216,13 @@ start_bot() {
     printf '\033[1;31mBLOCKED\033[0m: первый shadow-цикл не пройден; timers не включены.\n'
     return 2
   fi
+  check "Первый intraday-цикл завершён" \
+    "посмотрите journalctl -u moex-tinvest-intraday.service" \
+    systemctl start moex-tinvest-intraday.service
+  if [[ "${FAILURES}" -ne 0 ]]; then
+    printf '\033[1;31mBLOCKED\033[0m: первый intraday-цикл не пройден; timers не включены.\n'
+    return 2
+  fi
   check "Health-check завершён" \
     "посмотрите journalctl -u moex-tinvest-health.service" \
     systemctl start moex-tinvest-health.service
@@ -213,7 +232,7 @@ start_bot() {
   fi
   check "Таймеры включены" "проверьте systemctl status таймеров" \
     systemctl enable --now moex-tinvest-shadow.timer moex-tinvest-health.timer \
-      moex-tinvest-daily-report.timer
+      moex-tinvest-daily-report.timer moex-tinvest-intraday.timer
   heading "Фактическое расписание"
   systemctl list-timers 'moex-tinvest-*' --no-pager || true
   if [[ "${FAILURES}" -ne 0 ]]; then
@@ -233,7 +252,8 @@ timers_are_stopped() {
   for unit in \
     moex-tinvest-shadow.timer \
     moex-tinvest-health.timer \
-    moex-tinvest-daily-report.timer; do
+    moex-tinvest-daily-report.timer \
+    moex-tinvest-intraday.timer; do
     if systemctl is-active --quiet "${unit}"; then
       printf 'FAIL: timer remains active: %s\n' "${unit}" >&2
       return 2
@@ -252,12 +272,14 @@ stop_bot() {
     systemctl disable --now \
       moex-tinvest-shadow.timer \
       moex-tinvest-health.timer \
-      moex-tinvest-daily-report.timer
+      moex-tinvest-daily-report.timer \
+      moex-tinvest-intraday.timer
   check "Текущие циклы остановлены" "проверьте journalctl сервисов" \
     systemctl stop \
       moex-tinvest-shadow.service \
       moex-tinvest-health.service \
-      moex-tinvest-daily-report.service
+      moex-tinvest-daily-report.service \
+      moex-tinvest-intraday.service
   check "Автозапуск действительно выключен" \
     "один или несколько timers остались active/enabled" timers_are_stopped
   if [[ "${FAILURES}" -ne 0 ]]; then
@@ -286,6 +308,8 @@ diagnose_once() {
     systemctl is-active --quiet moex-tinvest-health.timer
   check "Daily report timer активен" "выполните sudo moex-botctl start" \
     systemctl is-active --quiet moex-tinvest-daily-report.timer
+  check "Intraday timer активен" "выполните sudo moex-botctl start" \
+    systemctl is-active --quiet moex-tinvest-intraday.timer
   check "Outbox Telegram здоров" "проверьте очередь и доступность Telegram" \
     as_service "${PYTHON_BIN}" -m moex_bot.cli outbox-health \
       --outbox "${STATE_DIR}/data/notifications.sqlite3" --max-pending-due 20

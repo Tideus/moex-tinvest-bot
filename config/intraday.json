@@ -1,0 +1,53 @@
+{
+  "execution_stage": "sandbox",
+  "market": "MOEX_EQ",
+  "board": "TQBR",
+  "candle_minutes": 5,
+  "scan_interval_minutes": 5,
+  "session": {
+    "new_entries_start_moscow": "10:15",
+    "new_entries_stop_moscow": "18:25",
+    "force_flat_moscow": "18:35"
+  },
+  "data_sources": ["algopack_tradestats", "algopack_orderstats", "algopack_obstats"],
+  "risk": {
+    "max_capital_weight": "0.10",
+    "max_position_notional_rub": "10000",
+    "max_concurrent_positions": 2,
+    "max_entries_per_day": 3,
+    "max_daily_loss_weight": "0.005",
+    "max_daily_turnover_rub": "60000",
+    "allow_short": true,
+    "allow_overnight": false
+  },
+  "execution": {
+    "order_type": "limit",
+    "order_ttl_seconds": 120,
+    "cancel_if_signal_invalidated": true,
+    "chase_price": false
+  },
+  "signal": {
+    "history_bars": 3,
+    "min_price_move": "0.003",
+    "min_abs_trade_imbalance": "0.15",
+    "min_abs_order_flow": "0.05",
+    "min_abs_book_imbalance": "0.10",
+    "max_spread_bbo": "0.20"
+  },
+  "strategies": [
+    {
+      "strategy_id": "intraday_momentum_v1",
+      "enabled": true,
+      "minimum_completed_bars": 3,
+      "require_trade_flow_confirmation": true,
+      "require_order_book_liquidity": true
+    },
+    {
+      "strategy_id": "intraday_mean_reversion_v1",
+      "enabled": false,
+      "minimum_completed_bars": 6,
+      "require_trade_flow_reversal": true,
+      "require_order_book_liquidity": true
+    }
+  ]
+}

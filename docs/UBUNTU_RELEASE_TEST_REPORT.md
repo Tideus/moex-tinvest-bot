@@ -1,20 +1,20 @@
 # Ubuntu 24 deployment — отчёт проверки
 
-Дата проверки: 2026-08-18.
+Дата проверки: 2026-08-20.
 
 ## Итог
 
 `PASS_WITH_ENVIRONMENT_LIMIT`: deployment-пакет готов для постоянного `replay/shadow`,
-дневной/недельной отчётности и явно разрешаемых Sandbox-заявок на Ubuntu Server 24.04 LTS.
-Production execution намеренно отсутствует.
+дневной/недельной отчётности, часовых long Sandbox-заявок и отдельного пятиминутного intraday
+Sandbox-контура на Ubuntu Server 24.04 LTS. Production execution намеренно отсутствует.
 
 ## Пройденные проверки
 
 - Ruff: PASS.
-- mypy strict: PASS, 30 source files.
-- pytest: 119 PASS.
-- Coverage: 76.90%, gate 75%.
-- Все 12 project/example JSON-конфигов: PASS.
+- mypy strict: PASS, 36 source files.
+- pytest: 138 PASS.
+- Coverage: 76.60%, gate 75%.
+- Все 15 project/example JSON-конфигов: PASS.
 - Реальный historical MOEX backtest: PASS технически; production gate закономерно BLOCKED.
 - Сохранение исходных OHLCV, сделок, equity CSV/HTML и promotion assessment: PASS.
 - Shadow config preflight: PASS.
@@ -22,6 +22,13 @@ Production execution намеренно отсутствует.
 - Sandbox execution interlock, UUID, order cap, stale/account/open-order gates: PASS.
 - Sandbox short: signed targets, close-before-reverse, per-name/gross caps, dynamic T-Invest
   short flag and explicit margin confirmation: PASS.
+- Intraday TradeStats/OrderStats/OBStats exact-interval join, signal gates, deduplication and
+  capital/turnover/position limits: PASS.
+- Dedicated intraday account resolution, cancel/reconciliation, limit entries, mandatory market
+  flattening and sandbox-only interlocks: PASS.
+- Five-minute intraday systemd service/timer and isolated artifacts/state: PASS.
+- Compact Telegram policy, operation-id fill deduplication and separate intraday daily report:
+  PASS.
 - OperationsByCursor parser, daily turnover и P&L aggregation: PASS.
 - Daily/Friday report runner and structured JSON companion: PASS.
 - Russian Trusted CA assets: PASS, five PEM files verified by committed SHA-256 manifest.
@@ -71,5 +78,6 @@ shadow cycle не прошёл.
   свечи MOEX для backtest проверены);
 - реальная доставка Telegram;
 - реальный ответ Sandbox PostOrder/OperationsByCursor конкретного аккаунта;
+- реальный ответ трёх ALGOPACK SuperCandles endpoints и end-to-end intraday cycle с секретами;
 - реалистичность fill/slippage Sandbox (песочница её не обеспечивает);
 - production orders — отсутствуют и запрещены.

@@ -49,6 +49,8 @@ MOEX_APIKEY=
 T_INVEST_SANDBOX_TOKEN=
 # Это поле заполнит sandbox-bootstrap:
 T_INVEST_SANDBOX_ACCOUNT_ID=
+T_INVEST_SANDBOX_LONG_ACCOUNT_ID=
+T_INVEST_SANDBOX_INTRADAY_ACCOUNT_ID=
 T_INVEST_PROD_TOKEN=
 T_INVEST_PROD_ACCOUNT_ID=
 TELEGRAM_BOT_TOKEN=
@@ -139,8 +141,28 @@ broker equity без пополнений/выводов; вклад бумаг�
 15% при капитале 300 000 ₽ не означает, что один цикл создаст BUY на 45 000 ₽: текущий лимит
 одной заявки может обрезать её до меньшей суммы.
 
-Все суммы в часовом Telegram-сообщении расчётные. Фактические fill, комиссия и проскальзывание
-появятся только после реализации execution/reconciliation контура; в режиме SHADOW их нет.
+Все суммы в часовом SHADOW-сообщении расчётные. Отдельное сообщение `SANDBOX · ИСПОЛНЕНИЕ`
+показывает ответ брокерского эмулятора; оно не является доказательством реальной исполнимости.
+
+### Как читать intraday Telegram
+
+Сообщение `MOEX BOT · INTRADAY SANDBOX` отделено от дневной стратегии:
+
+| Поле | Значение |
+| --- | --- |
+| `Фаза entries` | разрешено искать новые входы |
+| `monitor` | данные собираются, новые входы запрещены временем |
+| `force_flat` | все позиции выделенного счёта должны быть закрыты |
+| `loss_limit_flat` | достигнут дневной loss-gate; выполняется закрытие |
+| `цена` | движение цены за последовательное окно завершённых 5-минутных интервалов |
+| `сделки` | агрегированный imbalance исполненных TradeStats |
+| `заявки` | placements минус cancellations из OrderStats; не исполненный спрос |
+| `стакан` | видимый OBStats imbalance; не намерение участников |
+
+Пятиминутные планы, `accepted` заявки, отмены и reconciliation не отправляются. Оперативное
+сообщение появляется только после обнаружения исполненной брокерской BUY/SELL operation и
+дедуплицируется по `operation_id`. Вечером приходит отдельный intraday P&L. Источником истины
+остаются `intraday-plan-*.json`, `intraday-execution-*.json`, broker snapshots и operations.
 
 ## 4. Выбор T-Invest контура
 
@@ -193,7 +215,7 @@ python -m moex_bot.cli integration-preflight
 python -m moex_bot.cli environment-status
 ```
 
-Если планируется песочница, после добавления токена запустите `sandbox-bootstrap`, затем повторите
+Если планируется песочница, после добавления токена запустите `sandbox-bootstrap-profiles`, затем повторите
 `integration-preflight --require tinvest_sandbox`.
 
 ### Шаг 4 — ручной shadow-цикл
@@ -226,6 +248,10 @@ Get-ScheduledTaskInfo -TaskName MOEX-TInvest-Shadow-Hourly
 | `artifacts/hourly_shadow-*.json` | quality, GeoRisk, targets, виртуальные заявки и отклонения |
 | `artifacts/*.audit.jsonl` | последовательный журнал решений и состояний |
 | `artifacts/algopack_flow-*.json` | TradeStats, FUTOI, HI2 и текст отчёта |
+| `/var/lib/moex-tinvest-bot/artifacts/intraday-plan-*.json` | объединённые сигналы и прошедшие лимиты заявки intraday |
+| `/var/lib/moex-tinvest-bot/artifacts/intraday-execution-*.json` | статусы отправки на отдельный Sandbox-счёт |
+| `/var/lib/moex-tinvest-bot/artifacts/intraday-daily-performance-*.json` | вечерний баланс, P&L, операции и статистика модели |
+| `/var/lib/moex-tinvest-bot/data/intraday.sqlite3` | интервалы, дедупликация и opening equity дня |
 | `logs/hourly_shadow-*.log` | ошибки интеграций и итог команд |
 | `data/notifications.sqlite3` | pending/sent/dead Telegram-сообщения |
 | Telegram | краткий операторский отчёт |
@@ -286,6 +312,11 @@ Get-ScheduledTaskInfo -TaskName MOEX-TInvest-Shadow-Hourly
 - число Telegram-сообщений `pending/dead`;
 - стабильность сигналов и вклад каждой бумаги;
 - результат стратегии против тех же бенчмарков на одинаковом периоде.
+
+Для каждого intraday-решения проверяйте сохранённые `config_snapshot`, `portfolio_input`, сырые
+TradeStats/OrderStats/OBStats, рассчитанные imbalance/price move, risk-лимиты, execution status и
+последующую broker operation. Отсутствие любого звена означает проблему наблюдаемости, а не
+основание менять параметры стратегии.
 
 Перед дальнейшим этапом должны отсутствовать неизвестные/дублированные заявки, критические
 ошибки и необъяснённые расхождения. Стратегия должна оставаться приемлемой в OOS и при

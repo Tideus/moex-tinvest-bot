@@ -188,12 +188,15 @@ class OrderIntent:
     notional: Decimal
     rationale: str
     confirm_margin_trade: bool = False
+    order_type: str = "limit"
 
     def __post_init__(self) -> None:
         if self.lots <= 0:
             raise ValueError("lots must be positive")
         if self.limit_price <= ZERO or self.notional <= ZERO:
             raise ValueError("price and notional must be positive")
+        if self.order_type not in {"limit", "market"}:
+            raise ValueError("order_type must be limit or market")
 
 
 @dataclass(frozen=True, slots=True)

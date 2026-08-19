@@ -55,6 +55,7 @@ shadow_status=0
   --portfolio "${portfolio_path}" \
   --geo "${geo_path}" \
   --output "${shadow_path}" \
+  --notifications "${APP_DIR}/config/notifications.json" \
   --outbox "${outbox_path}" || shadow_status=$?
 
 execution_status=0
@@ -63,8 +64,7 @@ if [[ "${shadow_status}" -eq 0 ]]; then
     --shadow "${shadow_path}" \
     --portfolio "${portfolio_path}" \
     --runtime "/etc/moex-tinvest-bot/runtime.json" \
-    --output "${execution_path}" \
-    --outbox "${outbox_path}" || execution_status=$?
+    --output "${execution_path}" || execution_status=$?
   if [[ "${execution_status}" -ne 0 && "${execution_status}" -ne 3 ]]; then
     shadow_status="${execution_status}"
   fi
@@ -73,7 +73,7 @@ fi
 # Entitlement or network failures are visible in the log but do not replace shadow_status.
 "${PYTHON_BIN}" -m moex_bot.cli algopack-flow \
   --secid SBER --futures-ticker SBERF \
-  --output "${flow_path}" --outbox "${outbox_path}" || true
+  --output "${flow_path}" || true
 
 telegram_status=0
 "${PYTHON_BIN}" -m moex_bot.cli telegram-send \

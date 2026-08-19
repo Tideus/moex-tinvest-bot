@@ -16,6 +16,11 @@ T-Invest Sandbox. Статус `validated` означает только «пл�
 исполнение подтверждают отдельные статусы sandbox adapter: `accepted`, `partially_filled`,
 `filled`, `rejected`, `cancelled` или `unknown`. Production-заявки кодом запрещены.
 
+Портфельные контуры разделены в `config/accounts.json`: дневная long-only модель закреплена за
+профилем `long`, а пятиминутный движок — за отдельным профилем `intraday`. Их позиции, лимиты,
+оборот, P&L и account ID нельзя смешивать. Для intraday разрешён только Sandbox-контур и
+используется отдельный plan/execution runner.
+
 Текущий Ubuntu runner перед каждым циклом читает выбранный в `runtime.json` счёт T‑Invest через
 официальные REST-методы Portfolio, Positions, Orders и OperationsByCursor. Снимок сохраняется рядом с
 shadow artifact. Неизвестная позиция вне `universe.json`, несовпавшая лотность или незавершённая
@@ -28,6 +33,42 @@ shadow artifact. Неизвестная позиция вне `universe.json`, �
 
 ALGOPACK TradeStats/FUTOI/HI2, отчёт о крупных держателях и ownership registry сейчас являются
 отдельным информационным слоем. Они попадают в отчёты, но пока не входят в формулу отбора акций.
+
+## Отдельный intraday-цикл
+
+Intraday не переиспользует дневной сигнал и не переключает account ID глобально:
+
+```text
+moex-tinvest-intraday.timer (каждые 5 минут, рабочие дни)
+  → отмена всех оставшихся активных заявок только intraday Sandbox-счёта
+  → повторная проверка, что активных заявок не осталось
+  → Portfolio + Positions + Orders + Operations именно intraday-счёта
+  → три пакетных ALGOPACK latest=1: TradeStats, OrderStats, OBStats
+  → join по SECID + tradedate + tradetime
+  → накопление последовательных 5-минутных интервалов в intraday.sqlite3
+  → price move + исполненный imbalance + order-flow + book imbalance + spread gate
+  → лимиты equity, cash, оборота, числа входов и числа позиций
+  → отдельный intraday-plan JSON
+  → Sandbox limit BUY/SELL; short требует confirmMarginTrade и повторной проверки инструмента
+  → execution JSON
+  → повторное чтение Operations
+  → Telegram только для новой исполненной BUY/SELL операции
+```
+
+TradeStats интерпретируется как исполненные сделки. OrderStats — события выставления/снятия, а
+не исполненный спрос. OBStats — видимое состояние стакана, а не обещание будущего движения.
+Направление допускается только когда все компоненты согласованы; отношения рассчитываются из
+сумм числителей и знаменателей, а не усреднением готовых процентов.
+
+Сигнал дедуплицируется по `SECID + interval + side`, поэтому один и тот же завершённый интервал
+не создаёт повторный вход. Перед каждым новым циклом активный остаток прошлой лимитной заявки
+отменяется; затем брокерский snapshot заново определяет фактическую позицию после возможного
+частичного исполнения.
+
+После `new_entries_stop_moscow` новые входы запрещены. После `force_flat_moscow` long закрывается
+market SELL, short — market BUY. Если свежая цена для открытой позиции отсутствует, цикл падает
+fail-closed и пишет ошибку вместо фиктивного подтверждения закрытия. Следующий цикл снова
+сверяет брокерскую позицию. Sandbox market fill не доказывает исполнимость на реальном рынке.
 
 ## Последовательность одного часового цикла
 
@@ -45,8 +86,9 @@ systemd timer
   → сравнение с входным портфелем
   → виртуальные BUY/SELL
   → независимый risk-gate
-  → artifact + audit JSONL + Telegram outbox
-  → если sandbox gate включён: до 3 лимитных заявок → отдельный execution artifact/Telegram
+  → artifact + audit JSONL
+  → Telegram outbox только в настроенный утренний час
+  → если sandbox gate включён: до 3 лимитных заявок → отдельный execution artifact
   → отдельный ALGOPACK flow-отчёт
 ```
 
@@ -253,11 +295,17 @@ sudo moex-botctl decisions \
 | `geo-*.json` | события и свежесть геополитической ленты |
 | `notifications.sqlite3` | pending/sent/dead исходящих Telegram-сообщений |
 | `sandbox-execution-*.json` | реально отправленные в Sandbox заявки и ответы брокера |
+| `intraday-plan-*.json` | фаза, SuperCandles, формулы признаков, конфиг, broker portfolio, сигналы, планы и причины отсутствия входа |
+| `intraday-execution-*.json` | отправленные заявки и первичный статус брокера |
+| `intraday.sqlite3` | полная последовательность 5-минутных интервалов, дедупликация сигналов и opening equity |
+| `intraday-daily-performance-*.txt/.json` | баланс и P&L выделенного счёта, операции и статистика модели |
 | `daily-performance-*.txt/.json` | дневной balance/P&L и вклад бумаг |
 | `weekly-performance-*.txt/.json` | недельный P&L, benchmark, просадка и review verdict |
 
-Telegram shadow-отчёт показывает целевые бумаги, виртуальные BUY/SELL и причины отказов. При
-расхождении Telegram и JSON источником истины является неизменённый JSON + audit JSONL.
+Утренний Telegram shadow-отчёт показывает целевые бумаги, виртуальные BUY/SELL и причины
+отказов. Остальные часовые циклы сохраняют те же данные без отправки сообщения. Intraday
+уведомляет только по брокерской операции, поэтому `accepted` не называется сделкой. При
+расхождении Telegram и JSON источником истины является неизменённый JSON + audit JSONL/SQLite.
 
 ## Как оценивать качество решений
 

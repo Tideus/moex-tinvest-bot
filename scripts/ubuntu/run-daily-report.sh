@@ -12,6 +12,7 @@ report_date="${MOEX_BOT_REPORT_DATE:-$(date --date='TZ="Europe/Moscow" now' +%F)
 weekday="$(date --date="${report_date}" +%u)"
 stamp="$(date -u +%Y%m%dT%H%M%SZ)"
 output_path="${STATE_DIR}/artifacts/daily-performance-${report_date}.txt"
+intraday_output_path="${STATE_DIR}/artifacts/intraday-daily-performance-${report_date}.txt"
 outbox_path="${STATE_DIR}/data/notifications.sqlite3"
 log_path="${LOG_DIR}/daily-report-${stamp}.log"
 
@@ -30,10 +31,24 @@ report_status=0
   --universe "${APP_DIR}/config/universe.json" \
   --runtime /etc/moex-tinvest-bot/runtime.json \
   --services "${APP_DIR}/config/services.json" \
+  --notifications "${APP_DIR}/config/notifications.json" \
   --output "${output_path}" \
   --outbox "${outbox_path}" || report_status=$?
 if [[ "${report_status}" -ne 0 && "${report_status}" -ne 3 ]]; then
   exit "${report_status}"
+fi
+
+intraday_status=0
+"${PYTHON_BIN}" -m moex_bot.cli intraday-performance-report \
+  --accounts "${APP_DIR}/config/accounts.json" \
+  --universe "${APP_DIR}/config/universe.json" \
+  --notifications "${APP_DIR}/config/notifications.json" \
+  --artifacts "${STATE_DIR}/artifacts" \
+  --report-date "${report_date}" \
+  --output "${intraday_output_path}" \
+  --outbox "${outbox_path}" || intraday_status=$?
+if [[ "${intraday_status}" -ne 0 && "${intraday_status}" -ne 3 ]]; then
+  exit "${intraday_status}"
 fi
 
 if [[ "${weekday}" -eq 5 ]]; then
@@ -48,6 +63,7 @@ if [[ "${weekday}" -eq 5 ]]; then
     --universe "${APP_DIR}/config/universe.json" \
     --runtime /etc/moex-tinvest-bot/runtime.json \
     --services "${APP_DIR}/config/services.json" \
+    --notifications "${APP_DIR}/config/notifications.json" \
     --output "${weekly_output}" \
     --outbox "${outbox_path}" \
     --weekly || weekly_status=$?

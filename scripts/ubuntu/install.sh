@@ -115,6 +115,10 @@ install -m 0644 "${PROJECT_DIR}/deploy/ubuntu/moex-tinvest-daily-report.service"
   "$(root_path /etc/systemd/system/moex-tinvest-daily-report.service)"
 install -m 0644 "${PROJECT_DIR}/deploy/ubuntu/moex-tinvest-daily-report.timer" \
   "$(root_path /etc/systemd/system/moex-tinvest-daily-report.timer)"
+install -m 0644 "${PROJECT_DIR}/deploy/ubuntu/moex-tinvest-intraday.service" \
+  "$(root_path /etc/systemd/system/moex-tinvest-intraday.service)"
+install -m 0644 "${PROJECT_DIR}/deploy/ubuntu/moex-tinvest-intraday.timer" \
+  "$(root_path /etc/systemd/system/moex-tinvest-intraday.timer)"
 install -m 0644 "${PROJECT_DIR}/deploy/ubuntu/moex-tinvest-bot.logrotate" \
   "$(root_path /etc/logrotate.d/moex-tinvest-bot)"
 install -m 0755 "${PROJECT_DIR}/scripts/ubuntu/moex-botctl.sh" \

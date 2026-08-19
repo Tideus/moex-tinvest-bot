@@ -1,0 +1,41 @@
+{
+  "version": 1,
+  "base_currency": "RUB",
+  "profiles": [
+    {
+      "profile_id": "long",
+      "purpose": "long",
+      "environment": "sandbox",
+      "account_id_env": "T_INVEST_SANDBOX_LONG_ACCOUNT_ID",
+      "target_balance_rub": "300000",
+      "order_execution_enabled": false,
+      "strategies": [
+        {
+          "strategy_id": "daily_long_momentum_v1",
+          "config_path": "config/shadow.json",
+          "enabled": true
+        }
+      ]
+    },
+    {
+      "profile_id": "intraday",
+      "purpose": "intraday",
+      "environment": "sandbox",
+      "account_id_env": "T_INVEST_SANDBOX_INTRADAY_ACCOUNT_ID",
+      "target_balance_rub": "300000",
+      "order_execution_enabled": true,
+      "strategies": [
+        {
+          "strategy_id": "intraday_momentum_v1",
+          "config_path": "config/intraday.json",
+          "enabled": true
+        },
+        {
+          "strategy_id": "intraday_mean_reversion_v1",
+          "config_path": "config/intraday.json",
+          "enabled": false
+        }
+      ]
+    }
+  ]
+}

@@ -55,14 +55,17 @@ def resolve_tinvest_runtime(
     services: ExternalServiceConfig,
     *,
     environment: TInvestEnvironment,
+    account_id_env: str | None = None,
 ) -> TInvestRuntimeConfig:
     if environment is TInvestEnvironment.SANDBOX:
         token_env = "T_INVEST_SANDBOX_TOKEN"
-        account_env = "T_INVEST_SANDBOX_ACCOUNT_ID"
+        account_env = account_id_env or "T_INVEST_SANDBOX_ACCOUNT_ID"
         grpc = services.t_invest.sandbox_grpc
         rest = services.t_invest.sandbox_rest
     else:
         token_env = "T_INVEST_PROD_TOKEN"
+        if account_id_env is not None:
+            raise ValueError("custom account id env is sandbox-only")
         account_env = "T_INVEST_PROD_ACCOUNT_ID"
         grpc = services.t_invest.prod_grpc
         rest = services.t_invest.prod_rest

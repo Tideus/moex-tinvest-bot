@@ -27,6 +27,7 @@ GET_SANDBOX_WITHDRAW_LIMITS_PATH = f"{SANDBOX_SERVICE_PATH}/GetSandboxWithdrawLi
 GET_SANDBOX_PORTFOLIO_PATH = f"{SANDBOX_SERVICE_PATH}/GetSandboxPortfolio"
 GET_SANDBOX_POSITIONS_PATH = f"{SANDBOX_SERVICE_PATH}/GetSandboxPositions"
 GET_SANDBOX_ORDERS_PATH = f"{SANDBOX_SERVICE_PATH}/GetSandboxOrders"
+CANCEL_SANDBOX_ORDER_PATH = f"{SANDBOX_SERVICE_PATH}/CancelSandboxOrder"
 GET_SANDBOX_OPERATIONS_BY_CURSOR_PATH = (
     f"{SANDBOX_SERVICE_PATH}/GetSandboxOperationsByCursor"
 )
@@ -404,6 +405,33 @@ class TInvestSandboxAccountService:
             source=source,
         )
 
+    def reconcile_cancel_active_orders(self, account_id: str) -> tuple[str, ...]:
+        """Cancel every still-active order on a dedicated sandbox account, then verify empty."""
+        clean = account_id.strip()
+        if not clean:
+            raise ValueError("sandbox account id is required")
+        response = self._post(GET_SANDBOX_ORDERS_PATH, {"accountId": clean})
+        raw_orders = response.get("orders", [])
+        if not isinstance(raw_orders, list):
+            raise ValueError("unexpected GetSandboxOrders response")
+        cancelled: list[str] = []
+        for raw in raw_orders:
+            if not isinstance(raw, Mapping):
+                raise ValueError("unexpected active sandbox order")
+            order_id = str(raw.get("orderId", "")).strip()
+            if not order_id:
+                raise ValueError("active sandbox order has no orderId")
+            self._post(
+                CANCEL_SANDBOX_ORDER_PATH,
+                {"accountId": clean, "orderId": order_id},
+            )
+            cancelled.append(order_id)
+        verified = self._post(GET_SANDBOX_ORDERS_PATH, {"accountId": clean})
+        remaining = verified.get("orders", [])
+        if not isinstance(remaining, list) or remaining:
+            raise ValueError("sandbox active-order reconciliation is incomplete")
+        return tuple(cancelled)
+
 
 def _trade_operation(
     raw: object, instruments_by_uid: Mapping[str, Instrument]
@@ -496,9 +524,11 @@ class TInvestSandboxExecutionAdapter:
             raise ValueError("timeout_seconds must be positive")
 
     @classmethod
-    def from_environment(cls) -> TInvestSandboxExecutionAdapter:
+    def from_environment(
+        cls, *, account_id_env: str = "T_INVEST_SANDBOX_ACCOUNT_ID"
+    ) -> TInvestSandboxExecutionAdapter:
         token = os.getenv("T_INVEST_SANDBOX_TOKEN", "")
-        account_id = os.getenv("T_INVEST_SANDBOX_ACCOUNT_ID", "")
+        account_id = os.getenv(account_id_env, "")
         return cls(token, account_id, UrlLibJsonTransport())
 
     @property
@@ -534,18 +564,21 @@ class TInvestSandboxExecutionAdapter:
                 raise ValueError("T-Invest short is unavailable for instrument")
         payload: dict[str, object] = {
             "quantity": str(intent.lots),
-            "price": decimal_to_quotation(intent.limit_price),
             "direction": (
                 "ORDER_DIRECTION_BUY" if intent.side is Side.BUY else "ORDER_DIRECTION_SELL"
             ),
             "accountId": self.account_id,
-            "orderType": "ORDER_TYPE_LIMIT",
+            "orderType": (
+                "ORDER_TYPE_MARKET" if intent.order_type == "market" else "ORDER_TYPE_LIMIT"
+            ),
             "orderId": intent.order_request_id,
             "instrumentId": intent.instrument.uid,
             "timeInForce": "TIME_IN_FORCE_DAY",
             "priceType": "PRICE_TYPE_CURRENCY",
             "confirmMarginTrade": intent.confirm_margin_trade,
         }
+        if intent.order_type == "limit":
+            payload["price"] = decimal_to_quotation(intent.limit_price)
         try:
             response = self.transport.post(
                 SANDBOX_BASE_URL + POST_ORDER_PATH,

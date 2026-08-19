@@ -23,6 +23,99 @@ sudo moex-botctl prelaunch
 
 После изменения `runtime.json` примените настройки командой `sudo moex-botctl start`.
 
+## `accounts.json`
+
+Реестр независимых портфельных контуров. В нём нет реальных account ID: хранятся только имена
+переменных окружения. Схема требует два Sandbox-профиля:
+
+| Профиль | Назначение | Целевой баланс | Account ID в `bot.env` | Стратегии |
+| --- | --- | ---: | --- | --- |
+| `long` | дневной long-only портфель | 300 000 ₽ | `T_INVEST_SANDBOX_LONG_ACCOUNT_ID` | `daily_long_momentum_v1` → `shadow.json` |
+| `intraday` | сделки внутри сессии | 300 000 ₽ | `T_INVEST_SANDBOX_INTRADAY_ACCOUNT_ID` | отдельные momentum и mean-reversion |
+
+`order_execution_enabled` задаётся отдельно: в поставляемом конфиге intraday Sandbox-допуск
+включён, а long продолжает управляться действующим `runtime.json`. Общий токен Sandbox остаётся
+в `T_INVEST_SANDBOX_TOKEN`. Bootstrap также записывает long account в прежний
+`T_INVEST_SANDBOX_ACCOUNT_ID`, чтобы действующий дневной runner сохранил совместимость.
+
+Создать или восстановить оба счёта и довести каждый до целевого баланса:
+
+```bash
+sudo bash -c '
+set -a
+source /etc/moex-tinvest-bot/bot.env
+set +a
+exec /opt/moex-tinvest-bot/.venv/bin/python -m moex_bot.cli \
+  sandbox-bootstrap-profiles \
+  --accounts /opt/moex-tinvest-bot/config/accounts.json \
+  --env-file /etc/moex-tinvest-bot/bot.env \
+  --fund-targets
+'
+```
+
+Повторный запуск использует сохранённый ID или открытый счёт с тем же именем и пополняет только
+обнаруженный дефицит.
+
+## `intraday.json`
+
+Отдельная схема работающего внутридневного Sandbox-движка. Production-значение отсутствует и
+отклоняется валидатором.
+
+| Параметр | Значение/диапазон | Влияние |
+| --- | --- | --- |
+| `execution_stage` | `research_only` или `sandbox` | Совпадает с gate профиля `intraday`; production запрещён. |
+| `candle_minutes` | только `5` | Размер завершённого интервала TradeStats/OrderStats/OBStats. |
+| `scan_interval_minutes` | только `5` | Частота systemd-цикла. |
+| `session.new_entries_start_moscow` | `HH:MM` | До этого времени выполняется только мониторинг/reconciliation. |
+| `session.new_entries_stop_moscow` | `HH:MM` | После этого времени новые позиции запрещены. |
+| `session.force_flat_moscow` | `HH:MM` | Начиная с этого времени все позиции закрываются рыночными Sandbox-заявками. |
+| `risk.max_capital_weight` | `(0,0.10]` | Совокупный капитал под intraday-позициями. |
+| `risk.max_position_notional_rub` | положительная сумма | Максимальный номинал одного входа; сейчас 10 000 ₽. |
+| `risk.max_concurrent_positions` | `1…2` | Одновременные позиции. |
+| `risk.max_entries_per_day` | `1…3` | Новые сигналы, зафиксированные в SQLite за московский день. |
+| `risk.max_daily_loss_weight` | `(0,0.01]` | При достижении убытка относительно первого equity дня новые входы блокируются, позиции закрываются. |
+| `risk.max_daily_turnover_rub` | положительная сумма | Двусторонний оборот по операциям intraday-счёта. |
+| `risk.allow_short` | boolean | Разрешает short только при подтверждённом `shortEnabledFlag`. |
+| `risk.allow_overnight` | только `false` | Перенос позиции запрещён. |
+| `execution.order_type` | только `limit` | Входы — лимитные; обязательное закрытие использует market отдельно в коде. |
+| `execution.order_ttl_seconds` | `5…300` | Документированный TTL; фактически активный остаток отменяется в начале следующего 5-минутного цикла. |
+| `execution.cancel_if_signal_invalidated` | boolean | Политика отмены устаревшего входа. |
+| `execution.chase_price` | `false` | Запрещает переставлять вход вслед за ценой. |
+| `signal.history_bars` | `3…12` | Число строго последовательных завершённых интервалов. |
+| `signal.min_price_move` | `(0,1]` | Минимальное абсолютное движение цены за окно. |
+| `signal.min_abs_trade_imbalance` | `(0,1]` | Порог исполненного потока `(Σval_b−Σval_s)/(Σval_b+Σval_s)`. |
+| `signal.min_abs_order_flow` | `(0,1]` | Порог направления выставлений минус снятия заявок. |
+| `signal.min_abs_book_imbalance` | `(0,1]` | Порог видимого дисбаланса стакана. |
+| `signal.max_spread_bbo` | `(0,1]` | Максимальное сырое значение поля ALGOPACK `spread_bbo`. |
+| `strategies[]` | именованный массив | Momentum включён; mean-reversion оставлен выключенным до отдельного OOS-теста. |
+
+Каждый цикл выполняет только три пакетных запроса `latest=1` — по одному для TradeStats,
+OrderStats и OBStats — и сохраняет объединённые интервалы в
+`/var/lib/moex-tinvest-bot/data/intraday.sqlite3`. Сигнал создаётся только при совпадении
+`SECID + tradedate + tradetime` во всех трёх наборах.
+
+Это консервативные Sandbox-ограничения, а не доказанная прибыльная модель. Валидатор допускает только
+`research_only` и `sandbox`; любое production-значение отклоняется. Кроме того, значения
+`accounts.json.order_execution_enabled` и `intraday.json.execution_stage` обязаны совпадать.
+
+## `notifications.json`
+
+| Параметр | Допустимое значение | Влияние |
+| --- | --- | --- |
+| `timezone` | IANA timezone | Часовой пояс окон Telegram; по умолчанию `Europe/Moscow`. |
+| `long.morning_analysis_hour` | `0..23` | Единственный час, когда long-анализ ставится в outbox. Остальные расчёты только сохраняются. |
+| `long.evening_report_enabled` | boolean | Отправлять дневной P&L, баланс и вклад бумаг. |
+| `intraday.notify_filled_operations` | boolean | Отправлять только новые broker BUY/SELL operations; `accepted` и планы не уведомляют. |
+| `intraday.evening_report_enabled` | boolean | Отправлять отдельный intraday итог дня. |
+| `audit.persist_every_cycle` | только `true` | Каждый цикл обязан оставить машинный след. |
+| `audit.include_config_snapshot` | только `true` | Сохранять использованные параметры стратегии. |
+| `audit.include_market_inputs` | только `true` | Сохранять свечи, SuperCandles и рассчитанные признаки. |
+| `audit.include_portfolio_input` | только `true` | Сохранять баланс, позиции, блокировки и заявки до решения. |
+| `audit.include_decisions_and_rejections` | только `true` | Сохранять цели, заявки и причины отказов risk-gate. |
+
+Audit-флаги намеренно нельзя отключить: неполные данные делают недельную оценку модели
+невоспроизводимой.
+
 ## `runtime.json`
 
 Операторский конфиг контура и systemd-расписания. Секретов содержать не должен.
@@ -132,8 +225,9 @@ benchmark, максимальная просадка, положительный
 несовпавшая лотность или незавершённая загрузка лимитов блокирует цикл. В shadow-режиме
 `daily_turnover` восстанавливается перед каждым циклом из исполненных BUY/SELL операций брокера
 за текущие московские сутки. Ошибка чтения операций блокирует снимок и новый торговый цикл.
-Наличие активной брокерской заявки также блокирует все новые намерения, пока не реализовано
-поштучное reconciliation её стороны, остатка и зарезервированной суммы.
+В часовом long-контуре наличие активной брокерской заявки блокирует все новые намерения. В
+отдельном intraday-контуре перед расчётом выполняется cancel/reconciliation всех активных заявок
+только выделенного счёта, после чего позиции и доступные средства читаются повторно.
 
 ## `services.json`
 

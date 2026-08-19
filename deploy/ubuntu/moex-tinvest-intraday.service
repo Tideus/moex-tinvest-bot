@@ -1,0 +1,37 @@
+[Unit]
+Description=MOEX/T-Invest five-minute intraday Sandbox cycle
+Documentation=file:///opt/moex-tinvest-bot/docs/UBUNTU_24_SERVER_RU.md
+Wants=network-online.target
+After=network-online.target
+ConditionPathExists=/etc/moex-tinvest-bot/bot.env
+
+[Service]
+Type=oneshot
+User=moexbot
+Group=moexbot
+WorkingDirectory=/opt/moex-tinvest-bot
+EnvironmentFile=/etc/moex-tinvest-bot/bot.env
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=TZ=Europe/Moscow
+ExecStartPre=/opt/moex-tinvest-bot/.venv/bin/python -m moex_bot.cli config-check --root /opt/moex-tinvest-bot
+ExecStartPre=/opt/moex-tinvest-bot/.venv/bin/python -m moex_bot.cli integration-preflight --services /opt/moex-tinvest-bot/config/services.json --runtime /etc/moex-tinvest-bot/runtime.json --require moex_algopack --require telegram
+ExecStart=/usr/bin/bash /opt/moex-tinvest-bot/scripts/ubuntu/run-intraday-cycle.sh
+TimeoutStartSec=4min
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+ReadWritePaths=/var/lib/moex-tinvest-bot /var/log/moex-tinvest-bot
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target
+

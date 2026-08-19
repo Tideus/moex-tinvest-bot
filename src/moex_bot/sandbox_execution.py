@@ -56,9 +56,12 @@ def execute_shadow_plan(
     if not isinstance(quality, Mapping) or quality.get("passed") is not True:
         raise ValueError("only a quality-passed shadow plan can be executed")
     run_id = str(raw.get("run_id", ""))
-    if not run_id.startswith("shadow-"):
+    prefix = next(
+        (item for item in ("shadow-", "intraday-") if run_id.startswith(item)), None
+    )
+    if prefix is None:
         raise ValueError("shadow artifact has an invalid run id")
-    run_at = datetime.fromisoformat(run_id.removeprefix("shadow-"))
+    run_at = datetime.fromisoformat(run_id.removeprefix(prefix))
     if run_at.tzinfo is None or as_of - run_at > timedelta(minutes=30):
         raise ValueError("shadow execution plan is stale")
     if run_at - as_of > timedelta(minutes=1):
@@ -159,4 +162,5 @@ def _intent(record: object) -> OrderIntent:
         notional=Decimal(str(raw["notional"])),
         rationale=str(raw.get("rationale", "")),
         confirm_margin_trade=bool(raw.get("confirm_margin_trade", False)),
+        order_type=str(raw.get("order_type", "limit")),
     )

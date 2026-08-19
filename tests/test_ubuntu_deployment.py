@@ -49,6 +49,17 @@ def test_daily_report_timer_and_service_send_at_moscow_eod() -> None:
     assert "EnvironmentFile=/etc/moex-tinvest-bot/bot.env" in service
 
 
+def test_intraday_timer_and_service_are_isolated_and_five_minute() -> None:
+    timer = _unit("moex-tinvest-intraday.timer")
+    service = _unit("moex-tinvest-intraday.service")
+    assert "10..18:00/5:00 Europe/Moscow" in timer
+    assert "Persistent=false" in timer
+    assert "Unit=moex-tinvest-intraday.service" in timer
+    assert "run-intraday-cycle.sh" in service
+    assert "User=moexbot" in service
+    assert "ReadWritePaths=/var/lib/moex-tinvest-bot /var/log/moex-tinvest-bot" in service
+
+
 def test_env_template_contains_names_only() -> None:
     lines = [
         line for line in _unit("bot.env.example").splitlines()
@@ -64,7 +75,7 @@ def test_all_deployment_shell_scripts_use_strict_mode() -> None:
     assert {item.name for item in scripts} == {
         "activate.sh", "backup.sh", "healthcheck.sh", "install-ca-certificates.sh",
         "install.sh", "moex-botctl.sh", "run-shadow-cycle.sh", "test-deployment.sh",
-        "run-daily-report.sh", "uninstall.sh", "update.sh",
+        "run-daily-report.sh", "run-intraday-cycle.sh", "uninstall.sh", "update.sh",
     }
     for script in scripts:
         text = script.read_text(encoding="utf-8")
@@ -186,9 +197,11 @@ def test_control_stop_disables_all_timers_and_stops_current_cycles() -> None:
     assert "moex-tinvest-shadow.timer" in text
     assert "moex-tinvest-health.timer" in text
     assert "moex-tinvest-daily-report.timer" in text
+    assert "moex-tinvest-intraday.timer" in text
     assert "moex-tinvest-shadow.service" in text
     assert "moex-tinvest-health.service" in text
     assert "moex-tinvest-daily-report.service" in text
+    assert "moex-tinvest-intraday.service" in text
     assert "timers_are_stopped" in text
     assert "данные и конфиги сохранены" in text
 
@@ -201,3 +214,20 @@ def test_shadow_runner_uses_selected_broker_snapshot_not_empty_example() -> None
     assert '--runtime "/etc/moex-tinvest-bot/runtime.json"' in text
     assert '--portfolio "${portfolio_path}"' in text
     assert "portfolio_empty.json" not in text
+
+
+def test_runners_apply_compact_telegram_policy_without_losing_artifacts() -> None:
+    shadow = (PROJECT_ROOT / "scripts" / "ubuntu" / "run-shadow-cycle.sh").read_text(
+        encoding="utf-8"
+    )
+    intraday = (
+        PROJECT_ROOT / "scripts" / "ubuntu" / "run-intraday-cycle.sh"
+    ).read_text(encoding="utf-8")
+    daily = (PROJECT_ROOT / "scripts" / "ubuntu" / "run-daily-report.sh").read_text(
+        encoding="utf-8"
+    )
+    assert '--notifications "${APP_DIR}/config/notifications.json"' in shadow
+    assert '--output "${flow_path}" || true' in shadow
+    assert 'intraday-trade-notifications \\' in intraday
+    assert 'intraday-performance-report \\' in daily
+    assert 'intraday-daily-performance-${report_date}.txt' in daily

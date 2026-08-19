@@ -8,12 +8,12 @@
   "min_cash_reserve_weight": "0.10",
   "max_sector_weight": "0.35",
   "max_risk_cluster_weight": "0.45",
-  "max_short_position_weight": "0.08",
-  "max_short_gross_exposure": "0.25",
+  "max_short_position_weight": "0",
+  "max_short_gross_exposure": "0",
   "max_daily_turnover": "30000",
   "min_trade_notional": "500",
   "max_open_orders": 5,
-  "allow_margin": true,
+  "allow_margin": false,
   "live_interlock": false,
   "strategy": {
     "top_n": 5,
@@ -27,11 +27,11 @@
     "inverse_volatility_weights": true,
     "exit_rank_buffer": 2,
     "rebalance_hours_moscow": [10],
-    "shorts_enabled": true,
-    "short_top_n": 3,
+    "shorts_enabled": false,
+    "short_top_n": 0,
     "max_short_momentum": "-0.03",
     "require_below_trend_for_short": true,
     "long_target_gross": "0.60",
-    "short_target_gross": "0.24"
+    "short_target_gross": "0"
   }
 }

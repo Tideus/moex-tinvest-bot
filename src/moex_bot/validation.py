@@ -5,10 +5,13 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from .account_profiles import load_account_registry
 from .backtest import load_backtest_settings
 from .backtest_reporting import load_promotion_gates
 from .config import load_config
 from .geo_feed import load_sources
+from .intraday_config import load_intraday_config
+from .notification_policy import load_notification_policy
 from .ownership import load_ownership_disclosures
 from .runtime_config import load_runtime_config
 from .service_config import load_service_config
@@ -25,6 +28,23 @@ def validate_project_configs(root: Path) -> tuple[str, ...]:
 
     load_service_config(root / "config" / "services.json")
     checks.append("config/services.json")
+    accounts = load_account_registry(root / "config" / "accounts.json")
+    for profile in accounts.profiles:
+        for strategy in profile.strategies:
+            if not (root / strategy.config_path).is_file():
+                raise ValueError(f"strategy config does not exist: {strategy.config_path}")
+    checks.append("config/accounts.json")
+    intraday = load_intraday_config(root / "config" / "intraday.json")
+    intraday_account = accounts.by_id("intraday")
+    if intraday_account.order_execution_enabled != (
+        intraday.execution_stage == "sandbox"
+    ):
+        raise ValueError(
+            "intraday account execution gate must match intraday execution_stage"
+        )
+    checks.append("config/intraday.json")
+    load_notification_policy(root / "config" / "notifications.json")
+    checks.append("config/notifications.json")
     load_runtime_config(root / "config" / "runtime.json")
     checks.append("config/runtime.json")
     load_universe(root / "config" / "universe.json")

@@ -7,13 +7,15 @@ from typing import Any
 
 import pytest
 
-from moex_bot.cli import sandbox_bootstrap
+from moex_bot.cli import sandbox_bootstrap, sandbox_bootstrap_profiles
 from moex_bot.domain import Instrument
 from moex_bot.env_file import upsert_env_value
 from moex_bot.integrations.tinvest_sandbox import (
     SandboxAccountBootstrap,
     TInvestSandboxAccountService,
 )
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
 class SequencedTransport:
@@ -277,3 +279,52 @@ def test_noninteractive_bootstrap_never_prompts(
         == 0
     )
     assert service.top_up is None
+
+
+class FakeProfileSandboxService:
+    def __init__(self) -> None:
+        self.ids = iter(("long-id", "intraday-id"))
+        self.funded: list[tuple[str, Decimal]] = []
+
+    def ensure_account(
+        self, configured_account_id: str | None, *, account_name: str
+    ) -> SandboxAccountBootstrap:
+        assert configured_account_id == ""
+        assert account_name in {
+            "moex-tinvest-bot-long",
+            "moex-tinvest-bot-intraday",
+        }
+        return SandboxAccountBootstrap(next(self.ids), created=True)
+
+    def available_rub_balance(self, account_id: str) -> Decimal:
+        return Decimal("100000") if account_id == "long-id" else Decimal("250000")
+
+    def pay_in(self, account_id: str, amount: Decimal) -> Decimal:
+        self.funded.append((account_id, amount))
+        return Decimal("300000")
+
+
+def test_profile_bootstrap_creates_and_funds_two_separate_accounts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("T_INVEST_SANDBOX_ACCOUNT_ID", raising=False)
+    monkeypatch.delenv("T_INVEST_SANDBOX_LONG_ACCOUNT_ID", raising=False)
+    monkeypatch.delenv("T_INVEST_SANDBOX_INTRADAY_ACCOUNT_ID", raising=False)
+    env_path = tmp_path / ".env"
+    env_path.write_text("T_INVEST_SANDBOX_TOKEN=secret\n", encoding="utf-8")
+    service = FakeProfileSandboxService()
+    status = sandbox_bootstrap_profiles(
+        env_path=env_path,
+        accounts_path=PROJECT_ROOT / "config" / "accounts.json",
+        fund_targets=True,
+        service=service,  # type: ignore[arg-type]
+    )
+    assert status == 0
+    assert service.funded == [
+        ("long-id", Decimal("200000")),
+        ("intraday-id", Decimal("50000")),
+    ]
+    content = env_path.read_text(encoding="utf-8")
+    assert "T_INVEST_SANDBOX_LONG_ACCOUNT_ID=long-id" in content
+    assert "T_INVEST_SANDBOX_INTRADAY_ACCOUNT_ID=intraday-id" in content
+    assert "T_INVEST_SANDBOX_ACCOUNT_ID=long-id" in content

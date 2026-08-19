@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
 
+from .account_profiles import AccountPurpose, load_account_registry
 from .adapters import DryRunExecutionAdapter, JsonlAuditLog
 from .backtest import load_backtest_settings, run_backtest
 from .backtest_reporting import (
@@ -26,6 +27,7 @@ from .env_file import upsert_env_value
 from .geo_feed import refresh_geo_feed
 from .harness import TradingHarness
 from .integrations.algopack_flow import AlgoPackFlowAdapter
+from .integrations.algopack_intraday import AlgoPackIntradayAdapter
 from .integrations.moexalgo_data import MoexAlgoReadOnlyAdapter
 from .integrations.tinvest_sandbox import (
     GET_OPERATIONS_BY_CURSOR_PATH,
@@ -37,6 +39,13 @@ from .integrations.tinvest_sandbox import (
     TInvestSandboxExecutionAdapter,
     UrlLibJsonTransport,
 )
+from .intraday import IntradayStateStore, build_intraday_plan, render_intraday_report
+from .intraday_config import load_intraday_config
+from .intraday_performance import (
+    render_intraday_performance_report,
+    summarize_intraday_performance,
+)
+from .notification_policy import load_notification_policy, should_send_long_morning
 from .notifications import SQLiteOutbox, TelegramBotApiSender, deliver_pending
 from .ownership import load_ownership_disclosures, render_ownership_report
 from .performance import render_performance_report, summarize_performance
@@ -46,6 +55,8 @@ from .reporting import (
     render_shadow_report,
 )
 from .runtime_config import (
+    RuntimeConfig,
+    RuntimeSchedule,
     load_runtime_config,
     materialize_runtime_defaults,
     render_systemd_timer_overrides,
@@ -299,6 +310,57 @@ def sandbox_bootstrap(
     return 0
 
 
+def sandbox_bootstrap_profiles(
+    *,
+    env_path: Path,
+    accounts_path: Path,
+    fund_targets: bool,
+    service: TInvestSandboxAccountService | None = None,
+) -> int:
+    """Create/restore both named sandbox accounts and optionally fund configured targets."""
+    try:
+        registry = load_account_registry(accounts_path)
+        sandbox = service or TInvestSandboxAccountService.from_environment()
+        for profile in registry.profiles:
+            configured_id = os.getenv(profile.account_id_env, "").strip()
+            result = sandbox.ensure_account(
+                configured_id,
+                account_name=f"moex-tinvest-bot-{profile.profile_id}",
+            )
+            if result.account_id != configured_id:
+                upsert_env_value(env_path, profile.account_id_env, result.account_id)
+                os.environ[profile.account_id_env] = result.account_id
+            # Preserve the current single-runner contract while long is migrated first.
+            if profile.purpose is AccountPurpose.LONG:
+                upsert_env_value(
+                    env_path, "T_INVEST_SANDBOX_ACCOUNT_ID", result.account_id
+                )
+                os.environ["T_INVEST_SANDBOX_ACCOUNT_ID"] = result.account_id
+            balance = sandbox.available_rub_balance(result.account_id)
+            action = "created" if result.created else "verified"
+            print(
+                f"PASS: {profile.profile_id} sandbox account {action}; "
+                f"balance={_format_rub(balance)} RUB; "
+                f"target={_format_rub(profile.target_balance_rub)} RUB"
+            )
+            deficit = profile.target_balance_rub - balance
+            if not fund_targets or deficit <= 0:
+                continue
+            if deficit > MAX_SANDBOX_PAY_IN_RUB:
+                raise ValueError(
+                    f"{profile.profile_id} target deficit exceeds sandbox pay-in limit"
+                )
+            new_balance = sandbox.pay_in(result.account_id, deficit)
+            print(
+                f"PASS: {profile.profile_id} funded by {_format_rub(deficit)} RUB; "
+                f"new balance={_format_rub(new_balance)} RUB"
+            )
+    except (OSError, ValueError, KeyError, json.JSONDecodeError) as exc:
+        print(f"FAIL: sandbox profile bootstrap: {exc}")
+        return 2
+    return 0
+
+
 def environment_status(*, runtime_path: Path, services_path: Path) -> int:
     try:
         config = load_runtime_config(runtime_path)
@@ -468,6 +530,7 @@ def hourly_shadow(
     as_of: datetime,
     require_token: bool,
     outbox_path: Path | None = None,
+    notifications_path: Path = Path("config/notifications.json"),
 ) -> int:
     try:
         config = load_config(config_path)
@@ -482,7 +545,10 @@ def hourly_shadow(
             as_of=as_of,
             market_data=market_data,
         )
-        if outbox_path is not None:
+        notification_policy = load_notification_policy(notifications_path)
+        if outbox_path is not None and should_send_long_morning(
+            notification_policy, as_of
+        ):
             SQLiteOutbox(outbox_path).enqueue(
                 kind="shadow_run",
                 dedupe_key=f"shadow:{result.run_id}",
@@ -500,18 +566,297 @@ def hourly_shadow(
     return 0 if result.quality.passed else 2
 
 
+def intraday_reconcile(*, accounts_path: Path, outbox_path: Path | None = None) -> int:
+    try:
+        profile = load_account_registry(accounts_path).by_id("intraday")
+        if profile.environment is not TInvestEnvironment.SANDBOX:
+            raise ValueError("intraday reconciliation is sandbox-only")
+        token = os.getenv("T_INVEST_SANDBOX_TOKEN", "").strip()
+        account_id = os.getenv(profile.account_id_env, "").strip()
+        if not token or not account_id:
+            raise ValueError("intraday sandbox token/account id are required")
+        service = TInvestSandboxAccountService(token, transport=UrlLibJsonTransport())
+        cancelled = service.reconcile_cancel_active_orders(account_id)
+        if cancelled and outbox_path is not None:
+            now = datetime.now(UTC)
+            SQLiteOutbox(outbox_path).enqueue(
+                kind="intraday_reconciliation",
+                dedupe_key=f"intraday-reconcile:{now.isoformat()}",
+                body=(
+                    "🔄 INTRADAY SANDBOX · RECONCILIATION\n"
+                    f"Отменено оставшихся активных заявок: {len(cancelled)}\n"
+                    "После отмены список активных заявок проверен повторно."
+                ),
+                now=now,
+            )
+    except (OSError, ValueError, KeyError, json.JSONDecodeError) as exc:
+        print(f"FAIL: intraday reconciliation: {exc}")
+        return 2
+    print(f"PASS: intraday active orders reconciled; cancelled={len(cancelled)}")
+    return 0
+
+
+def intraday_plan(
+    *,
+    config_path: Path,
+    universe_path: Path,
+    portfolio_path: Path,
+    state_path: Path,
+    output_path: Path,
+    as_of: datetime,
+    outbox_path: Path | None,
+) -> int:
+    try:
+        config = load_intraday_config(config_path)
+        universe = load_universe(universe_path)
+        instruments = _verified_instruments_by_secid(universe)
+        raw_portfolio = json.loads(portfolio_path.read_text(encoding="utf-8"))
+        if not isinstance(raw_portfolio, dict):
+            raise ValueError("intraday portfolio snapshot must be an object")
+        bars = AlgoPackIntradayAdapter.from_environment().latest(
+            secids=tuple(instruments), as_of=as_of
+        )
+        plan = build_intraday_plan(
+            config=config,
+            instruments=instruments,
+            portfolio=raw_portfolio,
+            store=IntradayStateStore(state_path),
+            bars=bars,
+            as_of=as_of,
+        )
+        plan.write(
+            output_path,
+            analysis_input={
+                "as_of": as_of,
+                "config_snapshot": asdict(config),
+                "portfolio_input": raw_portfolio,
+                "supercandles": [asdict(bar) for bar in bars],
+                "signal_formula": {
+                    "price_move": "last_close / first_close - 1",
+                    "trade_imbalance": "sum(val_b-val_s) / sum(val_b+val_s)",
+                    "order_flow": "net placements after cancellations",
+                    "book_imbalance": "latest OBStats imbalance_val",
+                },
+            },
+        )
+        if outbox_path is not None and (
+            plan.signals
+            or plan.orders
+            or plan.phase in {"force_flat", "loss_limit_flat"}
+        ):
+            SQLiteOutbox(outbox_path).enqueue(
+                kind="intraday_plan",
+                dedupe_key=f"intraday-plan:{plan.run_id}",
+                body=render_intraday_report(plan),
+                now=as_of,
+            )
+    except (OSError, RuntimeError, ValueError, KeyError, json.JSONDecodeError) as exc:
+        print(f"FAIL: intraday plan: {exc}")
+        return 2
+    print(
+        f"PASS: intraday phase={plan.phase} signals={len(plan.signals)} "
+        f"orders={len(plan.orders)} result={output_path}"
+    )
+    return 0 if plan.quality_passed else 2
+
+
+def intraday_sandbox_execute(
+    *,
+    accounts_path: Path,
+    config_path: Path,
+    plan_path: Path,
+    portfolio_path: Path,
+    output_path: Path,
+    outbox_path: Path | None,
+    as_of: datetime,
+) -> int:
+    try:
+        profile = load_account_registry(accounts_path).by_id("intraday")
+        config = load_intraday_config(config_path)
+        if not profile.order_execution_enabled or config.execution_stage != "sandbox":
+            raise ValueError("intraday sandbox execution gate is disabled")
+        if profile.environment is not TInvestEnvironment.SANDBOX:
+            raise ValueError("intraday execution is sandbox-only")
+        adapter = TInvestSandboxExecutionAdapter.from_environment(
+            account_id_env=profile.account_id_env
+        )
+        runtime = RuntimeConfig(
+            environment=TInvestEnvironment.SANDBOX,
+            schedule=RuntimeSchedule(),
+            sandbox_orders_enabled=True,
+            sandbox_max_orders_per_cycle=config.max_entries_per_day,
+        )
+        result = execute_shadow_plan(
+            shadow_path=plan_path,
+            portfolio_path=portfolio_path,
+            output_path=output_path,
+            runtime=runtime,
+            adapter=adapter,
+            as_of=as_of,
+        )
+        if outbox_path is not None and (result.submitted or result.stopped_reason):
+            SQLiteOutbox(outbox_path).enqueue(
+                kind="intraday_execution",
+                dedupe_key=f"intraday-execution:{result.run_id}",
+                body=render_sandbox_execution_report(result).replace(
+                    "T‑INVEST SANDBOX", "INTRADAY T‑INVEST SANDBOX"
+                ),
+                now=as_of,
+            )
+    except (OSError, RuntimeError, ValueError, KeyError, json.JSONDecodeError) as exc:
+        print(f"FAIL: intraday sandbox execution: {exc}")
+        return 2
+    print(f"PASS: intraday sandbox submitted={len(result.submitted)}")
+    return 0
+
+
+def intraday_trade_notifications(
+    *,
+    accounts_path: Path,
+    universe_path: Path,
+    notifications_path: Path,
+    outbox_path: Path,
+    as_of: datetime,
+) -> int:
+    try:
+        if as_of.tzinfo is None:
+            raise ValueError("as_of must be timezone-aware")
+        policy = load_notification_policy(notifications_path)
+        if not policy.intraday_notify_filled_operations:
+            print("SKIP: intraday filled-operation notifications are disabled")
+            return 3
+        profile = load_account_registry(accounts_path).by_id("intraday")
+        if profile.environment is not TInvestEnvironment.SANDBOX:
+            raise ValueError("intraday trade notifications are sandbox-only")
+        token = os.getenv("T_INVEST_SANDBOX_TOKEN", "").strip()
+        account_id = os.getenv(profile.account_id_env, "").strip()
+        if not token or not account_id:
+            raise ValueError("intraday sandbox token/account id are required")
+        instruments = _verified_instruments(load_universe(universe_path))
+        zone = ZoneInfo(policy.timezone)
+        local_day = as_of.astimezone(zone).date()
+        day_start = datetime.combine(local_day, time.min, zone)
+        operations = TInvestSandboxAccountService(
+            token, UrlLibJsonTransport()
+        ).operations(
+            account_id,
+            instruments,
+            from_time=day_start,
+            to_time=as_of + timedelta(seconds=1),
+        )
+        outbox = SQLiteOutbox(outbox_path)
+        queued = 0
+        for operation in operations:
+            if operation.side not in {"BUY", "SELL"} or operation.secid is None:
+                continue
+            body = "\n".join(
+                (
+                    "⚡ INTRADAY SANDBOX · СДЕЛКА ИСПОЛНЕНА",
+                    operation.occurred_at.astimezone(zone).strftime(
+                        "%d.%m.%Y · %H:%M:%S МСК"
+                    ),
+                    f"{operation.side} {operation.secid} · {operation.quantity} шт.",
+                    f"Сумма: {operation.gross:.2f} ₽",
+                    f"Комиссия: {operation.commission:.2f} ₽",
+                    "Источник: исполненная брокерская операция, не торговое намерение.",
+                )
+            )
+            queued += int(
+                outbox.enqueue(
+                    kind="intraday_filled_operation",
+                    dedupe_key=f"intraday-operation:{operation.operation_id}",
+                    body=body,
+                    now=as_of,
+                )
+            )
+    except (OSError, RuntimeError, ValueError, KeyError, json.JSONDecodeError) as exc:
+        print(f"FAIL: intraday trade notifications: {exc}")
+        return 2
+    print(f"PASS: intraday filled operations queued={queued}")
+    return 0
+
+
+def intraday_performance_report(
+    *,
+    accounts_path: Path,
+    universe_path: Path,
+    notifications_path: Path,
+    artifacts_dir: Path,
+    report_date: date,
+    output_path: Path,
+    outbox_path: Path | None,
+    as_of: datetime,
+) -> int:
+    try:
+        policy = load_notification_policy(notifications_path)
+        profile = load_account_registry(accounts_path).by_id("intraday")
+        token = os.getenv("T_INVEST_SANDBOX_TOKEN", "").strip()
+        account_id = os.getenv(profile.account_id_env, "").strip()
+        if profile.environment is not TInvestEnvironment.SANDBOX:
+            raise ValueError("intraday performance is sandbox-only")
+        if not token or not account_id:
+            raise ValueError("intraday sandbox token/account id are required")
+        zone = ZoneInfo(policy.timezone)
+        from_time = datetime.combine(report_date, time.min, zone)
+        to_time = from_time + timedelta(days=1)
+        instruments = _verified_instruments(load_universe(universe_path))
+        operations = TInvestSandboxAccountService(
+            token, UrlLibJsonTransport()
+        ).operations(
+            account_id,
+            instruments,
+            from_time=from_time,
+            to_time=to_time,
+        )
+        summary = summarize_intraday_performance(
+            artifacts_dir.glob("intraday-portfolio-*.json"),
+            artifacts_dir.glob("intraday-plan-*.json"),
+            operations,
+            report_date=report_date,
+            timezone=policy.timezone,
+        )
+        report = render_intraday_performance_report(summary)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_text(report + "\n", encoding="utf-8")
+        output_path.with_suffix(".json").write_text(
+            json.dumps(asdict(summary), ensure_ascii=False, default=str, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        if outbox_path is not None and policy.intraday_evening_report_enabled:
+            SQLiteOutbox(outbox_path).enqueue(
+                kind="intraday_daily_performance",
+                dedupe_key=f"intraday-daily:{report_date.isoformat()}",
+                body=report,
+                now=as_of,
+            )
+    except ValueError as exc:
+        if "requires at least two portfolio snapshots" in str(exc):
+            print(f"SKIP: intraday performance report: {exc}")
+            return 3
+        print(f"FAIL: intraday performance report: {exc}")
+        return 2
+    except (OSError, RuntimeError, KeyError, json.JSONDecodeError) as exc:
+        print(f"FAIL: intraday performance report: {exc}")
+        return 2
+    print(f"PASS: intraday daily performance written to {output_path}")
+    return 0
+
+
 def broker_portfolio_snapshot(
     *,
     universe_path: Path,
     output_path: Path,
     runtime_path: Path,
     services_path: Path,
+    account_id_env: str | None = None,
 ) -> int:
     try:
         runtime_config = load_runtime_config(runtime_path)
         service_config = load_service_config(services_path)
         broker = resolve_tinvest_runtime(
-            service_config, environment=runtime_config.environment
+            service_config,
+            environment=runtime_config.environment,
+            account_id_env=account_id_env,
         )
         if not broker.token or not broker.account_id:
             raise ValueError(f"{broker.environment.value} token and account id are required")
@@ -555,12 +900,10 @@ def broker_portfolio_snapshot(
             (item.gross for item in operations if item.side in {"BUY", "SELL"}), Decimal("0")
         )
         output_path.parent.mkdir(parents=True, exist_ok=True)
+        portfolio_payload = snapshot.as_portfolio_payload(daily_turnover=daily_turnover)
+        portfolio_payload["observed_at"] = now.isoformat()
         output_path.write_text(
-            json.dumps(
-                snapshot.as_portfolio_payload(daily_turnover=daily_turnover),
-                ensure_ascii=False,
-                indent=2,
-            ),
+            json.dumps(portfolio_payload, ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
     except (RuntimeError, ValueError, OSError, json.JSONDecodeError) as exc:
@@ -592,6 +935,12 @@ def _verified_instruments(universe: tuple[Any, ...]) -> dict[str, Instrument]:
         )
         for item in universe
     }
+
+
+def _verified_instruments_by_secid(universe: tuple[Any, ...]) -> dict[str, Instrument]:
+    """Index MOEX data consumers by SECID; T-Invest consumers stay indexed by UID."""
+    by_uid = _verified_instruments(universe)
+    return {instrument.secid: instrument for instrument in by_uid.values()}
 
 
 def shadow_decisions(*, input_path: Path) -> int:
@@ -730,6 +1079,7 @@ def account_performance_report(
     outbox_path: Path | None,
     weekly: bool,
     as_of: datetime,
+    notifications_path: Path = Path("config/notifications.json"),
 ) -> int:
     try:
         if start_date > end_date:
@@ -778,7 +1128,8 @@ def account_performance_report(
             json.dumps(asdict(summary), ensure_ascii=False, default=str, indent=2) + "\n",
             encoding="utf-8",
         )
-        if outbox_path is not None:
+        notification_policy = load_notification_policy(notifications_path)
+        if outbox_path is not None and notification_policy.long_evening_report_enabled:
             period = "weekly" if weekly else "daily"
             SQLiteOutbox(outbox_path).enqueue(
                 kind=f"{period}_account_performance",
@@ -996,6 +1347,19 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Only verify the account and show balance",
     )
+    sandbox_profiles_parser = sub.add_parser(
+        "sandbox-bootstrap-profiles",
+        help="Verify/create sandbox accounts declared in accounts.json",
+    )
+    sandbox_profiles_parser.add_argument("--env-file", type=Path, default=Path(".env"))
+    sandbox_profiles_parser.add_argument(
+        "--accounts", type=Path, default=Path("config/accounts.json")
+    )
+    sandbox_profiles_parser.add_argument(
+        "--fund-targets",
+        action="store_true",
+        help="Top up each account to its configured target_balance_rub",
+    )
     broker_snapshot_parser = sub.add_parser(
         "broker-portfolio-snapshot",
         help="Read cash, positions and active orders from the selected account",
@@ -1010,6 +1374,68 @@ def build_parser() -> argparse.ArgumentParser:
     broker_snapshot_parser.add_argument(
         "--services", type=Path, default=Path("config/services.json")
     )
+    broker_snapshot_parser.add_argument(
+        "--account-id-env",
+        help="Sandbox-only account id environment variable for a dedicated profile",
+    )
+    intraday_reconcile_parser = sub.add_parser("intraday-reconcile")
+    intraday_reconcile_parser.add_argument(
+        "--accounts", type=Path, default=Path("config/accounts.json")
+    )
+    intraday_reconcile_parser.add_argument("--outbox", type=Path)
+    intraday_plan_parser = sub.add_parser("intraday-plan")
+    intraday_plan_parser.add_argument(
+        "--config", type=Path, default=Path("config/intraday.json")
+    )
+    intraday_plan_parser.add_argument(
+        "--universe", type=Path, default=Path("config/universe.json")
+    )
+    intraday_plan_parser.add_argument("--portfolio", type=Path, required=True)
+    intraday_plan_parser.add_argument("--state", type=Path, required=True)
+    intraday_plan_parser.add_argument("--output", type=Path, required=True)
+    intraday_plan_parser.add_argument("--outbox", type=Path)
+    intraday_plan_parser.add_argument("--as-of", type=datetime.fromisoformat)
+    intraday_execute_parser = sub.add_parser("intraday-sandbox-execute")
+    intraday_execute_parser.add_argument(
+        "--accounts", type=Path, default=Path("config/accounts.json")
+    )
+    intraday_execute_parser.add_argument(
+        "--config", type=Path, default=Path("config/intraday.json")
+    )
+    intraday_execute_parser.add_argument("--plan", type=Path, required=True)
+    intraday_execute_parser.add_argument("--portfolio", type=Path, required=True)
+    intraday_execute_parser.add_argument("--output", type=Path, required=True)
+    intraday_execute_parser.add_argument("--outbox", type=Path)
+    intraday_execute_parser.add_argument("--as-of", type=datetime.fromisoformat)
+    intraday_trades_parser = sub.add_parser("intraday-trade-notifications")
+    intraday_trades_parser.add_argument(
+        "--accounts", type=Path, default=Path("config/accounts.json")
+    )
+    intraday_trades_parser.add_argument(
+        "--universe", type=Path, default=Path("config/universe.json")
+    )
+    intraday_trades_parser.add_argument(
+        "--notifications", type=Path, default=Path("config/notifications.json")
+    )
+    intraday_trades_parser.add_argument("--outbox", type=Path, required=True)
+    intraday_trades_parser.add_argument("--as-of", type=datetime.fromisoformat)
+    intraday_performance_parser = sub.add_parser("intraday-performance-report")
+    intraday_performance_parser.add_argument(
+        "--accounts", type=Path, default=Path("config/accounts.json")
+    )
+    intraday_performance_parser.add_argument(
+        "--universe", type=Path, default=Path("config/universe.json")
+    )
+    intraday_performance_parser.add_argument(
+        "--notifications", type=Path, default=Path("config/notifications.json")
+    )
+    intraday_performance_parser.add_argument("--artifacts", type=Path, required=True)
+    intraday_performance_parser.add_argument(
+        "--report-date", type=date.fromisoformat, required=True
+    )
+    intraday_performance_parser.add_argument("--output", type=Path, required=True)
+    intraday_performance_parser.add_argument("--outbox", type=Path)
+    intraday_performance_parser.add_argument("--as-of", type=datetime.fromisoformat)
     environment_parser = sub.add_parser("environment-status")
     environment_parser.add_argument("--runtime", type=Path, default=Path("config/runtime.json"))
     environment_parser.add_argument("--services", type=Path, default=Path("config/services.json"))
@@ -1058,6 +1484,11 @@ def build_parser() -> argparse.ArgumentParser:
     shadow_parser.add_argument("--as-of", type=datetime.fromisoformat)
     shadow_parser.add_argument("--require-token", action="store_true")
     shadow_parser.add_argument("--outbox", type=Path)
+    shadow_parser.add_argument(
+        "--notifications",
+        type=Path,
+        default=Path("config/notifications.json"),
+    )
     sandbox_execute_parser = sub.add_parser("sandbox-execute")
     sandbox_execute_parser.add_argument("--shadow", type=Path, required=True)
     sandbox_execute_parser.add_argument("--portfolio", type=Path, required=True)
@@ -1117,6 +1548,11 @@ def build_parser() -> argparse.ArgumentParser:
     performance_parser.add_argument("--outbox", type=Path)
     performance_parser.add_argument("--weekly", action="store_true")
     performance_parser.add_argument("--as-of", type=datetime.fromisoformat)
+    performance_parser.add_argument(
+        "--notifications",
+        type=Path,
+        default=Path("config/notifications.json"),
+    )
     backtest_parser = sub.add_parser(
         "historical-backtest",
         help="Fetch real MOEX daily candles and run a next-session cost-aware backtest",
@@ -1174,12 +1610,76 @@ def main() -> int:
             top_up=args.top_up,
             no_prompt=args.no_prompt,
         )
+    if args.command == "sandbox-bootstrap-profiles":
+        return sandbox_bootstrap_profiles(
+            env_path=args.env_file,
+            accounts_path=args.accounts,
+            fund_targets=args.fund_targets,
+        )
     if args.command == "broker-portfolio-snapshot":
         return broker_portfolio_snapshot(
             universe_path=args.universe,
             output_path=args.output,
             runtime_path=args.runtime,
             services_path=args.services,
+            account_id_env=args.account_id_env,
+        )
+    if args.command == "intraday-reconcile":
+        return intraday_reconcile(accounts_path=args.accounts, outbox_path=args.outbox)
+    if args.command == "intraday-plan":
+        as_of = args.as_of or datetime.now(UTC)
+        if as_of.tzinfo is None:
+            print("FAIL: --as-of must include a timezone offset")
+            return 2
+        return intraday_plan(
+            config_path=args.config,
+            universe_path=args.universe,
+            portfolio_path=args.portfolio,
+            state_path=args.state,
+            output_path=args.output,
+            as_of=as_of,
+            outbox_path=args.outbox,
+        )
+    if args.command == "intraday-sandbox-execute":
+        as_of = args.as_of or datetime.now(UTC)
+        if as_of.tzinfo is None:
+            print("FAIL: --as-of must include a timezone offset")
+            return 2
+        return intraday_sandbox_execute(
+            accounts_path=args.accounts,
+            config_path=args.config,
+            plan_path=args.plan,
+            portfolio_path=args.portfolio,
+            output_path=args.output,
+            outbox_path=args.outbox,
+            as_of=as_of,
+        )
+    if args.command == "intraday-trade-notifications":
+        as_of = args.as_of or datetime.now(UTC)
+        if as_of.tzinfo is None:
+            print("FAIL: --as-of must include a timezone offset")
+            return 2
+        return intraday_trade_notifications(
+            accounts_path=args.accounts,
+            universe_path=args.universe,
+            notifications_path=args.notifications,
+            outbox_path=args.outbox,
+            as_of=as_of,
+        )
+    if args.command == "intraday-performance-report":
+        as_of = args.as_of or datetime.now(UTC)
+        if as_of.tzinfo is None:
+            print("FAIL: --as-of must include a timezone offset")
+            return 2
+        return intraday_performance_report(
+            accounts_path=args.accounts,
+            universe_path=args.universe,
+            notifications_path=args.notifications,
+            artifacts_dir=args.artifacts,
+            report_date=args.report_date,
+            output_path=args.output,
+            outbox_path=args.outbox,
+            as_of=as_of,
         )
     if args.command == "environment-status":
         return environment_status(runtime_path=args.runtime, services_path=args.services)
@@ -1266,6 +1766,7 @@ def main() -> int:
             outbox_path=args.outbox,
             weekly=args.weekly,
             as_of=as_of,
+            notifications_path=args.notifications,
         )
     if args.command == "historical-backtest":
         if min(args.sandbox_weeks, args.reconciled_orders, args.unresolved_orders) < 0:
@@ -1308,6 +1809,7 @@ def main() -> int:
             as_of=as_of,
             require_token=args.require_token,
             outbox_path=args.outbox,
+            notifications_path=args.notifications,
         )
     if args.command == "sandbox-execute":
         as_of = args.as_of or datetime.now(UTC)

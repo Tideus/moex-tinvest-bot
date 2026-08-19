@@ -93,21 +93,31 @@ TELEGRAM_CHAT_ID=
 ```dotenv
 T_INVEST_SANDBOX_TOKEN=
 T_INVEST_SANDBOX_ACCOUNT_ID=
+T_INVEST_SANDBOX_LONG_ACCOUNT_ID=
+T_INVEST_SANDBOX_INTRADAY_ACCOUNT_ID=
 ```
 
 Не храните токены в `/opt`, git, shell history, unit-файлах или аргументах процесса.
 
-Создайте/проверьте sandbox-счёт и интерактивно задайте виртуальное пополнение. Команда запускается
-от root только для сохранения ID в защищённый `/etc`-файл; она жёстко использует sandbox endpoint:
+Создайте/проверьте два отдельных Sandbox-счёта и доведите каждый до 300 000 ₽. Команда запускается
+от root только для сохранения ID в защищённый `/etc`-файл; она жёстко использует Sandbox endpoint:
 
 ```bash
-sudo bash -c 'set -a; source /etc/moex-tinvest-bot/bot.env; set +a; \
-  exec /opt/moex-tinvest-bot/.venv/bin/python -m moex_bot.cli sandbox-bootstrap \
-  --env-file /etc/moex-tinvest-bot/bot.env'
+sudo bash -c '
+set -a
+source /etc/moex-tinvest-bot/bot.env
+set +a
+exec /opt/moex-tinvest-bot/.venv/bin/python -m moex_bot.cli \
+  sandbox-bootstrap-profiles \
+  --accounts /opt/moex-tinvest-bot/config/accounts.json \
+  --env-file /etc/moex-tinvest-bot/bot.env \
+  --fund-targets
+'
 ```
 
-Для автоматической проверки без ожидания ввода используйте `--no-prompt`. Для явно заданного
-виртуального пополнения используйте `--top-up 300000`. После записи проверьте права:
+Команда создаёт/восстанавливает именованные `moex-tinvest-bot-long` и
+`moex-tinvest-bot-intraday`, не создаёт дубликаты при повторном запуске и записывает legacy
+`T_INVEST_SANDBOX_ACCOUNT_ID` равным long ID. После записи проверьте права:
 
 ```bash
 sudo chown root:moexbot /etc/moex-tinvest-bot/bot.env
@@ -131,9 +141,10 @@ T-Invest-контур, обязательные credentials, risk-конфиг �
 sudo moex-botctl start
 ```
 
-`start` повторяет prelaunch, применяет расписание, запускает первый shadow cycle и health-check,
-включает три timer (`shadow`, `health`, `daily-report`) и показывает фактически назначенные
-следующие запуски.
+`start` повторяет prelaunch, применяет расписание, запускает первые shadow и intraday cycles,
+затем health-check, включает четыре timer (`shadow`, `intraday`, `health`, `daily-report`) и
+показывает фактически назначенные следующие запуски. Вне intraday-окна первый intraday service
+завершается успешным `SKIP`.
 
 Полностью остановить расписание и текущие циклы, сохранив конфиги, артефакты и Telegram
 outbox:
@@ -142,7 +153,7 @@ outbox:
 sudo moex-botctl stop
 ```
 
-Команда отключает автозапуск `shadow`, `health` и `daily-report` timers. Повторный вызов
+Команда отключает автозапуск `shadow`, `intraday`, `health` и `daily-report` timers. Повторный вызов
 безопасен. Для возобновления выполните `sudo moex-botctl start`.
 
 Перед каждым shadow-расчётом runner получает из выбранного контура T-Invest фактические свободные
@@ -198,6 +209,30 @@ Healthcheck запускается каждые 15 минут и требует 
 Вне консервативного торгового окна freshness artifact не проверяется, поэтому ночь и выходные
 не создают ложную тревогу. Конфиги и обязательные credentials проверяются всегда.
 
+Отдельный `moex-tinvest-intraday.timer` запускается по рабочим дням каждые пять минут с 10:00
+до 18:55 МСК. Внутренние границы из `config/intraday.json` строже: входы разрешены с 10:15 до
+18:25, а с 18:35 — до окончания основной сессии — выполняется принудительное закрытие. Timer
+имеет `Persistent=false`: после
+перезагрузки старый рыночный интервал не воспроизводится как новый сигнал.
+
+Проверка intraday:
+
+```bash
+systemctl status moex-tinvest-intraday.timer
+sudo systemctl start moex-tinvest-intraday.service
+sudo journalctl -u moex-tinvest-intraday.service -n 100 --no-pager
+```
+
+Артефакты находятся в `/var/lib/moex-tinvest-bot/artifacts/intraday-*`, накопленные завершённые
+SuperCandles — в `/var/lib/moex-tinvest-bot/data/intraday.sqlite3`. Начало каждого цикла отменяет
+оставшиеся активные заявки только выделенного intraday-счёта и повторно читает позиции. Поэтому
+long-счёт этим reconciliation не затрагивается.
+
+Telegram не повторяет полный поток циклов. Long отправляет только утренний анализ и вечерний
+итог; intraday — только дедуплицированные исполненные broker operations и вечерний
+`intraday-daily-performance-YYYY-MM-DD`. Политика задаётся в `config/notifications.json`, а
+полные входы, признаки, конфиг, портфель и решения сохраняются независимо от неё.
+
 В `23:20 Europe/Moscow` отдельный timer сопоставляет почасовые снимки broker equity с
 исполненными sandbox-операциями. Он сохраняет `daily-performance-YYYY-MM-DD.txt` и отправляет
 в Telegram начальный/конечный баланс, общий P&L, просадку и вклад каждой бумаги. Пополнения и
@@ -206,6 +241,8 @@ Healthcheck запускается каждые 15 минут и требует 
 `COLLECT_MORE`, `REVIEW_DATA`, `REVIEW_RISK`, `OBSERVE` либо `CONTINUE_OOS`.
 Рядом с каждым `.txt` сохраняется полный структурированный `.json`; его и соответствующие
 `shadow-*.json` следует передавать Codex для недельного разбора причин и проверки гипотез.
+Тот же timer создаёт отдельные `.txt/.json` файлы intraday-итога из снимков выделенного счёта,
+его broker operations и пятиминутных plan artifacts.
 
 Sandbox не моделирует реальную ликвидность и маржинальные расходы, поэтому недельный вывод не
 меняет параметры автоматически. Проверить timer:
@@ -269,8 +306,9 @@ sudo moex-botctl diagnose --watch
 sudo moex-botctl diagnose --watch --interval 30
 ```
 
-Диагностика проверяет окружение, credentials, три timer, Telegram outbox и свежесть последнего
-shadow artifact. При ошибке показывает комментарий и последние сообщения units.
+Диагностика проверяет окружение, credentials, четыре timer, Telegram outbox и свежесть последнего
+shadow artifact, а также состояние отдельного intraday timer. При ошибке показывает комментарий
+и последние сообщения units.
 
 Историческая проверка текущей стратегии на реальных дневных свечах MOEX запускается одной
 командой:
@@ -344,7 +382,7 @@ sudo /opt/moex-tinvest-bot/scripts/ubuntu/uninstall.sh --purge
 
 Серверный shadow считается здоровым, если:
 
-- три timers (`shadow`, `health`, `daily-report`) enabled/active;
+- четыре timers (`shadow`, `intraday`, `health`, `daily-report`) enabled/active;
 - последний service result `success`;
 - healthcheck проходит;
 - новый artifact появляется каждый торговый час;

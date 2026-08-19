@@ -1,0 +1,13 @@
+[Unit]
+Description=Run MOEX/T-Invest intraday Sandbox cycle every five minutes
+
+[Timer]
+OnCalendar=Mon..Fri *-*-* 10..18:00/5:00 Europe/Moscow
+Persistent=false
+RandomizedDelaySec=5s
+AccuracySec=1s
+Unit=moex-tinvest-intraday.service
+
+[Install]
+WantedBy=timers.target
+
