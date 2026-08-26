@@ -60,6 +60,33 @@ def test_intraday_timer_and_service_are_isolated_and_five_minute() -> None:
     assert "ReadWritePaths=/var/lib/moex-tinvest-bot /var/log/moex-tinvest-bot" in service
 
 
+def test_network_services_and_runners_use_system_ca_bundle() -> None:
+    for unit_name in (
+        "moex-tinvest-shadow.service",
+        "moex-tinvest-intraday.service",
+        "moex-tinvest-health.service",
+        "moex-tinvest-daily-report.service",
+    ):
+        unit = _unit(unit_name)
+        assert "SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt" in unit
+        assert "REQUESTS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt" in unit
+    for script_name in (
+        "run-shadow-cycle.sh",
+        "run-intraday-cycle.sh",
+        "run-daily-report.sh",
+        "healthcheck.sh",
+        "moex-botctl.sh",
+    ):
+        script = (PROJECT_ROOT / "scripts" / "ubuntu" / script_name).read_text(
+            encoding="utf-8"
+        )
+        expected = (
+            'export SSL_CERT_FILE="${SSL_CERT_FILE:-'
+            '/etc/ssl/certs/ca-certificates.crt}"'
+        )
+        assert expected in script
+
+
 def test_env_template_contains_names_only() -> None:
     lines = [
         line for line in _unit("bot.env.example").splitlines()

@@ -9,6 +9,8 @@ Group=moexbot
 WorkingDirectory=/opt/moex-tinvest-bot
 EnvironmentFile=/etc/moex-tinvest-bot/bot.env
 Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
+Environment=REQUESTS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt
 ExecStart=/usr/bin/bash /opt/moex-tinvest-bot/scripts/ubuntu/healthcheck.sh
 NoNewPrivileges=true
 PrivateTmp=true

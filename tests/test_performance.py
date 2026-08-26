@@ -79,3 +79,28 @@ def test_weekly_report_refuses_automatic_strategy_change_on_small_sample(
     )
     assert summary.verdict.startswith("COLLECT_MORE")
     assert "🧠 ВЫВОД" in render_performance_report(summary, weekly=True)
+
+
+def test_legacy_artifact_outside_requested_period_does_not_break_report(
+    tmp_path: Path,
+) -> None:
+    legacy = tmp_path / "shadow-legacy.json"
+    legacy.write_text(
+        json.dumps({"run_id": "shadow-2026-08-18T07:00:00+00:00"}),
+        encoding="utf-8",
+    )
+    first = tmp_path / "shadow-current-a.json"
+    last = tmp_path / "shadow-current-b.json"
+    _artifact(first, "2026-08-25T07:00:00+00:00", "300000", "300", 0)
+    _artifact(last, "2026-08-25T15:00:00+00:00", "300100", "301", 0)
+
+    summary = summarize_performance(
+        [legacy, first, last],
+        [],
+        start_date=date(2026, 8, 25),
+        end_date=date(2026, 8, 25),
+        timezone="Europe/Moscow",
+        label="25.08.2026",
+    )
+
+    assert summary.pnl == Decimal("100")

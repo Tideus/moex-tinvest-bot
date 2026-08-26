@@ -13,6 +13,8 @@ WorkingDirectory=/opt/moex-tinvest-bot
 EnvironmentFile=/etc/moex-tinvest-bot/bot.env
 Environment=PYTHONUNBUFFERED=1
 Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
+Environment=REQUESTS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt
 Environment=TZ=Europe/Moscow
 ExecStartPre=/opt/moex-tinvest-bot/.venv/bin/python -m moex_bot.cli config-check --root /opt/moex-tinvest-bot
 ExecStartPre=/opt/moex-tinvest-bot/.venv/bin/python -m moex_bot.cli integration-preflight --services /opt/moex-tinvest-bot/config/services.json --runtime /etc/moex-tinvest-bot/runtime.json --require moex_algopack --require telegram

@@ -13,6 +13,8 @@ WorkingDirectory=/opt/moex-tinvest-bot
 EnvironmentFile=/etc/moex-tinvest-bot/bot.env
 Environment=PYTHONUNBUFFERED=1
 Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
+Environment=REQUESTS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt
 Environment=TZ=Europe/Moscow
 ExecStart=/usr/bin/bash /opt/moex-tinvest-bot/scripts/ubuntu/run-daily-report.sh
 NoNewPrivileges=true

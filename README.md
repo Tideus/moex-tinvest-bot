@@ -143,7 +143,10 @@ Ubuntu installation and updates install the five CA certificates currently shipp
 official Linux archives linked by T-Bank. Exact PEM hashes, certificate fingerprints, validity and
 source URLs are recorded in
 [`deploy/ubuntu/certificates/README.md`](deploy/ubuntu/certificates/README.md). Installation fails
-closed on any checksum mismatch and never disables TLS verification.
+closed on any checksum mismatch and never disables TLS verification. Ubuntu runners and systemd
+services explicitly bind Python/httpx to `/etc/ssl/certs/ca-certificates.crt` through
+`SSL_CERT_FILE` and `REQUESTS_CA_BUNDLE`, so dynamically loaded `moexalgo` requests use the same
+verified system trust store.
 
 ## Optional MOEX integration
 

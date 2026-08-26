@@ -1,6 +1,6 @@
 # Ubuntu 24 deployment — отчёт проверки
 
-Дата проверки: 2026-08-20.
+Дата проверки: 2026-08-27.
 
 ## Итог
 
@@ -12,8 +12,8 @@ Sandbox-контура на Ubuntu Server 24.04 LTS. Production execution нам
 
 - Ruff: PASS.
 - mypy strict: PASS, 36 source files.
-- pytest: 138 PASS.
-- Coverage: 76.60%, gate 75%.
+- pytest: 140 PASS.
+- Coverage: 76.59%, gate 75%.
 - Все 15 project/example JSON-конфигов: PASS.
 - Реальный historical MOEX backtest: PASS технически; production gate закономерно BLOCKED.
 - Сохранение исходных OHLCV, сделок, equity CSV/HTML и promotion assessment: PASS.
@@ -33,6 +33,7 @@ Sandbox-контура на Ubuntu Server 24.04 LTS. Production execution нам
 - Daily/Friday report runner and structured JSON companion: PASS.
 - Russian Trusted CA assets: PASS, five PEM files verified by committed SHA-256 manifest.
 - Ubuntu CA staging: PASS, install/update scripts route certificates to the system trust store.
+- Python/httpx CA routing: PASS, every network runner and systemd service selects the system bundle.
 - Live TLS contract: PASS, bundled RSA root validates `sandbox-invest-public-api.tbank.ru`.
 - Deterministic replay: PASS, quality true, 3 targets, 3 dry-run orders.
 - Telegram outbox health: PASS.
@@ -57,6 +58,9 @@ Sandbox-контура на Ubuntu Server 24.04 LTS. Production execution нам
 - update мог включить ранее выключенные timers после сбоя;
 - отсутствовала проверка `dead/pending_due` Telegram outbox;
 - geo collector мог не создать fail-closed payload до shadow run.
+- `httpx` внутри `moexalgo` мог игнорировать установленный system CA bundle и падать с
+  `CERTIFICATE_VERIFY_FAILED`;
+- старый shadow-артефакт несовместимой схемы вне периода отчёта мог сломать текущий дневной отчёт.
 
 ## Ограничение среды проверки
 

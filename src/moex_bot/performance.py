@@ -75,11 +75,12 @@ def summarize_performance(
     label: str,
 ) -> PerformanceSummary:
     zone = ZoneInfo(timezone)
-    points = tuple(
-        point
-        for point in (_point(path) for path in sorted(paths))
-        if start_date <= point.observed_at.astimezone(zone).date() <= end_date
+    relevant_paths = tuple(
+        path
+        for path in sorted(paths)
+        if start_date <= _artifact_observed_at(path).astimezone(zone).date() <= end_date
     )
+    points = tuple(_point(path) for path in relevant_paths)
     if len(points) < 2:
         raise ValueError("performance report requires at least two portfolio snapshots")
     first, last = points[0], points[-1]
@@ -256,6 +257,19 @@ def _point(path: Path) -> _Point:
         not isinstance(quality, Mapping) or quality.get("passed") is not True,
         len(rejected) if isinstance(rejected, list) else 0,
     )
+
+
+def _artifact_observed_at(path: Path) -> datetime:
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(raw, Mapping):
+        raise ValueError(f"invalid shadow artifact: {path}")
+    run_id = str(raw.get("run_id", ""))
+    if not run_id.startswith("shadow-"):
+        raise ValueError(f"invalid shadow run id: {path}")
+    observed_at = datetime.fromisoformat(run_id.removeprefix("shadow-"))
+    if observed_at.tzinfo is None:
+        raise ValueError(f"shadow run timestamp must be timezone-aware: {path}")
+    return observed_at
 
 
 def _max_drawdown(values: tuple[Decimal, ...]) -> Decimal:
