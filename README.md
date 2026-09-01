@@ -22,6 +22,7 @@ sudo moex-botctl diagnose
 sudo moex-botctl diagnose --watch
 sudo moex-botctl portfolio
 sudo moex-botctl decisions
+sudo moex-botctl collect-report --from 2026-08-24 --to 2026-08-31
 sudo moex-botctl sandbox-enable --confirm-sandbox
 sudo moex-botctl sandbox-disable
 ```
@@ -35,8 +36,9 @@ bash scripts/ubuntu/test-deployment.sh
 ## What works now
 
 Two independent Sandbox account profiles are declared in `config/accounts.json`: a 300,000 RUB
-daily long-only sleeve and a separate 300,000 RUB intraday sleeve. Intraday Sandbox permission is
-explicitly enabled and handled by its own five-minute plan, reconciliation and execution runner.
+daily long-only sleeve and a separate 300,000 RUB intraday sleeve. Sandbox execution is enabled
+for both profiles, remains impossible on production endpoints, and is preceded by account-specific
+active-order reconciliation.
 
 - immutable domain models using `Decimal`;
 - instrument lot/tick validation;
@@ -194,9 +196,10 @@ the configured morning analysis and evening P&L. Intraday sends deduplicated bro
 operations and an evening result; accepted/unfilled orders, plans, flow and reconciliation stay
 in the audit artifacts.
 
-`hourly-shadow` performs one cycle and exits. Use Windows Task Scheduler or another supervisor to
-invoke it hourly at `HH:05` Moscow time. It reads completed MOEX candles and writes only dry-run
-intents. The runner first polls allowlisted official CBR and MOEX RSS feeds. If any feed fails or
+`hourly-shadow` performs one analysis cycle and exits. Use Windows Task Scheduler or another
+supervisor to invoke it hourly at `HH:05` Moscow time. It reads completed MOEX candles and writes
+a fail-closed execution plan; the Ubuntu runner separately submits validated intents to Sandbox.
+The runner first polls allowlisted official CBR and MOEX RSS feeds. If any feed fails or
 the timestamp is older than two hours, exposure is automatically reduced. Keyword classification
 is intentionally conservative and must be expanded with verified issuer and sanctions sources.
 

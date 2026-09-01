@@ -45,7 +45,12 @@ def validate_project_configs(root: Path) -> tuple[str, ...]:
     checks.append("config/intraday.json")
     load_notification_policy(root / "config" / "notifications.json")
     checks.append("config/notifications.json")
-    load_runtime_config(root / "config" / "runtime.json")
+    runtime = load_runtime_config(root / "config" / "runtime.json")
+    long_account = accounts.by_id("long")
+    if long_account.order_execution_enabled != runtime.sandbox_orders_enabled:
+        raise ValueError(
+            "long account execution gate must match runtime sandbox_orders_enabled"
+        )
     checks.append("config/runtime.json")
     load_universe(root / "config" / "universe.json")
     checks.append("config/universe.json")

@@ -109,6 +109,7 @@ def test_broker_snapshot_reads_cash_positions_and_active_orders() -> None:
                         "instrumentType": "share",
                         "quantity": {"units": "30", "nano": 0},
                         "blockedLots": {"units": "2", "nano": 0},
+                        "currentPrice": {"units": "310", "nano": 0},
                     }
                 ],
             },
@@ -129,6 +130,8 @@ def test_broker_snapshot_reads_cash_positions_and_active_orders() -> None:
     assert snapshot.reported_equity == Decimal("120000")
     assert snapshot.positions_lots == {"SBER": 3}
     assert snapshot.blocked_lots == {"SBER": 2}
+    assert snapshot.position_values == {"SBER": Decimal("9300")}
+    assert snapshot.as_portfolio_payload()["positions"]["SBER"]["current_value"] == "9300"
     assert snapshot.open_orders == 1
     assert transport.calls[0]["url"].endswith("/GetSandboxPortfolio")
     assert transport.calls[1]["url"].endswith("/GetSandboxPositions")
@@ -328,3 +331,50 @@ def test_profile_bootstrap_creates_and_funds_two_separate_accounts(
     assert "T_INVEST_SANDBOX_LONG_ACCOUNT_ID=long-id" in content
     assert "T_INVEST_SANDBOX_INTRADAY_ACCOUNT_ID=intraday-id" in content
     assert "T_INVEST_SANDBOX_ACCOUNT_ID=long-id" in content
+
+
+def test_profile_bootstrap_reuses_legacy_long_account_during_migration(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    seen: list[tuple[str | None, str]] = []
+
+    class MigrationService(FakeProfileSandboxService):
+        def ensure_account(
+            self, configured_account_id: str | None, *, account_name: str
+        ) -> SandboxAccountBootstrap:
+            seen.append((configured_account_id, account_name))
+            if account_name.endswith("-long"):
+                return SandboxAccountBootstrap("legacy-long", created=False)
+            return SandboxAccountBootstrap("intraday-id", created=True)
+
+    monkeypatch.setenv("T_INVEST_SANDBOX_ACCOUNT_ID", "legacy-long")
+    monkeypatch.delenv("T_INVEST_SANDBOX_LONG_ACCOUNT_ID", raising=False)
+    monkeypatch.delenv("T_INVEST_SANDBOX_INTRADAY_ACCOUNT_ID", raising=False)
+    env_path = tmp_path / ".env"
+    env_path.write_text("T_INVEST_SANDBOX_TOKEN=secret\n", encoding="utf-8")
+    status = sandbox_bootstrap_profiles(
+        env_path=env_path,
+        accounts_path=PROJECT_ROOT / "config" / "accounts.json",
+        fund_targets=False,
+        service=MigrationService(),  # type: ignore[arg-type]
+    )
+    assert status == 0
+    assert seen[0][0] == "legacy-long"
+    assert "T_INVEST_SANDBOX_LONG_ACCOUNT_ID=legacy-long" in env_path.read_text(
+        encoding="utf-8"
+    )
+
+
+def test_profile_bootstrap_refuses_conflicting_long_account_ids(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("T_INVEST_SANDBOX_ACCOUNT_ID", "old-long")
+    monkeypatch.setenv("T_INVEST_SANDBOX_LONG_ACCOUNT_ID", "new-long")
+    monkeypatch.delenv("T_INVEST_SANDBOX_INTRADAY_ACCOUNT_ID", raising=False)
+    status = sandbox_bootstrap_profiles(
+        env_path=tmp_path / ".env",
+        accounts_path=PROJECT_ROOT / "config" / "accounts.json",
+        fund_targets=False,
+        service=FakeProfileSandboxService(),  # type: ignore[arg-type]
+    )
+    assert status == 2

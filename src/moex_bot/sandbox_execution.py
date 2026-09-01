@@ -106,9 +106,9 @@ def execute_shadow_plan(
 
 def render_sandbox_execution_report(result: SandboxExecutionResult) -> str:
     lines = [
-        "🧪 T‑INVEST SANDBOX · ИСПОЛНЕНИЕ",
+        "✅ T‑INVEST SANDBOX · РЕАЛЬНОЕ ИСПОЛНЕНИЕ НА ТЕСТОВОМ СЧЁТЕ",
         f"План: {result.run_id}",
-        f"Отправлено заявок: {len(result.submitted)}",
+        f"Передано брокеру заявок: {len(result.submitted)}",
     ]
     for record in result.submitted:
         intent = record.intent
@@ -118,7 +118,10 @@ def render_sandbox_execution_report(result: SandboxExecutionResult) -> str:
         )
     if result.stopped_reason:
         lines.append(f"⛔ {result.stopped_reason}")
-    lines.append("Это виртуальный счёт T‑Invest; реальные деньги не используются.")
+    lines.append(
+        "Заявки действительно переданы API Sandbox. Это тестовый счёт; "
+        "реальные деньги не используются."
+    )
     return "\n".join(lines)
 
 

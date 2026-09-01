@@ -29,6 +29,7 @@ Usage:
   sudo moex-botctl portfolio
   sudo moex-botctl decisions [SHADOW_JSON]
   sudo moex-botctl backtest
+  sudo moex-botctl collect-report [--from YYYY-MM-DD] [--to YYYY-MM-DD] [--output-dir DIR]
   sudo moex-botctl telegram-recover
   sudo moex-botctl contour sandbox|prod
 EOF
@@ -75,8 +76,9 @@ load_secrets() {
   set +a
 }
 
-check_intraday_credentials() {
+check_sandbox_profile_credentials() {
   [[ -n "${T_INVEST_SANDBOX_TOKEN:-}" ]]
+  [[ -n "${T_INVEST_SANDBOX_LONG_ACCOUNT_ID:-}" ]]
   [[ -n "${T_INVEST_SANDBOX_INTRADAY_ACCOUNT_ID:-}" ]]
   [[ -n "${MOEX_APIKEY:-}" ]]
 }
@@ -156,9 +158,9 @@ prelaunch() {
     "исправьте config/shadow.json; торговые действия останутся заблокированы" \
     as_service "${PYTHON_BIN}" -m moex_bot.cli preflight \
       --config "${APP_DIR}/config/shadow.json"
-  check "Intraday Sandbox credentials присутствуют" \
+  check "Long и intraday Sandbox credentials присутствуют" \
     "выполните sandbox-bootstrap-profiles и заполните MOEX_APIKEY" \
-    check_intraday_credentials
+    check_sandbox_profile_credentials
 
   heading "3/5 Интеграции"
   local requirement="tinvest_sandbox"
@@ -372,7 +374,7 @@ show_decisions() {
   if [[ -z "${input}" ]]; then
     input="$(
       find "${STATE_DIR}/artifacts" -maxdepth 1 -type f -name 'shadow-*.json' \
-        -printf '%T@ %p\n' 2>/dev/null | sort -nr | head -n 1 | cut -d' ' -f2-
+        -printf '%T@ %p\n' 2>/dev/null | sort -nr | sed -n '1{s/^[^ ]* //;p;}'
     )"
   fi
   if [[ -z "${input}" || ! -r "${input}" ]]; then
@@ -466,6 +468,120 @@ recover_telegram_outbox() {
   printf 'TELEGRAM HEALTHY: dead-сообщения повторно отправлены.\n'
 }
 
+collect_report() (
+  set -Eeuo pipefail
+  load_secrets || {
+    printf 'FAIL: cannot load %s\n' "${ENV_FILE}" >&2
+    return 2
+  }
+  local from_date="$(date --date='7 days ago' +%F)"
+  local to_date="$(date +%F)"
+  local output_dir="${BACKUP_DIR}"
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --from) shift; from_date="${1:-}" ;;
+      --to) shift; to_date="${1:-}" ;;
+      --output-dir) shift; output_dir="${1:-}" ;;
+      *) printf 'Unknown collect-report option: %s\n' "$1" >&2; return 2 ;;
+    esac
+    shift
+  done
+  date --date="${from_date}" +%F >/dev/null
+  date --date="${to_date}" +%F >/dev/null
+  if [[ "${from_date}" > "${to_date}" ]]; then
+    printf 'FAIL: --from must not be after --to.\n' >&2
+    return 2
+  fi
+  mkdir -p "${output_dir}"
+  local work_dir=""
+  work_dir="$(mktemp -d -t moex-strategy-report.XXXXXXXX)"
+  trap '[[ -n "${work_dir:-}" && -d "${work_dir}" ]] && rm -rf -- "${work_dir}"' EXIT
+  mkdir -p \
+    "${work_dir}/config" \
+    "${work_dir}/state/artifacts" \
+    "${work_dir}/state/data" \
+    "${work_dir}/logs" \
+    "${work_dir}/diagnostics"
+
+  cp -a "${APP_DIR}/config/." "${work_dir}/config/"
+  cp -a "${RUNTIME_FILE}" "${work_dir}/runtime.json"
+  if [[ -d "${STATE_DIR}/data" ]]; then
+    cp -a "${STATE_DIR}/data/." "${work_dir}/state/data/"
+  fi
+  if [[ -d "${STATE_DIR}/artifacts" ]]; then
+    find "${STATE_DIR}/artifacts" -maxdepth 1 -type f \
+      -newermt "${from_date} 00:00:00" ! -newermt "${to_date} 23:59:59" \
+      -exec cp -a -t "${work_dir}/state/artifacts" -- {} +
+  fi
+  if [[ -d "${LOG_DIR}" ]]; then
+    find "${LOG_DIR}" -maxdepth 1 -type f \
+      -newermt "${from_date} 00:00:00" ! -newermt "${to_date} 23:59:59" \
+      -exec cp -a -t "${work_dir}/logs" -- {} +
+  fi
+
+  diagnose_once >"${work_dir}/diagnostics/moex-botctl-diagnose.txt" 2>&1 || true
+  systemctl list-timers 'moex-tinvest-*' --all --no-pager \
+    >"${work_dir}/diagnostics/systemd-timers.txt" 2>&1 || true
+  systemctl --no-pager --full status \
+    moex-tinvest-shadow.service moex-tinvest-intraday.service \
+    moex-tinvest-health.service moex-tinvest-daily-report.service \
+    >"${work_dir}/diagnostics/systemd-status.txt" 2>&1 || true
+  journalctl --since "${from_date} 00:00:00" --until "${to_date} 23:59:59" \
+    -u moex-tinvest-shadow.service -u moex-tinvest-intraday.service \
+    -u moex-tinvest-health.service -u moex-tinvest-daily-report.service \
+    --no-pager >"${work_dir}/diagnostics/systemd-journal.txt" 2>&1 || true
+
+  REPORT_ROOT="${work_dir}" "${PYTHON_BIN}" -c '
+import os
+from pathlib import Path
+
+root = Path(os.environ["REPORT_ROOT"])
+secret_names = (
+    "T_INVEST_SANDBOX_TOKEN",
+    "T_INVEST_PROD_TOKEN",
+    "MOEX_APIKEY",
+    "TELEGRAM_BOT_TOKEN",
+    "TELEGRAM_CHAT_ID",
+)
+secrets = [os.environ[name].encode() for name in secret_names if os.environ.get(name)]
+for path in root.rglob("*"):
+    if not path.is_file() or path.suffix.lower() not in {".txt", ".log", ".json", ".jsonl"}:
+        continue
+    payload = path.read_bytes()
+    redacted = payload
+    for secret in secrets:
+        redacted = redacted.replace(secret, b"[REDACTED]")
+    if redacted != payload:
+        path.write_bytes(redacted)
+'
+
+  local revision="unknown"
+  revision="$(git -C "${APP_DIR}" rev-parse HEAD 2>/dev/null || printf unknown)"
+  {
+    printf 'report_from=%s\n' "${from_date}"
+    printf 'report_to=%s\n' "${to_date}"
+    printf 'created_at=%s\n' "$(date --iso-8601=seconds)"
+    printf 'git_revision=%s\n' "${revision}"
+    printf 'secrets_included=no\n'
+    printf 'bot_env_included=no\n'
+    printf 'artifacts=%s\n' "$(find "${work_dir}/state/artifacts" -type f | wc -l)"
+    printf 'logs=%s\n' "$(find "${work_dir}/logs" -type f | wc -l)"
+  } >"${work_dir}/MANIFEST.txt"
+
+  local stamp="$(date -u +%Y%m%dT%H%M%SZ)"
+  local archive="${output_dir}/moex-strategy-report-${from_date}-${to_date}-${stamp}.tar.gz"
+  tar --create --gzip --file "${archive}" --directory "${work_dir}" .
+  (cd "${output_dir}" && sha256sum "$(basename "${archive}")") \
+    >"${archive}.sha256"
+  chown root:root "${archive}" "${archive}.sha256" 2>/dev/null || true
+  chmod 0600 "${archive}" "${archive}.sha256"
+  printf '\033[1;32mREPORT READY\033[0m: %s\n' "${archive}"
+  printf 'CHECKSUM: %s\n' "${archive}.sha256"
+  printf 'Проверка: cd %s && sha256sum -c %s\n' \
+    "${output_dir}" "$(basename "${archive}.sha256")"
+  printf 'Секреты и bot.env в архив не включены.\n'
+)
+
 require_root
 command="${1:-}"
 if [[ $# -gt 0 ]]; then shift; fi
@@ -478,6 +594,7 @@ case "${command}" in
   portfolio) show_portfolio ;;
   decisions) show_decisions "$@" ;;
   backtest) historical_backtest "$@" ;;
+  collect-report) collect_report "$@" ;;
   telegram-recover) recover_telegram_outbox ;;
   contour) set_contour "$@" ;;
   sandbox-enable) set_sandbox_execution true "$@" ;;

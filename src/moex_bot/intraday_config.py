@@ -138,10 +138,15 @@ def _validate(config: IntradayConfig) -> None:
         ("min_abs_trade_imbalance", config.min_abs_trade_imbalance),
         ("min_abs_order_flow", config.min_abs_order_flow),
         ("min_abs_book_imbalance", config.min_abs_book_imbalance),
-        ("max_spread_bbo", config.max_spread_bbo),
     ):
         if not value.is_finite() or value <= 0 or value > 1:
             raise ValueError(f"intraday {name} must be in (0, 1]")
+    if (
+        not config.max_spread_bbo.is_finite()
+        or config.max_spread_bbo <= 0
+        or config.max_spread_bbo > 100
+    ):
+        raise ValueError("intraday max_spread_bbo must be in (0, 100] basis points")
 
 
 def _boolean(value: object, label: str) -> bool:

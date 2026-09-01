@@ -44,10 +44,15 @@ if [[ "${session_status}" -ne 0 ]]; then
   exit "${session_status}"
 fi
 
+"${PYTHON_BIN}" -m moex_bot.cli sandbox-reconcile \
+  --accounts "${APP_DIR}/config/accounts.json" \
+  --profile long
+
 "${PYTHON_BIN}" -m moex_bot.cli broker-portfolio-snapshot \
   --universe "${APP_DIR}/config/universe.json" \
   --runtime "/etc/moex-tinvest-bot/runtime.json" \
   --services "${APP_DIR}/config/services.json" \
+  --account-id-env T_INVEST_SANDBOX_LONG_ACCOUNT_ID \
   --output "${portfolio_path}"
 
 shadow_status=0
@@ -63,10 +68,12 @@ shadow_status=0
 execution_status=0
 if [[ "${shadow_status}" -eq 0 ]]; then
   "${PYTHON_BIN}" -m moex_bot.cli sandbox-execute \
+    --accounts "${APP_DIR}/config/accounts.json" \
     --shadow "${shadow_path}" \
     --portfolio "${portfolio_path}" \
     --runtime "/etc/moex-tinvest-bot/runtime.json" \
-    --output "${execution_path}" || execution_status=$?
+    --output "${execution_path}" \
+    --outbox "${outbox_path}" || execution_status=$?
   if [[ "${execution_status}" -ne 0 && "${execution_status}" -ne 3 ]]; then
     shadow_status="${execution_status}"
   fi

@@ -211,9 +211,14 @@ def test_control_tool_exposes_safe_operator_workflow() -> None:
         "portfolio",
         "decisions",
         "contour",
+        "collect-report",
     ):
         assert f"{command})" in text
     assert "timers не включены" in text
+    assert "bot_env_included=no" in text
+    assert "sha256sum" in text
+    assert "T_INVEST_SANDBOX_LONG_ACCOUNT_ID" in text
+    assert "T_INVEST_SANDBOX_INTRADAY_ACCOUNT_ID" in text
 
 
 def test_control_stop_disables_all_timers_and_stops_current_cycles() -> None:
@@ -241,6 +246,10 @@ def test_shadow_runner_uses_selected_broker_snapshot_not_empty_example() -> None
     assert '--runtime "/etc/moex-tinvest-bot/runtime.json"' in text
     assert '--portfolio "${portfolio_path}"' in text
     assert "portfolio_empty.json" not in text
+    assert "sandbox-reconcile" in text
+    assert "--profile long" in text
+    assert "T_INVEST_SANDBOX_LONG_ACCOUNT_ID" in text
+    assert '--outbox "${outbox_path}"' in text
 
 
 def test_runners_apply_compact_telegram_policy_without_losing_artifacts() -> None:

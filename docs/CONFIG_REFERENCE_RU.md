@@ -33,8 +33,8 @@ sudo moex-botctl prelaunch
 | `long` | дневной long-only портфель | 300 000 ₽ | `T_INVEST_SANDBOX_LONG_ACCOUNT_ID` | `daily_long_momentum_v1` → `shadow.json` |
 | `intraday` | сделки внутри сессии | 300 000 ₽ | `T_INVEST_SANDBOX_INTRADAY_ACCOUNT_ID` | отдельные momentum и mean-reversion |
 
-`order_execution_enabled` задаётся отдельно: в поставляемом конфиге intraday Sandbox-допуск
-включён, а long продолжает управляться действующим `runtime.json`. Общий токен Sandbox остаётся
+`order_execution_enabled` включён для обоих Sandbox-профилей. Общий аварийный выключатель long
+исполнения — `runtime.json.sandbox_orders_enabled`; оба gate проверяются перед отправкой. Общий токен Sandbox остаётся
 в `T_INVEST_SANDBOX_TOKEN`. Bootstrap также записывает long account в прежний
 `T_INVEST_SANDBOX_ACCOUNT_ID`, чтобы действующий дневной runner сохранил совместимость.
 
@@ -54,7 +54,9 @@ exec /opt/moex-tinvest-bot/.venv/bin/python -m moex_bot.cli \
 ```
 
 Повторный запуск использует сохранённый ID или открытый счёт с тем же именем и пополняет только
-обнаруженный дефицит.
+обнаруженный дефицит. При первой миграции старый `T_INVEST_SANDBOX_ACCOUNT_ID` переиспользуется
+как long-счёт. Если старый и новый long ID различаются, bootstrap завершается ошибкой: сначала
+нужно проверить позиции и заявки прежнего счёта.
 
 ## `intraday.json`
 
@@ -84,9 +86,9 @@ exec /opt/moex-tinvest-bot/.venv/bin/python -m moex_bot.cli \
 | `signal.history_bars` | `3…12` | Число строго последовательных завершённых интервалов. |
 | `signal.min_price_move` | `(0,1]` | Минимальное абсолютное движение цены за окно. |
 | `signal.min_abs_trade_imbalance` | `(0,1]` | Порог исполненного потока `(Σval_b−Σval_s)/(Σval_b+Σval_s)`. |
-| `signal.min_abs_order_flow` | `(0,1]` | Порог направления выставлений минус снятия заявок. |
+| `signal.min_abs_order_flow` | `(0,1]`; сейчас `0.002` | Порог нормированного направления выставлений минус снятия заявок. Значение 0,002 означает 0,2%. |
 | `signal.min_abs_book_imbalance` | `(0,1]` | Порог видимого дисбаланса стакана. |
-| `signal.max_spread_bbo` | `(0,1]` | Максимальное сырое значение поля ALGOPACK `spread_bbo`. |
+| `signal.max_spread_bbo` | `(0,100]`; сейчас `3.0` | Максимальный `spread_bbo` ALGOPACK в базисных пунктах. Значение `3.0` означает 3 б.п., а не 3%. |
 | `strategies[]` | именованный массив | Momentum включён; mean-reversion оставлен выключенным до отдельного OOS-теста. |
 
 Каждый цикл выполняет только три пакетных запроса `latest=1` — по одному для TradeStats,
@@ -123,7 +125,7 @@ Audit-флаги намеренно нельзя отключить: непол�
 | Параметр | Тип/допустимые значения | Влияние |
 | --- | --- | --- |
 | `t_invest_environment` | `sandbox` или `prod` | Выбирает endpoint и соответствующую пару token/account ID. Сам по себе не включает заявки. |
-| `sandbox_orders_enabled` | JSON boolean | Разрешает отправку прошедших risk-gate лимитных заявок только на sandbox-host. Для `prod` значение `true` запрещено. По умолчанию `false`. |
+| `sandbox_orders_enabled` | JSON boolean | Разрешает отправку прошедших risk-gate лимитных заявок только на sandbox-host. Для `prod` значение `true` запрещено. В поставляемом Sandbox-конфиге `true`; команда `sandbox-disable` является kill switch. |
 | `sandbox_max_orders_per_cycle` | целое `1…10` | Жёсткий предел числа sandbox-заявок из одного часового плана. По умолчанию `3`. |
 | `schedule.timezone` | IANA timezone, например `Europe/Moscow` | Часовой пояс выражения запуска shadow. |
 | `schedule.shadow_on_calendar` | однострочное systemd `OnCalendar` | Когда создаётся очередной shadow-снимок. По умолчанию каждый час в `HH:05`. |

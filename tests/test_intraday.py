@@ -76,6 +76,8 @@ def _portfolio(*, positions: dict[str, object] | None = None) -> dict[str, objec
 
 def test_intraday_momentum_builds_bounded_buy_and_deduplicates(tmp_path: Path) -> None:
     config = load_intraday_config(PROJECT_ROOT / "config" / "intraday.json")
+    assert config.min_abs_order_flow == Decimal("0.002")
+    assert config.max_spread_bbo == Decimal("3.0")
     store = IntradayStateStore(tmp_path / "intraday.sqlite3")
     as_of = datetime(2026, 8, 20, 10, 30, tzinfo=MOSCOW)
     bars = _bars(as_of - timedelta(minutes=15))
@@ -99,6 +101,10 @@ def test_intraday_momentum_builds_bounded_buy_and_deduplicates(tmp_path: Path) -
     )
     assert repeated.orders == ()
     assert "INTRADAY SANDBOX" in render_intraday_report(plan)
+    assert plan.signal_diagnostics == {
+        "instruments_evaluated": 1,
+        "signals_passed": 1,
+    }
 
 
 def test_intraday_falling_flow_opens_verified_short(tmp_path: Path) -> None:
@@ -166,3 +172,23 @@ def test_existing_gross_exposure_is_subtracted_from_intraday_capital(tmp_path: P
     )
     assert plan.signals
     assert plan.orders == ()
+
+
+def test_empty_supercandles_record_actionable_quality_error(tmp_path: Path) -> None:
+    config = load_intraday_config(PROJECT_ROOT / "config" / "intraday.json")
+    as_of = datetime(2026, 8, 20, 11, 0, tzinfo=MOSCOW)
+    plan = build_intraday_plan(
+        config=config,
+        instruments={"SBER": _instrument()},
+        portfolio=_portfolio(),
+        store=IntradayStateStore(tmp_path / "empty.sqlite3"),
+        bars=(),
+        as_of=as_of,
+    )
+    assert not plan.quality_passed
+    assert plan.quality_errors == ("no completed TradeStats/OrderStats/OBStats",)
+    output = tmp_path / "empty-plan.json"
+    plan.write(output)
+    raw = json.loads(output.read_text(encoding="utf-8"))
+    assert raw["quality"]["errors"] == ["no completed TradeStats/OrderStats/OBStats"]
+    assert raw["signal_diagnostics"]["failed_history"] == 1

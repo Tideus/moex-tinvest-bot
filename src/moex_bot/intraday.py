@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from collections import Counter
+from collections.abc import Mapping
 from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta
 from decimal import ROUND_HALF_UP, Decimal
@@ -41,19 +43,25 @@ class IntradayPlan:
     signals: tuple[IntradaySignal, ...]
     orders: tuple[OrderIntent, ...]
     notes: tuple[str, ...]
+    quality_errors: tuple[str, ...] = ()
+    signal_diagnostics: Mapping[str, int] | None = None
 
     def write(
         self, path: Path, *, analysis_input: dict[str, object] | None = None
     ) -> None:
         payload = {
             "run_id": self.run_id,
-            "quality": {"passed": self.quality_passed},
+            "quality": {
+                "passed": self.quality_passed,
+                "errors": list(self.quality_errors),
+            },
             "phase": self.phase,
             "signals": [asdict(item) for item in self.signals],
             "orders": [
                 {"status": "validated", "intent": asdict(item)} for item in self.orders
             ],
             "notes": list(self.notes),
+            "signal_diagnostics": dict(self.signal_diagnostics or {}),
             "analysis_input": analysis_input or {},
         }
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -161,6 +169,7 @@ def build_intraday_plan(
     local = as_of.astimezone(MOSCOW)
     run_id = f"intraday-{as_of.isoformat()}"
     store.add(bars)
+    quality_errors = () if bars else ("no completed TradeStats/OrderStats/OBStats",)
     positions = _positions(portfolio)
     equity = Decimal(str(portfolio.get("reported_equity", "0")))
     cash = Decimal(str(portfolio.get("cash", "0")))
@@ -189,11 +198,31 @@ def build_intraday_plan(
             )
         flat_orders = _flatten_orders(instruments, positions, latest_prices, as_of)
         notes = ("forced flat before overnight" if phase == "force_flat" else "daily loss gate",)
-        return IntradayPlan(run_id, bool(bars), phase, (), flat_orders, notes)
+        return IntradayPlan(
+            run_id, bool(bars), phase, (), flat_orders, notes, quality_errors, {}
+        )
     if phase != "entries":
-        return IntradayPlan(run_id, bool(bars), phase, (), (), ("new entries disabled",))
+        return IntradayPlan(
+            run_id,
+            bool(bars),
+            phase,
+            (),
+            (),
+            ("new entries disabled",),
+            quality_errors,
+            {},
+        )
     if _integer_value(portfolio.get("open_orders", 0), "open_orders") != 0:
-        return IntradayPlan(run_id, False, phase, (), (), ("active orders not reconciled",))
+        return IntradayPlan(
+            run_id,
+            False,
+            phase,
+            (),
+            (),
+            ("active orders not reconciled",),
+            ("active sandbox orders remain after reconciliation",),
+            {},
+        )
     missing_position_prices = sorted(set(positions) - set(latest_prices))
     if missing_position_prices:
         raise ValueError(
@@ -201,12 +230,19 @@ def build_intraday_plan(
             + ", ".join(missing_position_prices)
         )
 
+    gate_counts: Counter[str] = Counter()
     signals = tuple(
         sorted(
             filter(
                 None,
                 (
-                    _signal(config, secid, store.recent(secid, config.history_bars), as_of)
+                    _signal(
+                        config,
+                        secid,
+                        store.recent(secid, config.history_bars),
+                        as_of,
+                        gate_counts,
+                    )
                     for secid in instruments
                 ),
             ),
@@ -252,6 +288,8 @@ def build_intraday_plan(
         signals,
         tuple(entry_orders),
         ("completed 5-minute TradeStats/OrderStats/OBStats",),
+        quality_errors,
+        dict(sorted(gate_counts.items())),
     )
 
 
@@ -284,16 +322,22 @@ def _signal(
     secid: str,
     bars: tuple[IntradaySuperCandle, ...],
     as_of: datetime,
+    diagnostics: Counter[str] | None = None,
 ) -> IntradaySignal | None:
+    counts = diagnostics if diagnostics is not None else Counter()
+    counts["instruments_evaluated"] += 1
     if len(bars) != config.history_bars or any(bar.close <= 0 for bar in bars):
+        counts["failed_history"] += 1
         return None
     if any(
         right.observed_at - left.observed_at != timedelta(minutes=config.candle_minutes)
         for left, right in zip(bars, bars[1:], strict=False)
     ):
+        counts["failed_contiguity"] += 1
         return None
     latest = bars[-1]
     if latest.observed_at > as_of or as_of - latest.observed_at > timedelta(minutes=15):
+        counts["failed_freshness"] += 1
         return None
     move = latest.close / bars[0].close - Decimal("1")
     buy = sum((bar.buy_value for bar in bars), Decimal("0"))
@@ -308,14 +352,22 @@ def _signal(
         put_b + put_s + cancel_b + cancel_s,
     )
     direction = Decimal("1") if move > 0 else Decimal("-1")
-    if (
-        abs(move) < config.min_price_move
-        or direction * trade_imbalance < config.min_abs_trade_imbalance
-        or direction * order_flow < config.min_abs_order_flow
-        or direction * latest.book_imbalance < config.min_abs_book_imbalance
-        or latest.spread_bbo > config.max_spread_bbo
-    ):
+    failed = []
+    if abs(move) < config.min_price_move:
+        failed.append("price_move")
+    if direction * trade_imbalance < config.min_abs_trade_imbalance:
+        failed.append("trade_imbalance")
+    if direction * order_flow < config.min_abs_order_flow:
+        failed.append("order_flow")
+    if direction * latest.book_imbalance < config.min_abs_book_imbalance:
+        failed.append("book_imbalance")
+    if latest.spread_bbo > config.max_spread_bbo:
+        failed.append("spread_bbo")
+    if failed:
+        for name in failed:
+            counts[f"failed_{name}"] += 1
         return None
+    counts["signals_passed"] += 1
     return IntradaySignal(
         secid,
         Side.BUY if direction > 0 else Side.SELL,

@@ -345,6 +345,16 @@ sudo sha256sum -c /var/backups/moex-tinvest-bot/*.sha256
 Для production нужен ещё зашифрованный off-host backup и проверка восстановления. Секреты из
 `/etc` намеренно не входят в архив состояния.
 
+Полный пакет для недельной оценки стратегии и диагностики собирается отдельно:
+
+```bash
+sudo moex-botctl collect-report --from 2026-08-24 --to 2026-08-31
+```
+
+Результат и `.sha256` создаются в `/var/backups/moex-tinvest-bot`. В архив входят конфиги без
+`bot.env`, runtime, выбранные artifacts/logs, SQLite и systemd journal. Проверяйте checksum
+командой, которую напечатает `collect-report`.
+
 ## 9. Обновление
 
 Сначала сохраните backup и скопируйте новую проверенную версию проекта в `/tmp`:

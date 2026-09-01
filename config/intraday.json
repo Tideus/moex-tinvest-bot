@@ -30,9 +30,9 @@
     "history_bars": 3,
     "min_price_move": "0.003",
     "min_abs_trade_imbalance": "0.15",
-    "min_abs_order_flow": "0.05",
+    "min_abs_order_flow": "0.002",
     "min_abs_book_imbalance": "0.10",
-    "max_spread_bbo": "0.20"
+    "max_spread_bbo": "3.0"
   },
   "strategies": [
     {

@@ -178,7 +178,7 @@ def render_shadow_report(result: HarnessResult, as_of: datetime) -> str:
     quality_text = "данные корректны" if result.quality.passed else "расчёт заблокирован"
     geo_label = _GEO_LABELS.get(result.geo.level.value, result.geo.level.value)
     lines = [
-        "🧪 MOEX BOT · SHADOW",
+        "🧪 MOEX BOT · УТРЕННИЙ АНАЛИЗ / SANDBOX",
         local_time.strftime("%d.%m.%Y · %H:%M МСК"),
         "",
         f"{quality_icon} Качество: {quality_text}",
@@ -246,7 +246,7 @@ def render_shadow_report(result: HarnessResult, as_of: datetime) -> str:
                     f"цена {trend_sign} тренда"
                 )
     if result.orders:
-        lines.extend(("", "🧾 ВИРТУАЛЬНЫЕ СДЕЛКИ"))
+        lines.extend(("", "🧾 ЗАЯВКИ ДЛЯ T‑INVEST SANDBOX"))
         for record in result.orders[:12]:
             intent = record.intent
             icon = "🟢" if intent.side.value == "buy" else "🔴"
@@ -298,8 +298,9 @@ def render_shadow_report(result: HarnessResult, as_of: datetime) -> str:
     lines.extend(
         (
             "",
-            "ℹ️ SHADOW: Реальные заявки брокеру не отправлялись на этом шаге; "
-            "Sandbox-исполнение подтверждается отдельным сообщением.",
+            "ℹ️ Это предварительный план. Разрешённые заявки отправляются только "
+            "на тестовый счёт T‑Invest Sandbox; результат исполнения приходит "
+            "отдельным сообщением.",
             "Импульс — изменение цены в окне стратегии; "
             "тренд — средняя цена для фильтра направления.",
         )

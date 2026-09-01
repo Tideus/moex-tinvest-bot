@@ -44,6 +44,8 @@ class PerformanceSummary:
     return_pct: Decimal
     equal_weight_return_pct: Decimal
     excess_return_pct: Decimal
+    benchmark_period: str
+    benchmark_aligned: bool
     max_drawdown_pct: Decimal
     operations: int
     cycles: int
@@ -58,9 +60,12 @@ class PerformanceSummary:
 @dataclass(frozen=True, slots=True)
 class _Point:
     observed_at: datetime
+    account_id: str
     equity: Decimal
     prices: Mapping[str, Decimal]
+    price_dates: Mapping[str, date]
     units: Mapping[str, int]
+    position_values: Mapping[str, Decimal]
     blocked: bool
     rejected: int
 
@@ -83,6 +88,12 @@ def summarize_performance(
     points = tuple(_point(path) for path in relevant_paths)
     if len(points) < 2:
         raise ValueError("performance report requires at least two portfolio snapshots")
+    account_ids = {point.account_id for point in points if point.account_id}
+    if len(account_ids) > 1:
+        raise ValueError(
+            "performance report cannot combine different broker account ids: "
+            + ", ".join(sorted(account_ids))
+        )
     first, last = points[0], points[-1]
     period_operations = tuple(
         item for item in operations if first.observed_at <= item.occurred_at <= last.observed_at
@@ -100,6 +111,30 @@ def summarize_performance(
         if not comparable
         else sum(comparable, Decimal("0")) / Decimal(len(comparable))
     )
+    first_dates = tuple(
+        first.price_dates[secid]
+        for secid in first.prices
+        if secid in last.prices and secid in first.price_dates
+    )
+    last_dates = tuple(
+        last.price_dates[secid]
+        for secid in first.prices
+        if secid in last.prices and secid in last.price_dates
+    )
+    if first_dates and last_dates:
+        benchmark_period = (
+            f"{min(first_dates).isoformat()}"
+            + (f"…{max(first_dates).isoformat()}" if min(first_dates) != max(first_dates) else "")
+            + " → "
+            + f"{min(last_dates).isoformat()}"
+            + (f"…{max(last_dates).isoformat()}" if min(last_dates) != max(last_dates) else "")
+        )
+        benchmark_aligned = (
+            set(first_dates) == {start_date} and set(last_dates) == {end_date}
+        )
+    else:
+        benchmark_period = "unknown"
+        benchmark_aligned = False
     aggregates: dict[str, list[Decimal | int]] = defaultdict(
         lambda: [Decimal("0"), Decimal("0"), Decimal("0")]
     )
@@ -117,8 +152,12 @@ def summarize_performance(
     for secid in secids:
         start_units = first.units.get(secid, 0)
         end_units = last.units.get(secid, 0)
-        start_value = Decimal(start_units) * first.prices.get(secid, Decimal("0"))
-        end_value = Decimal(end_units) * last.prices.get(secid, Decimal("0"))
+        start_value = first.position_values.get(
+            secid, Decimal(start_units) * first.prices.get(secid, Decimal("0"))
+        )
+        end_value = last.position_values.get(
+            secid, Decimal(end_units) * last.prices.get(secid, Decimal("0"))
+        )
         buy, sell, commission = aggregates[secid]
         contribution = end_value - start_value + Decimal(str(sell)) - Decimal(str(buy))
         contribution -= Decimal(str(commission))
@@ -148,6 +187,8 @@ def summarize_performance(
         return_pct,
         benchmark,
         return_pct - benchmark,
+        benchmark_period,
+        benchmark_aligned,
         drawdown,
         len(period_operations),
         len(points),
@@ -171,11 +212,17 @@ def render_performance_report(summary: PerformanceSummary, *, weekly: bool) -> s
         f"Баланс в конце: {_money(summary.end_equity)}",
         f"Результат: {_signed_money(summary.pnl)} ({summary.return_pct:+.2f}%)",
         f"Равновзвешенный universe: {summary.equal_weight_return_pct:+.2f}%",
+        f"Период цен benchmark: {summary.benchmark_period}",
         f"Разница к нему: {summary.excess_return_pct:+.2f} п.п.",
         f"Максимальная просадка: {summary.max_drawdown_pct:.2f}%",
         "",
         "📊 ПО БУМАГАМ",
     ]
+    if not summary.benchmark_aligned:
+        lines.insert(
+            9,
+            "⚠️ Benchmark не совпадает с датами отчёта; сравнение носит справочный характер.",
+        )
     if not summary.rows:
         lines.append("• позиции и исполненные сделки отсутствуют")
     for row in sorted(summary.rows, key=lambda item: (-item.pnl, item.secid)):
@@ -231,6 +278,7 @@ def _point(path: Path) -> _Point:
         raise ValueError(f"artifact has no portfolio/market: {path}")
     equity = Decimal(str(portfolio.get("reported_equity") or "0"))
     prices: dict[str, Decimal] = {}
+    price_dates: dict[str, date] = {}
     lotsizes: dict[str, int] = {}
     for item in market:
         if not isinstance(item, Mapping) or not isinstance(item.get("instrument"), Mapping):
@@ -238,8 +286,12 @@ def _point(path: Path) -> _Point:
         instrument = item["instrument"]
         secid = str(instrument["secid"])
         prices[secid] = Decimal(str(item["price"]))
+        observed_raw = item.get("observed_at")
+        if observed_raw:
+            price_dates[secid] = datetime.fromisoformat(str(observed_raw)).date()
         lotsizes[secid] = int(instrument["lot_size"])
     units: dict[str, int] = {}
+    position_values: dict[str, Decimal] = {}
     positions = portfolio.get("positions", {})
     if not isinstance(positions, Mapping):
         raise ValueError(f"invalid portfolio positions: {path}")
@@ -247,13 +299,18 @@ def _point(path: Path) -> _Point:
         if not isinstance(value, Mapping):
             raise ValueError(f"invalid position: {path}")
         units[str(secid)] = int(value["lots"]) * lotsizes[str(secid)]
+        if value.get("current_value") is not None:
+            position_values[str(secid)] = Decimal(str(value["current_value"]))
     quality = raw.get("quality", {})
     rejected = raw.get("rejected", [])
     return _Point(
         observed_at,
+        str(portfolio.get("account_id", "")).strip(),
         equity,
         prices,
+        price_dates,
         units,
+        position_values,
         not isinstance(quality, Mapping) or quality.get("passed") is not True,
         len(rejected) if isinstance(rejected, list) else 0,
     )

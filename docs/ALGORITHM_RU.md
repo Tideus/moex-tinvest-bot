@@ -266,7 +266,7 @@ sudo moex-botctl decisions \
 ЦЕЛЕВЫЕ ВЕСА:
 - SBER: 15.00% — momentum=0.04; price=315>trend=303
 
-ВИРТУАЛЬНЫЕ BUY/SELL:
+ЗАЯВКИ-КАНДИДАТЫ BUY/SELL:
 - BUY SBER: 10 лот.; цена 315; сумма 3150 RUB; статус validated
 - SELL GAZP: 5 лот.; цена 142; сумма 710 RUB; статус validated
 
@@ -302,7 +302,7 @@ sudo moex-botctl decisions \
 | `daily-performance-*.txt/.json` | дневной balance/P&L и вклад бумаг |
 | `weekly-performance-*.txt/.json` | недельный P&L, benchmark, просадка и review verdict |
 
-Утренний Telegram shadow-отчёт показывает целевые бумаги, виртуальные BUY/SELL и причины
+Утренний Telegram-анализ показывает целевые бумаги, заявки-кандидаты BUY/SELL и причины
 отказов. Остальные часовые циклы сохраняют те же данные без отправки сообщения. Intraday
 уведомляет только по брокерской операции, поэтому `accepted` не называется сделкой. При
 расхождении Telegram и JSON источником истины является неизменённый JSON + audit JSONL/SQLite.

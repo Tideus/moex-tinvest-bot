@@ -18,7 +18,7 @@ def test_two_sandbox_accounts_have_separate_capital_and_strategies() -> None:
     assert long.target_balance_rub == intraday.target_balance_rub == 300_000
     assert long.account_id_env != intraday.account_id_env
     assert long.strategies != intraday.strategies
-    assert not long.order_execution_enabled
+    assert long.order_execution_enabled
     assert intraday.order_execution_enabled
 
 

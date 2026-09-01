@@ -8,7 +8,7 @@
       "environment": "sandbox",
       "account_id_env": "T_INVEST_SANDBOX_LONG_ACCOUNT_ID",
       "target_balance_rub": "300000",
-      "order_execution_enabled": false,
+      "order_execution_enabled": true,
       "strategies": [
         {
           "strategy_id": "daily_long_momentum_v1",

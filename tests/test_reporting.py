@@ -45,10 +45,11 @@ def test_hourly_telegram_report_contains_trade_intents() -> None:
     assert "18.08.2026 · 13:00 МСК" in report
     assert "🎯 ЦЕЛЕВОЙ ПОРТФЕЛЬ" in report
     assert "импульс +2,91% · цена 300,50 ₽ выше тренда 290,25 ₽" in report
-    assert "🧾 ВИРТУАЛЬНЫЕ СДЕЛКИ" in report
+    assert "🧾 ЗАЯВКИ ДЛЯ T‑INVEST SANDBOX" in report
+    assert "ВИРТУАЛЬНЫЕ СДЕЛКИ" not in report
     assert "🟢 BUY SBER · 2 лот. · 600 ₽" in report
     assert "BUY LKOH — исчерпан дневной лимит оборота" in report
-    assert "Реальные заявки брокеру не отправлялись" in report
+    assert "Разрешённые заявки отправляются только" in report
 
 
 def test_persisted_shadow_decisions_show_buy_sell_and_rejections() -> None:

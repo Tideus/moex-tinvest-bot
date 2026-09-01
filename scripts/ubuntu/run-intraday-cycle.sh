@@ -34,8 +34,9 @@ outbox_path="${STATE_DIR}/data/notifications.sqlite3"
 
 exec >>"${log_path}" 2>&1
 
-"${PYTHON_BIN}" -m moex_bot.cli intraday-reconcile \
-  --accounts "${APP_DIR}/config/accounts.json"
+"${PYTHON_BIN}" -m moex_bot.cli sandbox-reconcile \
+  --accounts "${APP_DIR}/config/accounts.json" \
+  --profile intraday
 
 "${PYTHON_BIN}" -m moex_bot.cli broker-portfolio-snapshot \
   --universe "${APP_DIR}/config/universe.json" \

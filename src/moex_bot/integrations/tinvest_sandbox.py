@@ -113,6 +113,7 @@ class SandboxBrokerSnapshot:
     reported_equity: Decimal
     positions_lots: Mapping[str, int]
     blocked_lots: Mapping[str, int]
+    position_values: Mapping[str, Decimal]
     open_orders: int
     source: str = "t_invest_sandbox"
 
@@ -127,6 +128,11 @@ class SandboxBrokerSnapshot:
                 secid: {
                     "lots": lots,
                     "blocked_lots": self.blocked_lots.get(secid, 0),
+                    **(
+                        {"current_value": str(self.position_values[secid])}
+                        if secid in self.position_values
+                        else {}
+                    ),
                 }
                 for secid, lots in sorted(self.positions_lots.items())
             },
@@ -361,6 +367,7 @@ class TInvestSandboxAccountService:
 
         positions_lots: dict[str, int] = {}
         blocked_lots: dict[str, int] = {}
+        position_values: dict[str, Decimal] = {}
         for raw in raw_positions:
             if not isinstance(raw, Mapping):
                 raise ValueError("unexpected sandbox portfolio position")
@@ -390,6 +397,11 @@ class TInvestSandboxAccountService:
                 raise ValueError(f"invalid blocked lots for {instrument.secid}")
             positions_lots[instrument.secid] = int(lots)
             blocked_lots[instrument.secid] = int(blocked)
+            current_price_raw = raw.get("currentPrice")
+            if isinstance(current_price_raw, Mapping):
+                position_values[instrument.secid] = (
+                    quotation_to_decimal(current_price_raw) * quantity
+                )
 
         raw_orders = orders.get("orders", [])
         if not isinstance(raw_orders, list):
@@ -401,6 +413,7 @@ class TInvestSandboxAccountService:
             reported_equity=reported_equity,
             positions_lots=positions_lots,
             blocked_lots=blocked_lots,
+            position_values=position_values,
             open_orders=len(raw_orders),
             source=source,
         )

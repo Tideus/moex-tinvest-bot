@@ -43,7 +43,7 @@ stage "Telegram durable outbox"
 
 stage "latest shadow artifact"
 latest="$(find "${STATE_DIR}/artifacts" -maxdepth 1 -type f -name 'shadow-*.json' \
-  -printf '%T@ %p\n' 2>/dev/null | sort -nr | head -n 1 | cut -d' ' -f2-)"
+  -printf '%T@ %p\n' 2>/dev/null | sort -nr | sed -n '1{s/^[^ ]* //;p;}')"
 session_status=0
 "${PYTHON_BIN}" -m moex_bot.cli session-check || session_status=$?
 if [[ "${session_status}" -eq 3 ]]; then

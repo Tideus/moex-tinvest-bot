@@ -322,12 +322,22 @@ def sandbox_bootstrap_profiles(
         registry = load_account_registry(accounts_path)
         sandbox = service or TInvestSandboxAccountService.from_environment()
         for profile in registry.profiles:
-            configured_id = os.getenv(profile.account_id_env, "").strip()
+            profile_configured_id = os.getenv(profile.account_id_env, "").strip()
+            configured_id = profile_configured_id
+            if profile.purpose is AccountPurpose.LONG:
+                legacy_id = os.getenv("T_INVEST_SANDBOX_ACCOUNT_ID", "").strip()
+                if configured_id and legacy_id and configured_id != legacy_id:
+                    raise ValueError(
+                        "long sandbox account ids disagree; reconcile the old account "
+                        "before changing T_INVEST_SANDBOX_LONG_ACCOUNT_ID"
+                    )
+                # Safe migration from the original single-account configuration.
+                configured_id = configured_id or legacy_id
             result = sandbox.ensure_account(
                 configured_id,
                 account_name=f"moex-tinvest-bot-{profile.profile_id}",
             )
-            if result.account_id != configured_id:
+            if result.account_id != profile_configured_id:
                 upsert_env_value(env_path, profile.account_id_env, result.account_id)
                 os.environ[profile.account_id_env] = result.account_id
             # Preserve the current single-runner contract while long is migrated first.
@@ -418,6 +428,7 @@ def sandbox_orders_set(*, runtime_path: Path, enabled: bool) -> int:
 
 def sandbox_execute(
     *,
+    accounts_path: Path,
     shadow_path: Path,
     portfolio_path: Path,
     runtime_path: Path,
@@ -427,10 +438,17 @@ def sandbox_execute(
 ) -> int:
     try:
         runtime = load_runtime_config(runtime_path)
+        profile = load_account_registry(accounts_path).by_id("long")
+        if not profile.order_execution_enabled:
+            raise ValueError("long sandbox execution gate is disabled in accounts.json")
+        if profile.environment is not TInvestEnvironment.SANDBOX:
+            raise ValueError("long execution profile is not sandbox")
         if not runtime.sandbox_orders_enabled:
             print("SKIP: sandbox order submission is disabled")
             return 3
-        adapter = TInvestSandboxExecutionAdapter.from_environment()
+        adapter = TInvestSandboxExecutionAdapter.from_environment(
+            account_id_env=profile.account_id_env
+        )
         result = execute_shadow_plan(
             shadow_path=shadow_path,
             portfolio_path=portfolio_path,
@@ -566,34 +584,51 @@ def hourly_shadow(
     return 0 if result.quality.passed else 2
 
 
-def intraday_reconcile(*, accounts_path: Path, outbox_path: Path | None = None) -> int:
+def sandbox_reconcile(
+    *,
+    accounts_path: Path,
+    profile_id: str,
+    outbox_path: Path | None = None,
+) -> int:
     try:
-        profile = load_account_registry(accounts_path).by_id("intraday")
+        profile = load_account_registry(accounts_path).by_id(profile_id)
         if profile.environment is not TInvestEnvironment.SANDBOX:
-            raise ValueError("intraday reconciliation is sandbox-only")
+            raise ValueError("reconciliation is sandbox-only")
         token = os.getenv("T_INVEST_SANDBOX_TOKEN", "").strip()
         account_id = os.getenv(profile.account_id_env, "").strip()
         if not token or not account_id:
-            raise ValueError("intraday sandbox token/account id are required")
+            raise ValueError(f"{profile_id} sandbox token/account id are required")
         service = TInvestSandboxAccountService(token, transport=UrlLibJsonTransport())
         cancelled = service.reconcile_cancel_active_orders(account_id)
         if cancelled and outbox_path is not None:
             now = datetime.now(UTC)
             SQLiteOutbox(outbox_path).enqueue(
-                kind="intraday_reconciliation",
-                dedupe_key=f"intraday-reconcile:{now.isoformat()}",
+                kind="sandbox_reconciliation",
+                dedupe_key=f"sandbox-reconcile:{profile_id}:{now.isoformat()}",
                 body=(
-                    "🔄 INTRADAY SANDBOX · RECONCILIATION\n"
+                    f"🔄 {profile_id.upper()} SANDBOX · RECONCILIATION\n"
                     f"Отменено оставшихся активных заявок: {len(cancelled)}\n"
                     "После отмены список активных заявок проверен повторно."
                 ),
                 now=now,
             )
     except (OSError, ValueError, KeyError, json.JSONDecodeError) as exc:
-        print(f"FAIL: intraday reconciliation: {exc}")
+        print(f"FAIL: {profile_id} sandbox reconciliation: {exc}")
         return 2
-    print(f"PASS: intraday active orders reconciled; cancelled={len(cancelled)}")
+    print(
+        f"PASS: {profile_id} sandbox active orders reconciled; "
+        f"cancelled={len(cancelled)}"
+    )
     return 0
+
+
+def intraday_reconcile(*, accounts_path: Path, outbox_path: Path | None = None) -> int:
+    """Backward-compatible alias for existing deployments and scripts."""
+    return sandbox_reconcile(
+        accounts_path=accounts_path,
+        profile_id="intraday",
+        outbox_path=outbox_path,
+    )
 
 
 def intraday_plan(
@@ -1383,6 +1418,14 @@ def build_parser() -> argparse.ArgumentParser:
         "--accounts", type=Path, default=Path("config/accounts.json")
     )
     intraday_reconcile_parser.add_argument("--outbox", type=Path)
+    sandbox_reconcile_parser = sub.add_parser("sandbox-reconcile")
+    sandbox_reconcile_parser.add_argument(
+        "--accounts", type=Path, default=Path("config/accounts.json")
+    )
+    sandbox_reconcile_parser.add_argument(
+        "--profile", choices=("long", "intraday"), required=True
+    )
+    sandbox_reconcile_parser.add_argument("--outbox", type=Path)
     intraday_plan_parser = sub.add_parser("intraday-plan")
     intraday_plan_parser.add_argument(
         "--config", type=Path, default=Path("config/intraday.json")
@@ -1490,6 +1533,9 @@ def build_parser() -> argparse.ArgumentParser:
         default=Path("config/notifications.json"),
     )
     sandbox_execute_parser = sub.add_parser("sandbox-execute")
+    sandbox_execute_parser.add_argument(
+        "--accounts", type=Path, default=Path("config/accounts.json")
+    )
     sandbox_execute_parser.add_argument("--shadow", type=Path, required=True)
     sandbox_execute_parser.add_argument("--portfolio", type=Path, required=True)
     sandbox_execute_parser.add_argument(
@@ -1626,6 +1672,12 @@ def main() -> int:
         )
     if args.command == "intraday-reconcile":
         return intraday_reconcile(accounts_path=args.accounts, outbox_path=args.outbox)
+    if args.command == "sandbox-reconcile":
+        return sandbox_reconcile(
+            accounts_path=args.accounts,
+            profile_id=args.profile,
+            outbox_path=args.outbox,
+        )
     if args.command == "intraday-plan":
         as_of = args.as_of or datetime.now(UTC)
         if as_of.tzinfo is None:
@@ -1817,6 +1869,7 @@ def main() -> int:
             print("FAIL: --as-of must include a timezone offset")
             return 2
         return sandbox_execute(
+            accounts_path=args.accounts,
             shadow_path=args.shadow,
             portfolio_path=args.portfolio,
             runtime_path=args.runtime,
