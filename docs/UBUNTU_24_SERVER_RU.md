@@ -357,15 +357,17 @@ sudo moex-botctl collect-report --from 2026-08-24 --to 2026-08-31
 
 ## 9. Обновление
 
-Сначала сохраните backup и скопируйте новую проверенную версию проекта в `/tmp`:
+Запускайте обновление из рабочего Git checkout с настроенным upstream:
 
 ```bash
-sudo /opt/moex-tinvest-bot/scripts/ubuntu/backup.sh
-cd /tmp/moex-tinvest-bot
-sudo bash scripts/ubuntu/update.sh
+cd ~/moex-tinvest-bot
+sudo ./scripts/ubuntu/update.sh
 ```
 
-Скрипт останавливает timers, обновляет код и зависимости, валидирует конфиги, выполняет
+Скрипт сам создаёт backup, требует отсутствие локальных Git-изменений и выполняет только
+`git pull --ff-only`. Он не применяет автоматический stash и не перезаписывает операторские
+правки: при грязном checkout нужно сначала выполнить `git status` и осознанно сохранить изменения.
+Затем скрипт останавливает timers, обновляет `/opt`, код и зависимости, валидирует конфиги, выполняет
 проверку и установку CA bundle через `update-ca-certificates`, затем `daemon-reload`, возвращает
 timers и запускает один shadow smoke-cycle. При ошибке trap пытается вернуть timers в рабочее
 состояние. Таким образом, для обновления сертификатов используется тот же `update.sh`; отдельное

@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import json
 import os
-from collections.abc import Mapping, Sequence
+import time
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
 from typing import Protocol
+from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 from zoneinfo import ZoneInfo
@@ -45,14 +47,28 @@ class IntradaySuperCandle:
 class AlgoPackIntradayAdapter:
     """Three batched latest-row reads; ALGOPACK remains read-only."""
 
-    def __init__(self, token: str, transport: JsonGetTransport, *, timeout: float = 15) -> None:
+    def __init__(
+        self,
+        token: str,
+        transport: JsonGetTransport,
+        *,
+        timeout: float = 15,
+        retry_attempts: int = 3,
+        retry_backoff: float = 0.5,
+        sleeper: Callable[[float], None] = time.sleep,
+    ) -> None:
         if not token.strip():
             raise ValueError("MOEX_APIKEY is required for intraday ALGOPACK")
         if timeout <= 0:
             raise ValueError("timeout must be positive")
+        if not 1 <= retry_attempts <= 5 or retry_backoff < 0:
+            raise ValueError("ALGOPACK retry policy is invalid")
         self.token = token.strip()
         self.transport = transport
         self.timeout = timeout
+        self.retry_attempts = retry_attempts
+        self.retry_backoff = retry_backoff
+        self.sleeper = sleeper
 
     @classmethod
     def from_environment(cls) -> AlgoPackIntradayAdapter:
@@ -101,11 +117,7 @@ class AlgoPackIntradayAdapter:
         self, dataset: str, day: str, wanted: frozenset[str]
     ) -> dict[tuple[str, datetime], Mapping[str, object]]:
         query = urlencode({"date": day, "latest": 1})
-        payload = self.transport.get(
-            f"{BASE_URL}/{dataset}.json?{query}",
-            headers={"Authorization": f"Bearer {self.token}"},
-            timeout=self.timeout,
-        )
+        payload = self._get_with_retry(f"{BASE_URL}/{dataset}.json?{query}")
         rows = _normalize(payload)
         result: dict[tuple[str, datetime], Mapping[str, object]] = {}
         for row in rows:
@@ -115,6 +127,23 @@ class AlgoPackIntradayAdapter:
             moment = _moment(row)
             result[(secid, moment)] = row
         return result
+
+    def _get_with_retry(self, url: str) -> object:
+        for attempt in range(1, self.retry_attempts + 1):
+            try:
+                return self.transport.get(
+                    url,
+                    headers={"Authorization": f"Bearer {self.token}"},
+                    timeout=self.timeout,
+                )
+            except HTTPError as exc:
+                if exc.code not in {429, 500, 502, 503, 504} or attempt == self.retry_attempts:
+                    raise
+            except (TimeoutError, URLError):
+                if attempt == self.retry_attempts:
+                    raise
+            self.sleeper(self.retry_backoff * attempt)
+        raise RuntimeError("unreachable ALGOPACK retry state")
 
 
 def _normalize(payload: object) -> tuple[Mapping[str, object], ...]:

@@ -325,7 +325,8 @@ diagnose_once() {
     return 0
   fi
   printf '\033[1;31mUNHEALTHY\033[0m: ошибок: %s. Последние сообщения сервисов:\n' "${FAILURES}"
-  journalctl -u moex-tinvest-shadow.service -u moex-tinvest-health.service \
+  journalctl -u moex-tinvest-shadow.service -u moex-tinvest-intraday.service \
+    -u moex-tinvest-health.service -u moex-tinvest-daily-report.service \
     -n 30 --no-pager 2>/dev/null | indent || true
   return 2
 }
@@ -556,7 +557,12 @@ for path in root.rglob("*"):
 '
 
   local revision="unknown"
-  revision="$(git -C "${APP_DIR}" rev-parse HEAD 2>/dev/null || printf unknown)"
+  if [[ -r "${APP_DIR}/VERSION" ]]; then
+    revision="$(tr -d '[:space:]' <"${APP_DIR}/VERSION")"
+  else
+    revision="$(git -C "${APP_DIR}" rev-parse HEAD 2>/dev/null || printf unknown)"
+  fi
+  [[ -n "${revision}" ]] || revision="unknown"
   {
     printf 'report_from=%s\n' "${from_date}"
     printf 'report_to=%s\n' "${to_date}"

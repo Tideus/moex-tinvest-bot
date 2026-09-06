@@ -18,6 +18,22 @@ class FakeAdapter:
         return OrderRecord(intent=intent, status=OrderStatus.ACCEPTED)  # type: ignore[arg-type]
 
 
+class SettlingAdapter(FakeAdapter):
+    def settle(
+        self, records: tuple[OrderRecord, ...], *, ttl_seconds: int
+    ) -> tuple[OrderRecord, ...]:
+        assert ttl_seconds == 17
+        return tuple(
+            OrderRecord(
+                intent=record.intent,
+                status=OrderStatus.FILLED,
+                filled_lots=record.intent.lots,
+                broker_order_id="broker-1",
+            )
+            for record in records
+        )
+
+
 def _write_inputs(
     tmp_path: Path, *, open_orders: int = 0, short: bool = False
 ) -> tuple[Path, Path]:
@@ -110,3 +126,19 @@ def test_enabled_sandbox_accepts_verified_explicit_short_plan(tmp_path: Path) ->
     )
     assert result.submitted[0].intent.confirm_margin_trade
     assert result.submitted[0].intent.side.value == "sell"
+
+
+def test_execution_finalizes_orders_with_adapter_lifecycle(tmp_path: Path) -> None:
+    shadow, portfolio = _write_inputs(tmp_path)
+    runtime = RuntimeConfig(TInvestEnvironment.SANDBOX, RuntimeSchedule(), True, 3)
+    result = execute_shadow_plan(
+        shadow_path=shadow,
+        portfolio_path=portfolio,
+        output_path=tmp_path / "settled.json",
+        runtime=runtime,
+        adapter=SettlingAdapter(),
+        as_of=datetime(2026, 8, 18, 10, 1, tzinfo=UTC),
+        order_ttl_seconds=17,
+    )
+    assert result.submitted[0].status is OrderStatus.FILLED
+    assert result.stopped_reason is None

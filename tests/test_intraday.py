@@ -1,4 +1,6 @@
 import json
+import sqlite3
+from dataclasses import replace
 from datetime import datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
@@ -7,7 +9,12 @@ from zoneinfo import ZoneInfo
 from moex_bot.cli import _verified_instruments_by_secid
 from moex_bot.domain import Instrument, Side
 from moex_bot.integrations.algopack_intraday import IntradaySuperCandle
-from moex_bot.intraday import IntradayStateStore, build_intraday_plan, render_intraday_report
+from moex_bot.intraday import (
+    IntradaySignal,
+    IntradayStateStore,
+    build_intraday_plan,
+    render_intraday_report,
+)
 from moex_bot.intraday_config import load_intraday_config
 from moex_bot.validation import load_universe
 
@@ -145,6 +152,49 @@ def test_force_flat_closes_position_and_plan_is_execution_compatible(tmp_path: P
     assert raw["analysis_input"]["supercandles"][0]["secid"] == "SBER"
 
 
+def test_force_flat_uses_broker_value_when_algopack_is_empty(tmp_path: Path) -> None:
+    config = load_intraday_config(PROJECT_ROOT / "config" / "intraday.json")
+    as_of = datetime(2026, 8, 20, 18, 50, tzinfo=MOSCOW)
+    plan = build_intraday_plan(
+        config=config,
+        instruments={"SBER": _instrument()},
+        portfolio=_portfolio(
+            positions={
+                "SBER": {
+                    "lots": 3,
+                    "blocked_lots": 0,
+                    "current_value": "9030",
+                }
+            }
+        ),
+        store=IntradayStateStore(tmp_path / "flat-no-flow.sqlite3"),
+        bars=(),
+        as_of=as_of,
+    )
+    assert plan.quality_passed
+    assert plan.quality_errors == ()
+    assert plan.orders[0].side is Side.SELL
+    assert plan.orders[0].limit_price == Decimal("3010")
+    assert "broker valuation" in plan.notes[-1]
+
+
+def test_after_hours_without_positions_does_not_fail_on_empty_algopack(
+    tmp_path: Path,
+) -> None:
+    config = load_intraday_config(PROJECT_ROOT / "config" / "intraday.json")
+    plan = build_intraday_plan(
+        config=config,
+        instruments={"SBER": _instrument()},
+        portfolio=_portfolio(),
+        store=IntradayStateStore(tmp_path / "flat-empty.sqlite3"),
+        bars=(),
+        as_of=datetime(2026, 8, 20, 18, 55, tzinfo=MOSCOW),
+    )
+    assert plan.phase == "force_flat"
+    assert plan.quality_passed
+    assert plan.orders == ()
+
+
 def test_intraday_universe_is_indexed_by_moex_secid_not_tinvest_uid() -> None:
     instruments = _verified_instruments_by_secid(
         load_universe(PROJECT_ROOT / "config" / "universe.json")
@@ -159,6 +209,20 @@ def test_existing_gross_exposure_is_subtracted_from_intraday_capital(tmp_path: P
     as_of = datetime(2026, 8, 20, 11, 0, tzinfo=MOSCOW)
     sber = _bars(as_of - timedelta(minutes=15))
     other = _bars(as_of - timedelta(minutes=15), secid="TEST")
+    store = IntradayStateStore(tmp_path / "gross.sqlite3")
+    store.mark_signal(
+        IntradaySignal(
+            "SBER",
+            Side.BUY,
+            as_of - timedelta(minutes=15),
+            Decimal("100.5"),
+            Decimal("0.005"),
+            Decimal("0.6"),
+            Decimal("0.8"),
+            Decimal("0.4"),
+            Decimal("0.1"),
+        )
+    )
     plan = build_intraday_plan(
         config=config,
         instruments={
@@ -166,7 +230,7 @@ def test_existing_gross_exposure_is_subtracted_from_intraday_capital(tmp_path: P
             "TEST": _instrument("TEST", "00000000-0000-0000-0000-000000000001"),
         },
         portfolio=_portfolio(positions={"SBER": {"lots": 300, "blocked_lots": 0}}),
-        store=IntradayStateStore(tmp_path / "gross.sqlite3"),
+        store=store,
         bars=sber + other,
         as_of=as_of,
     )
@@ -192,3 +256,115 @@ def test_empty_supercandles_record_actionable_quality_error(tmp_path: Path) -> N
     raw = json.loads(output.read_text(encoding="utf-8"))
     assert raw["quality"]["errors"] == ["no completed TradeStats/OrderStats/OBStats"]
     assert raw["signal_diagnostics"]["failed_history"] == 1
+
+
+def test_open_position_is_closed_by_stop_loss_before_session_end(tmp_path: Path) -> None:
+    config = replace(
+        load_intraday_config(PROJECT_ROOT / "config" / "intraday.json"),
+        stop_loss_bps=Decimal("40"),
+    )
+    store = IntradayStateStore(tmp_path / "stop.sqlite3")
+    entered_at = datetime(2026, 8, 20, 10, 15, tzinfo=MOSCOW)
+    entry_plan = build_intraday_plan(
+        config=config,
+        instruments={"SBER": _instrument()},
+        portfolio=_portfolio(),
+        store=store,
+        bars=_bars(entered_at),
+        as_of=entered_at + timedelta(minutes=15),
+    )
+    assert entry_plan.orders
+    exit_plan = build_intraday_plan(
+        config=config,
+        instruments={"SBER": _instrument()},
+        portfolio=_portfolio(
+            positions={"SBER": {"lots": 10, "current_value": "980"}}
+        ),
+        store=store,
+        bars=_bars(entered_at + timedelta(minutes=5), falling=True),
+        as_of=entered_at + timedelta(minutes=20),
+    )
+    assert exit_plan.phase == "position_exit"
+    assert exit_plan.orders[0].side is Side.SELL
+    assert exit_plan.orders[0].order_type == "market"
+    assert "stop_loss" in exit_plan.notes[0]
+
+
+def test_open_position_is_closed_after_max_holding_time(tmp_path: Path) -> None:
+    config = load_intraday_config(PROJECT_ROOT / "config" / "intraday.json")
+    store = IntradayStateStore(tmp_path / "holding.sqlite3")
+    entered_at = datetime(2026, 8, 20, 10, 15, tzinfo=MOSCOW)
+    signal = build_intraday_plan(
+        config=config,
+        instruments={"SBER": _instrument()},
+        portfolio=_portfolio(),
+        store=store,
+        bars=_bars(entered_at),
+        as_of=entered_at + timedelta(minutes=15),
+    )
+    assert signal.orders
+    as_of = entered_at + timedelta(minutes=config.max_holding_minutes + 15)
+    plan = build_intraday_plan(
+        config=config,
+        instruments={"SBER": _instrument()},
+        portfolio=_portfolio(
+            positions={"SBER": {"lots": 10, "current_value": "1005"}}
+        ),
+        store=store,
+        bars=_bars(as_of - timedelta(minutes=15)),
+        as_of=as_of,
+    )
+    assert plan.phase == "position_exit"
+    assert "max_holding" in plan.notes[0]
+
+
+def test_signal_requires_edge_after_spread_and_estimated_costs(tmp_path: Path) -> None:
+    config = replace(
+        load_intraday_config(PROJECT_ROOT / "config" / "intraday.json"),
+        min_edge_after_cost_bps=Decimal("100"),
+    )
+    as_of = datetime(2026, 8, 20, 11, 0, tzinfo=MOSCOW)
+    plan = build_intraday_plan(
+        config=config,
+        instruments={"SBER": _instrument()},
+        portfolio=_portfolio(),
+        store=IntradayStateStore(tmp_path / "cost.sqlite3"),
+        bars=_bars(as_of - timedelta(minutes=15)),
+        as_of=as_of,
+    )
+    assert plan.orders == ()
+    assert plan.signal_diagnostics is not None
+    assert plan.signal_diagnostics["failed_cost_edge"] == 1
+
+
+def test_intraday_state_store_migrates_legacy_signal_schema(tmp_path: Path) -> None:
+    path = tmp_path / "legacy.sqlite3"
+    with sqlite3.connect(path) as conn:
+        conn.execute(
+            "CREATE TABLE intraday_signals ("
+            "trade_day TEXT NOT NULL, secid TEXT NOT NULL, observed_at TEXT NOT NULL, "
+            "side TEXT NOT NULL, PRIMARY KEY(secid, observed_at, side))"
+        )
+    store = IntradayStateStore(path)
+    with sqlite3.connect(path) as conn:
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(intraday_signals)")}
+    assert "price" in columns
+    assert store.latest_signal("2026-08-20", "SBER") is None
+
+
+def test_unmanaged_intraday_position_is_closed_fail_safe(tmp_path: Path) -> None:
+    config = load_intraday_config(PROJECT_ROOT / "config" / "intraday.json")
+    as_of = datetime(2026, 8, 20, 11, 0, tzinfo=MOSCOW)
+    plan = build_intraday_plan(
+        config=config,
+        instruments={"SBER": _instrument()},
+        portfolio=_portfolio(
+            positions={"SBER": {"lots": -2, "current_value": "200"}}
+        ),
+        store=IntradayStateStore(tmp_path / "unmanaged.sqlite3"),
+        bars=_bars(as_of - timedelta(minutes=15)),
+        as_of=as_of,
+    )
+    assert plan.phase == "position_exit"
+    assert plan.orders[0].side is Side.BUY
+    assert "missing_entry_state" in plan.notes[0]

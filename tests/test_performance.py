@@ -197,3 +197,22 @@ def test_performance_refuses_to_merge_different_broker_accounts(tmp_path: Path) 
             timezone="Europe/Moscow",
             label="31.08.2026",
         )
+
+
+def test_performance_flags_unreconciled_security_attribution(tmp_path: Path) -> None:
+    first = tmp_path / "shadow-a.json"
+    last = tmp_path / "shadow-b.json"
+    _artifact(first, "2026-08-31T07:00:00+00:00", "300000", "300", 0)
+    _artifact(last, "2026-08-31T20:00:00+00:00", "300100", "301", 0)
+    summary = summarize_performance(
+        [first, last],
+        [],
+        start_date=date(2026, 8, 31),
+        end_date=date(2026, 8, 31),
+        timezone="Europe/Moscow",
+        label="31.08.2026",
+    )
+    assert not summary.attribution_reliable
+    report = render_performance_report(summary, weekly=False)
+    assert "Сверка атрибуции: FAIL" in report
+    assert "нельзя использовать для оценки сигналов" in report

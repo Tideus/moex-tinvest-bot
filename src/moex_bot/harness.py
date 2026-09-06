@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass, replace
-from datetime import datetime
+from datetime import datetime, timedelta
 from decimal import Decimal
 
 from .adapters import AuditPort, ExecutionPort, order_record_event
@@ -18,6 +18,7 @@ from .domain import (
 )
 from .execution import build_order_intents
 from .geo import assess_geo_risk
+from .integrations.algopack_intraday import IntradaySuperCandle
 from .quality import QualityReport, validate_market
 from .risk import evaluate_intent
 from .strategy import calculate_targets
@@ -35,6 +36,18 @@ class SignalDiagnostic:
 
 
 @dataclass(frozen=True, slots=True)
+class FlowDiagnostic:
+    secid: str
+    observed_at: datetime
+    trade_imbalance: Decimal
+    order_flow: Decimal
+    book_imbalance: Decimal
+    spread_bbo: Decimal
+    passed: bool
+    reasons: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
 class HarnessResult:
     run_id: str
     quality: QualityReport
@@ -46,6 +59,7 @@ class HarnessResult:
     rebalance_allowed: bool = True
     rebalance_hours_moscow: tuple[int, ...] = ()
     signal_diagnostics: tuple[SignalDiagnostic, ...] = ()
+    flow_diagnostics: tuple[FlowDiagnostic, ...] = ()
 
 
 class TradingHarness:
@@ -64,6 +78,7 @@ class TradingHarness:
         geo_events: tuple[GeoEvent, ...],
         news_stale: bool = False,
         allow_rebalance: bool = True,
+        flow: Mapping[str, IntradaySuperCandle] | None = None,
     ) -> HarnessResult:
         quality = validate_market(market, as_of, self.config.max_data_age_seconds)
         geo = assess_geo_risk(geo_events, news_stale=news_stale)
@@ -94,6 +109,58 @@ class TradingHarness:
                 secid for secid, position in portfolio.positions.items() if position.lots < 0
             ),
         )
+        flow_diagnostics: tuple[FlowDiagnostic, ...] = ()
+        if self.config.strategy.flow_confirmation_enabled and allow_rebalance:
+            flow_map = flow or {}
+            candidate_secids = {
+                target.secid for target in raw_targets if target.weight > 0
+            }
+            missing = sorted(candidate_secids - set(flow_map))
+            stale = sorted(
+                secid
+                for secid in candidate_secids & set(flow_map)
+                if flow_map[secid].observed_at > as_of
+                or as_of - flow_map[secid].observed_at > timedelta(minutes=15)
+            )
+            if missing or stale:
+                errors = quality.errors + tuple(
+                    [f"missing long flow for {secid}" for secid in missing]
+                    + [f"stale long flow for {secid}" for secid in stale]
+                )
+                quality = replace(quality, passed=False, errors=errors)
+                self.audit.write(
+                    {"type": "quality_block", "run_id": run_id, "errors": errors}
+                )
+                return HarnessResult(
+                    run_id,
+                    quality,
+                    geo,
+                    (),
+                    (),
+                    (),
+                    portfolio,
+                    allow_rebalance,
+                    self.config.strategy.rebalance_hours_moscow,
+                )
+            flow_diagnostics = tuple(
+                _flow_diagnostic(self.config, flow_map[secid])
+                for secid in sorted(candidate_secids)
+            )
+            passed_flow = {
+                item.secid for item in flow_diagnostics if item.passed
+            }
+            held_long = {
+                secid
+                for secid, position in portfolio.positions.items()
+                if position.lots > 0
+            }
+            raw_targets = tuple(
+                target
+                for target in raw_targets
+                if target.weight <= 0
+                or target.secid in held_long
+                or target.secid in passed_flow
+            )
         targets = tuple(
             Target(
                 target.secid,
@@ -308,4 +375,59 @@ class TradingHarness:
             allow_rebalance,
             self.config.strategy.rebalance_hours_moscow,
             signal_diagnostics,
+            flow_diagnostics,
         )
+
+
+def _flow_diagnostic(config: BotConfig, bar: IntradaySuperCandle) -> FlowDiagnostic:
+    trade_denominator = bar.buy_value + bar.sell_value
+    trade_imbalance = (
+        Decimal("0")
+        if trade_denominator == 0
+        else (bar.buy_value - bar.sell_value) / trade_denominator
+    )
+    order_denominator = (
+        bar.put_buy_value
+        + bar.put_sell_value
+        + bar.cancel_buy_value
+        + bar.cancel_sell_value
+    )
+    order_flow = (
+        Decimal("0")
+        if order_denominator == 0
+        else (
+            (bar.put_buy_value - bar.cancel_buy_value)
+            - (bar.put_sell_value - bar.cancel_sell_value)
+        )
+        / order_denominator
+    )
+    strategy = config.strategy
+    reasons = tuple(
+        reason
+        for condition, reason in (
+            (
+                trade_imbalance < strategy.flow_min_trade_imbalance,
+                "trade imbalance is strongly negative",
+            ),
+            (
+                order_flow < strategy.flow_min_order_flow,
+                "order flow is strongly negative",
+            ),
+            (
+                bar.book_imbalance < strategy.flow_min_book_imbalance,
+                "order book imbalance is strongly negative",
+            ),
+            (bar.spread_bbo > strategy.flow_max_spread_bbo, "spread is too wide"),
+        )
+        if condition
+    )
+    return FlowDiagnostic(
+        bar.secid,
+        bar.observed_at,
+        trade_imbalance,
+        order_flow,
+        bar.book_imbalance,
+        bar.spread_bbo,
+        not reasons,
+        reasons,
+    )

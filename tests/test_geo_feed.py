@@ -11,7 +11,7 @@ from moex_bot.geo_feed import (
 
 RSS = b"""<?xml version="1.0" encoding="UTF-8"?>
 <rss><channel><item>
-<title>MOEX: risk parameters changed</title>
+<title>MOEX: sanctions restrictions announced</title>
 <link>https://www.moex.com/n1</link>
 <pubDate>Fri, 14 Aug 2026 08:00:00 +0000</pubDate>
 </item></channel></rss>"""
@@ -78,3 +78,17 @@ def test_refresh_geo_feed_writes_auditable_payload(tmp_path: Path) -> None:
 
 def test_moex_double_encoded_cyrillic_is_repaired() -> None:
     assert _repair_mojibake("РћР± СѓСЃС‚Р°РЅРѕРІР»РµРЅРёРё") == "Об установлении"
+
+
+def test_technical_risk_parameter_notice_is_not_geopolitical_event() -> None:
+    source = GeoSource("moex_risk", "https://www.moex.com/feed", "primary")
+    technical = RSS.replace(
+        b"sanctions restrictions announced", b"risk parameters changed"
+    )
+    payload, healthy = build_geo_payload(
+        (source,),
+        as_of=datetime(2026, 8, 14, 10, tzinfo=UTC),
+        fetch=lambda url: technical,
+    )
+    assert healthy
+    assert payload["events"] == []

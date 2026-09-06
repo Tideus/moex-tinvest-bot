@@ -34,6 +34,7 @@ def execute_shadow_plan(
     runtime: RuntimeConfig,
     adapter: SandboxOrderPort,
     as_of: datetime,
+    order_ttl_seconds: int = 120,
 ) -> SandboxExecutionResult:
     if as_of.tzinfo is None:
         raise ValueError("as_of must be timezone-aware")
@@ -95,6 +96,28 @@ def execute_shadow_plan(
         if record.status in {OrderStatus.UNKNOWN, OrderStatus.REJECTED}:
             stopped_reason = f"submission stopped after {record.status.value} order"
             break
+    settle = getattr(adapter, "settle", None)
+    if callable(settle) and submitted:
+        submitted = list(settle(tuple(submitted), ttl_seconds=order_ttl_seconds))
+        unresolved = next(
+            (
+                record
+                for record in submitted
+                if record.status
+                in {
+                    OrderStatus.UNKNOWN,
+                    OrderStatus.REJECTED,
+                    OrderStatus.ACCEPTED,
+                    OrderStatus.PARTIALLY_FILLED,
+                }
+            ),
+            None,
+        )
+        stopped_reason = (
+            f"order lifecycle ended as {unresolved.status.value}"
+            if unresolved is not None
+            else None
+        )
     result = SandboxExecutionResult(run_id, tuple(submitted), stopped_reason)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(
@@ -115,6 +138,7 @@ def render_sandbox_execution_report(result: SandboxExecutionResult) -> str:
         lines.append(
             f"• {intent.side.value.upper()} {intent.instrument.secid}: "
             f"{intent.lots} лот. · {intent.notional} ₽ · {record.status.value}"
+            + (f" ({record.status_detail})" if record.status_detail else "")
         )
     if result.stopped_reason:
         lines.append(f"⛔ {result.stopped_reason}")

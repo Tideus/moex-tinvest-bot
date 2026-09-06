@@ -41,6 +41,15 @@ stage "Telegram durable outbox"
 "${PYTHON_BIN}" -m moex_bot.cli outbox-health \
   --outbox "${STATE_DIR}/data/notifications.sqlite3" --max-pending-due 20
 
+stage "last trading service results"
+for unit in moex-tinvest-shadow.service moex-tinvest-intraday.service; do
+  if systemctl is-failed --quiet "${unit}"; then
+    printf 'FAIL: last service result is failed: %s\n' "${unit}" >&2
+    exit 2
+  fi
+  printf 'PASS: %s is not failed\n' "${unit}"
+done
+
 stage "latest shadow artifact"
 latest="$(find "${STATE_DIR}/artifacts" -maxdepth 1 -type f -name 'shadow-*.json' \
   -printf '%T@ %p\n' 2>/dev/null | sort -nr | sed -n '1{s/^[^ ]* //;p;}')"

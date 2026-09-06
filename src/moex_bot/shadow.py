@@ -20,6 +20,7 @@ from .domain import (
     Position,
 )
 from .harness import HarnessResult, TradingHarness
+from .integrations.algopack_intraday import IntradaySuperCandle
 
 
 class HourlyMarketDataPort(Protocol):
@@ -177,6 +178,7 @@ def run_hourly_shadow(
     output_path: Path,
     as_of: datetime,
     market_data: HourlyMarketDataPort,
+    long_flow: tuple[IntradaySuperCandle, ...] = (),
 ) -> HarnessResult:
     if config.mode is not ExecutionMode.SHADOW:
         raise ValueError("hourly shadow requires mode=shadow")
@@ -226,11 +228,13 @@ def run_hourly_shadow(
             as_of.astimezone(ZoneInfo("Europe/Moscow")).hour
             in config.strategy.rebalance_hours_moscow
         ),
+        flow={item.secid: item for item in long_flow},
     )
     persisted = asdict(result)
     persisted["market"] = [asdict(market[secid]) for secid in sorted(market)]
     persisted["portfolio_input"] = asdict(portfolio)
     persisted["config_snapshot"] = asdict(config)
+    persisted["long_flow_input"] = [asdict(item) for item in long_flow]
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(
         json.dumps(persisted, ensure_ascii=False, default=str, indent=2),

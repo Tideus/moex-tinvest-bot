@@ -18,6 +18,18 @@ if [[ ! -x "${APP_DIR}/.venv/bin/python" ]]; then
   exit 2
 fi
 
+if [[ -x "${APP_DIR}/scripts/ubuntu/backup.sh" ]]; then
+  "${APP_DIR}/scripts/ubuntu/backup.sh"
+fi
+if git -C "${PROJECT_DIR}" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+  if ! git -C "${PROJECT_DIR}" diff --quiet \
+    || ! git -C "${PROJECT_DIR}" diff --cached --quiet; then
+    printf 'Source checkout has local changes; update aborted. Run git status and preserve them first.\n' >&2
+    exit 2
+  fi
+  git -C "${PROJECT_DIR}" pull --ff-only
+fi
+
 restart_timers() {
   if [[ "${WAS_SHADOW_ACTIVE}" -eq 1 ]]; then
     systemctl start moex-tinvest-shadow.timer || true
@@ -58,6 +70,9 @@ rsync -a --delete \
   --exclude '.git' --exclude '.venv' --exclude '.env' --exclude 'artifacts/*' \
   --exclude 'logs/*' --exclude 'data' --exclude 'work' \
   "${PROJECT_DIR}/" "${APP_DIR}/"
+build_revision="$(git -C "${PROJECT_DIR}" rev-parse HEAD 2>/dev/null || printf unknown)"
+printf '%s\n' "${build_revision}" >"${APP_DIR}/VERSION"
+chmod 0644 "${APP_DIR}/VERSION"
 find "${APP_DIR}/scripts/ubuntu" -type f -name '*.sh' -exec chmod 0755 {} +
 chown -R root:root "${APP_DIR}"
 install -d -o root -g "${SERVICE_USER}" -m 0750 "${CONFIG_DIR}"

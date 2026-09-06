@@ -212,3 +212,4 @@ class OrderRecord:
     status: OrderStatus
     filled_lots: int = 0
     broker_order_id: str | None = None
+    status_detail: str | None = None

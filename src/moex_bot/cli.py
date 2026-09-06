@@ -554,6 +554,15 @@ def hourly_shadow(
         config = load_config(config_path)
         universe = load_universe(universe_path)
         market_data = MoexAlgoReadOnlyAdapter.from_environment(require_token=require_token)
+        local_hour = as_of.astimezone(ZoneInfo("Europe/Moscow")).hour
+        long_flow = (
+            AlgoPackIntradayAdapter.from_environment().latest(
+                secids=tuple(entry.secid for entry in universe), as_of=as_of
+            )
+            if config.strategy.flow_confirmation_enabled
+            and local_hour in config.strategy.rebalance_hours_moscow
+            else ()
+        )
         result = run_hourly_shadow(
             config=config,
             universe=universe,
@@ -562,6 +571,7 @@ def hourly_shadow(
             output_path=output_path,
             as_of=as_of,
             market_data=market_data,
+            long_flow=long_flow,
         )
         notification_policy = load_notification_policy(notifications_path)
         if outbox_path is not None and should_send_long_morning(
@@ -728,6 +738,7 @@ def intraday_sandbox_execute(
             runtime=runtime,
             adapter=adapter,
             as_of=as_of,
+            order_ttl_seconds=config.order_ttl_seconds,
         )
         if outbox_path is not None and (result.submitted or result.stopped_reason):
             SQLiteOutbox(outbox_path).enqueue(

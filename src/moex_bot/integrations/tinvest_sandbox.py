@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import json
 import os
-from collections.abc import Mapping
+import time
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import ROUND_DOWN, Decimal
@@ -17,6 +18,7 @@ from ..service_config import SANDBOX_REST
 
 SANDBOX_BASE_URL = SANDBOX_REST
 POST_ORDER_PATH = "/tinkoff.public.invest.api.contract.v1.OrdersService/PostOrder"
+GET_ORDER_STATE_PATH = "/tinkoff.public.invest.api.contract.v1.OrdersService/GetOrderState"
 GET_INSTRUMENT_PATH = (
     "/tinkoff.public.invest.api.contract.v1.InstrumentsService/GetInstrumentBy"
 )
@@ -529,12 +531,17 @@ class TInvestSandboxExecutionAdapter:
     account_id: str
     transport: JsonPostTransport
     timeout_seconds: float = 10.0
+    poll_interval_seconds: float = 2.0
+    sleeper: Callable[[float], None] = time.sleep
+    monotonic: Callable[[], float] = time.monotonic
 
     def __post_init__(self) -> None:
         if not self.token.strip() or not self.account_id.strip():
             raise ValueError("sandbox token and account_id are required")
         if self.timeout_seconds <= 0:
             raise ValueError("timeout_seconds must be positive")
+        if self.poll_interval_seconds <= 0:
+            raise ValueError("poll_interval_seconds must be positive")
 
     @classmethod
     def from_environment(
@@ -602,9 +609,17 @@ class TInvestSandboxExecutionAdapter:
                 payload=payload,
                 timeout_seconds=self.timeout_seconds,
             )
-        except (TimeoutError, HTTPError, URLError):
+        except (TimeoutError, HTTPError, URLError) as exc:
             # Unknown delivery state: reconciliation must decide; never retry blindly.
-            return OrderRecord(intent=intent, status=OrderStatus.UNKNOWN)
+            detail = type(exc).__name__
+            if isinstance(exc, HTTPError):
+                detail += f":HTTP {exc.code}"
+            return OrderRecord(
+                intent=intent,
+                status=OrderStatus.UNKNOWN,
+                broker_order_id=intent.order_request_id,
+                status_detail=detail,
+            )
         status = _status(response.get("executionReportStatus"))
         filled = int(response.get("lotsExecuted", 0))
         if status is OrderStatus.FILLED and filled == 0:
@@ -615,5 +630,150 @@ class TInvestSandboxExecutionAdapter:
             intent=intent,
             status=status,
             filled_lots=filled,
-            broker_order_id=(str(response["orderId"]) if response.get("orderId") else None),
+            broker_order_id=(
+                str(response["orderId"])
+                if response.get("orderId")
+                else intent.order_request_id
+            ),
         )
+
+    def settle(
+        self, records: tuple[OrderRecord, ...], *, ttl_seconds: int
+    ) -> tuple[OrderRecord, ...]:
+        """Resolve accepted/unknown orders, then cancel non-filled orders at their TTL."""
+        if ttl_seconds < 0:
+            raise ValueError("order ttl must not be negative")
+        settled = list(records)
+        pending = {
+            index
+            for index, record in enumerate(settled)
+            if record.status
+            in {OrderStatus.ACCEPTED, OrderStatus.PARTIALLY_FILLED, OrderStatus.UNKNOWN}
+            and record.broker_order_id
+        }
+        deadline = self.monotonic() + ttl_seconds
+        while pending:
+            for index in tuple(pending):
+                record = settled[index]
+                try:
+                    state = self.transport.post(
+                        SANDBOX_BASE_URL + GET_ORDER_STATE_PATH,
+                        headers=self._headers(),
+                        payload={
+                            "accountId": self.account_id,
+                            "orderId": record.intent.order_request_id,
+                            "orderIdType": "ORDER_ID_TYPE_REQUEST",
+                            "priceType": "PRICE_TYPE_CURRENCY",
+                        },
+                        timeout_seconds=self.timeout_seconds,
+                    )
+                except (TimeoutError, HTTPError, URLError) as exc:
+                    settled[index] = OrderRecord(
+                        intent=record.intent,
+                        status=OrderStatus.UNKNOWN,
+                        filled_lots=record.filled_lots,
+                        broker_order_id=record.broker_order_id,
+                        status_detail=self._error_detail(exc),
+                    )
+                    continue
+                status = _status(state.get("executionReportStatus"))
+                filled = int(state.get("lotsExecuted", record.filled_lots))
+                if status is OrderStatus.FILLED and filled == 0:
+                    filled = record.intent.lots
+                if not 0 <= filled <= record.intent.lots:
+                    raise ValueError("sandbox order state has invalid lotsExecuted")
+                settled[index] = OrderRecord(
+                    intent=record.intent,
+                    status=status,
+                    filled_lots=filled,
+                    broker_order_id=record.broker_order_id,
+                )
+                if status in {
+                    OrderStatus.FILLED,
+                    OrderStatus.REJECTED,
+                    OrderStatus.CANCELLED,
+                }:
+                    pending.remove(index)
+            if not pending:
+                break
+            remaining = deadline - self.monotonic()
+            if remaining <= 0:
+                break
+            self.sleeper(min(self.poll_interval_seconds, remaining))
+        for index in tuple(pending):
+            record = settled[index]
+            try:
+                self.transport.post(
+                    SANDBOX_BASE_URL + CANCEL_SANDBOX_ORDER_PATH,
+                    headers=self._headers(),
+                    payload={
+                        "accountId": self.account_id,
+                        "orderId": record.intent.order_request_id,
+                        "orderIdType": "ORDER_ID_TYPE_REQUEST",
+                    },
+                    timeout_seconds=self.timeout_seconds,
+                )
+            except (TimeoutError, HTTPError, URLError) as exc:
+                settled[index] = OrderRecord(
+                    intent=record.intent,
+                    status=OrderStatus.UNKNOWN,
+                    filled_lots=record.filled_lots,
+                    broker_order_id=record.broker_order_id,
+                    status_detail=f"cancel:{self._error_detail(exc)}",
+                )
+            else:
+                try:
+                    final_state = self.transport.post(
+                        SANDBOX_BASE_URL + GET_ORDER_STATE_PATH,
+                        headers=self._headers(),
+                        payload={
+                            "accountId": self.account_id,
+                            "orderId": record.intent.order_request_id,
+                            "orderIdType": "ORDER_ID_TYPE_REQUEST",
+                            "priceType": "PRICE_TYPE_CURRENCY",
+                        },
+                        timeout_seconds=self.timeout_seconds,
+                    )
+                except (TimeoutError, HTTPError, URLError) as exc:
+                    settled[index] = OrderRecord(
+                        intent=record.intent,
+                        status=OrderStatus.UNKNOWN,
+                        filled_lots=record.filled_lots,
+                        broker_order_id=record.broker_order_id,
+                        status_detail=f"cancel_verify:{self._error_detail(exc)}",
+                    )
+                else:
+                    final_status = _status(final_state.get("executionReportStatus"))
+                    final_filled = int(final_state.get("lotsExecuted", record.filled_lots))
+                    if final_status is OrderStatus.FILLED and final_filled == 0:
+                        final_filled = record.intent.lots
+                    terminal = final_status in {
+                        OrderStatus.FILLED,
+                        OrderStatus.REJECTED,
+                        OrderStatus.CANCELLED,
+                    }
+                    settled[index] = OrderRecord(
+                        intent=record.intent,
+                        status=final_status if terminal else OrderStatus.UNKNOWN,
+                        filled_lots=final_filled,
+                        broker_order_id=record.broker_order_id,
+                        status_detail=(
+                            "ttl_expired"
+                            if final_status is OrderStatus.CANCELLED
+                            else None if terminal else "cancel_not_final"
+                        ),
+                    )
+        return tuple(settled)
+
+    def _headers(self) -> dict[str, str]:
+        return {
+            "Authorization": f"Bearer {self.token}",
+            "Content-Type": "application/json",
+        }
+
+    @staticmethod
+    def _error_detail(exc: BaseException) -> str:
+        detail = type(exc).__name__
+        if isinstance(exc, HTTPError):
+            detail += f":HTTP {exc.code}"
+        return detail

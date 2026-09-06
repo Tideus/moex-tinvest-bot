@@ -1,3 +1,4 @@
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
@@ -12,6 +13,7 @@ from moex_bot.domain import (
     PortfolioSnapshot,
 )
 from moex_bot.harness import TradingHarness
+from moex_bot.integrations.algopack_intraday import IntradaySuperCandle
 
 
 def _config() -> BotConfig:
@@ -179,3 +181,80 @@ def test_geo_multiplier_reduces_target_weights(tmp_path: Path) -> None:
     )
     assert result.geo.multiplier == Decimal("0.70")
     assert all(target.weight == Decimal("0.35") for target in result.targets)
+
+
+def _flow(secid: str, now: datetime, *, negative: bool = False) -> IntradaySuperCandle:
+    buy, sell = (Decimal("100"), Decimal("900")) if negative else (
+        Decimal("900"),
+        Decimal("100"),
+    )
+    return IntradaySuperCandle(
+        secid,
+        now,
+        Decimal("100"),
+        Decimal("100"),
+        buy,
+        sell,
+        buy,
+        sell,
+        Decimal("0"),
+        Decimal("0"),
+        Decimal("1"),
+        Decimal("-0.5") if negative else Decimal("0.5"),
+    )
+
+
+def test_long_rebalance_uses_algopack_flow_as_entry_confirmation(tmp_path: Path) -> None:
+    now = datetime.now(UTC)
+    base = _config()
+    config = replace(
+        base,
+        strategy=replace(base.strategy, flow_confirmation_enabled=True),
+    )
+    result = TradingHarness(
+        config,
+        DryRunExecutionAdapter(config.mode),
+        JsonlAuditLog(tmp_path / "flow.audit.jsonl"),
+    ).run(
+        run_id="run-flow",
+        as_of=now,
+        market=_market(now),
+        portfolio=PortfolioSnapshot(Decimal("100000")),
+        geo_events=(),
+        flow={
+            "AAA": _flow("AAA", now, negative=True),
+            "BBB": _flow("BBB", now),
+        },
+    )
+    assert result.quality.passed
+    assert {target.secid for target in result.targets} == {"BBB"}
+    assert {item.secid: item.passed for item in result.flow_diagnostics} == {
+        "AAA": False,
+        "BBB": True,
+    }
+
+
+def test_long_rebalance_fails_closed_when_candidate_flow_is_missing(
+    tmp_path: Path,
+) -> None:
+    now = datetime.now(UTC)
+    base = _config()
+    config = replace(
+        base,
+        strategy=replace(base.strategy, flow_confirmation_enabled=True),
+    )
+    result = TradingHarness(
+        config,
+        DryRunExecutionAdapter(config.mode),
+        JsonlAuditLog(tmp_path / "missing-flow.audit.jsonl"),
+    ).run(
+        run_id="run-missing-flow",
+        as_of=now,
+        market=_market(now),
+        portfolio=PortfolioSnapshot(Decimal("100000")),
+        geo_events=(),
+        flow={"AAA": _flow("AAA", now)},
+    )
+    assert not result.quality.passed
+    assert "missing long flow for BBB" in result.quality.errors
+    assert result.orders == ()

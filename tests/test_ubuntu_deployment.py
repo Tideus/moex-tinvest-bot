@@ -186,6 +186,16 @@ def test_install_and_update_materialize_full_runtime_config() -> None:
         assert "runtime-normalize" in text
 
 
+def test_update_backs_up_and_only_fast_forwards_clean_checkout() -> None:
+    text = (PROJECT_ROOT / "scripts" / "ubuntu" / "update.sh").read_text(
+        encoding="utf-8"
+    )
+    assert '"${APP_DIR}/scripts/ubuntu/backup.sh"' in text
+    assert "diff --quiet" in text
+    assert "diff --cached --quiet" in text
+    assert "pull --ff-only" in text
+
+
 def test_update_tolerates_a_new_timer_not_installed_yet() -> None:
     text = (PROJECT_ROOT / "scripts" / "ubuntu" / "update.sh").read_text(
         encoding="utf-8"
@@ -263,7 +273,23 @@ def test_runners_apply_compact_telegram_policy_without_losing_artifacts() -> Non
         encoding="utf-8"
     )
     assert '--notifications "${APP_DIR}/config/notifications.json"' in shadow
-    assert '--output "${flow_path}" || true' in shadow
+    assert "algopack-flow" not in shadow
+    assert "--secid SBER --futures-ticker SBERF" not in shadow
     assert 'intraday-trade-notifications \\' in intraday
     assert 'intraday-performance-report \\' in daily
     assert 'intraday-daily-performance-${report_date}.txt' in daily
+
+
+def test_install_update_and_report_preserve_deployed_git_revision() -> None:
+    install = (PROJECT_ROOT / "scripts" / "ubuntu" / "install.sh").read_text(
+        encoding="utf-8"
+    )
+    update = (PROJECT_ROOT / "scripts" / "ubuntu" / "update.sh").read_text(
+        encoding="utf-8"
+    )
+    control = (PROJECT_ROOT / "scripts" / "ubuntu" / "moex-botctl.sh").read_text(
+        encoding="utf-8"
+    )
+    assert 'rev-parse HEAD' in install and '/VERSION"' in install
+    assert 'rev-parse HEAD' in update and '${APP_DIR}/VERSION' in update
+    assert '[[ -r "${APP_DIR}/VERSION" ]]' in control

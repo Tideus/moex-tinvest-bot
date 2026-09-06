@@ -17,7 +17,6 @@ log_path="${LOG_DIR}/shadow-${stamp}.log"
 geo_path="${STATE_DIR}/artifacts/geo-${stamp}.json"
 shadow_path="${STATE_DIR}/artifacts/shadow-${stamp}.json"
 portfolio_path="${STATE_DIR}/artifacts/portfolio-${stamp}.json"
-flow_path="${STATE_DIR}/artifacts/flow-${stamp}.json"
 execution_path="${STATE_DIR}/artifacts/sandbox-execution-${stamp}.json"
 outbox_path="${STATE_DIR}/data/notifications.sqlite3"
 
@@ -78,11 +77,6 @@ if [[ "${shadow_status}" -eq 0 ]]; then
     shadow_status="${execution_status}"
   fi
 fi
-
-# Entitlement or network failures are visible in the log but do not replace shadow_status.
-"${PYTHON_BIN}" -m moex_bot.cli algopack-flow \
-  --secid SBER --futures-ticker SBERF \
-  --output "${flow_path}" || true
 
 telegram_status=0
 "${PYTHON_BIN}" -m moex_bot.cli telegram-send \

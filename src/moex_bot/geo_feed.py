@@ -132,11 +132,10 @@ def _severity(title: str) -> int:
     )
     elevated = (
         "санкц",
+        "sanction",
         "ограничительн",
         "ключевую ставку",
         "ключевой ставки",
-        "риск-параметр",
-        "risk parameter",
         "военн",
     )
     if any(keyword in normalized for keyword in high):
@@ -184,6 +183,7 @@ def build_geo_payload(
                 "observed_at": item.published_at.isoformat(),
                 "title": item.title,
                 "link": item.link,
+                "category": _category(item),
             }
         )
     healthy = not failed
@@ -195,6 +195,22 @@ def build_geo_payload(
         "events": events,
     }
     return payload, healthy
+
+
+def _category(item: FeedItem) -> str:
+    normalized = item.title.casefold()
+    if (
+        "санкц" in normalized
+        or "sanction" in normalized
+        or "ограничительн" in normalized
+        or "военн" in normalized
+    ):
+        return "geopolitical"
+    if "ставк" in normalized:
+        return "macro_policy"
+    if item.source_id.startswith("moex"):
+        return "market_infrastructure"
+    return "official_notice"
 
 
 def refresh_geo_feed(

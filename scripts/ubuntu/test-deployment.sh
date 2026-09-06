@@ -107,6 +107,13 @@ printf 'fake-python %s\n' "$*"
 exit 0
 EOF
 chmod 0755 "${FAKE_PYTHON}"
+mkdir -p "${RUNTIME_DIR}/bin"
+cat >"${RUNTIME_DIR}/bin/systemctl" <<'EOF'
+#!/usr/bin/env bash
+if [[ "${1:-}" == "is-failed" ]]; then exit 1; fi
+exit 0
+EOF
+chmod 0755 "${RUNTIME_DIR}/bin/systemctl"
 
 MOEX_BOT_APP_DIR="${PROJECT_DIR}" \
 MOEX_BOT_STATE_DIR="${RUNTIME_DIR}/state" \
@@ -126,6 +133,7 @@ MOEX_BOT_APP_DIR="${PROJECT_DIR}" \
 MOEX_BOT_CONFIG_DIR="${STAGE_DIR}/etc/moex-tinvest-bot" \
 MOEX_BOT_STATE_DIR="${RUNTIME_DIR}/state" \
 MOEX_BOT_PYTHON="${FAKE_PYTHON}" \
+PATH="${RUNTIME_DIR}/bin:${PATH}" \
   bash "${PROJECT_DIR}/scripts/ubuntu/healthcheck.sh"
 
 MOEX_BOT_STATE_DIR="${RUNTIME_DIR}/state" \

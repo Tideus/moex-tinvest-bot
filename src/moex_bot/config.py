@@ -28,6 +28,11 @@ class StrategyConfig:
     require_below_trend_for_short: bool = True
     long_target_gross: Decimal = Decimal("1")
     short_target_gross: Decimal = Decimal("0")
+    flow_confirmation_enabled: bool = False
+    flow_min_trade_imbalance: Decimal = Decimal("-0.25")
+    flow_min_order_flow: Decimal = Decimal("-0.10")
+    flow_min_book_imbalance: Decimal = Decimal("-0.20")
+    flow_max_spread_bbo: Decimal = Decimal("3")
 
 
 @dataclass(frozen=True, slots=True)
@@ -142,6 +147,19 @@ class BotConfig:
                 errors.append(f"{name} must be in [0, 1]")
         if self.strategy.shorts_enabled and self.strategy.short_target_gross <= 0:
             errors.append("strategy.short_target_gross must be positive when shorts are enabled")
+        for name, value in (
+            ("flow_min_trade_imbalance", self.strategy.flow_min_trade_imbalance),
+            ("flow_min_order_flow", self.strategy.flow_min_order_flow),
+            ("flow_min_book_imbalance", self.strategy.flow_min_book_imbalance),
+        ):
+            if not value.is_finite() or value < -1 or value > 1:
+                errors.append(f"strategy.{name} must be in [-1, 1]")
+        if (
+            not self.strategy.flow_max_spread_bbo.is_finite()
+            or self.strategy.flow_max_spread_bbo <= 0
+            or self.strategy.flow_max_spread_bbo > 100
+        ):
+            errors.append("strategy.flow_max_spread_bbo must be in (0, 100]")
         return tuple(errors)
 
 
@@ -213,6 +231,20 @@ def load_config(path: Path) -> BotConfig:
             ),
             long_target_gross=_decimal(strategy.get("long_target_gross", "1")),
             short_target_gross=_decimal(strategy.get("short_target_gross", "0")),
+            flow_confirmation_enabled=_boolean(
+                strategy.get("flow_confirmation_enabled", False),
+                "strategy.flow_confirmation_enabled",
+            ),
+            flow_min_trade_imbalance=_decimal(
+                strategy.get("flow_min_trade_imbalance", "-0.25")
+            ),
+            flow_min_order_flow=_decimal(
+                strategy.get("flow_min_order_flow", "-0.10")
+            ),
+            flow_min_book_imbalance=_decimal(
+                strategy.get("flow_min_book_imbalance", "-0.20")
+            ),
+            flow_max_spread_bbo=_decimal(strategy.get("flow_max_spread_bbo", "3")),
         ),
         min_cash_reserve_weight=_decimal(raw.get("min_cash_reserve_weight", "0.10")),
         max_sector_weight=_decimal(raw.get("max_sector_weight", "0.35")),

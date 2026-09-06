@@ -17,6 +17,9 @@
     "max_entries_per_day": 3,
     "max_daily_loss_weight": "0.005",
     "max_daily_turnover_rub": "60000",
+    "stop_loss_bps": "60",
+    "take_profit_bps": "120",
+    "max_holding_minutes": 120,
     "allow_short": true,
     "allow_overnight": false
   },
@@ -24,7 +27,9 @@
     "order_type": "limit",
     "order_ttl_seconds": 120,
     "cancel_if_signal_invalidated": true,
-    "chase_price": false
+    "chase_price": false,
+    "estimated_round_trip_cost_bps": "12",
+    "min_edge_after_cost_bps": "8"
   },
   "signal": {
     "history_bars": 3,

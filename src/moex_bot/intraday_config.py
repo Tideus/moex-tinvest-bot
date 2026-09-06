@@ -22,6 +22,13 @@ class IntradayConfig:
     allow_overnight: bool
     order_type: str
     order_ttl_seconds: int
+    estimated_round_trip_cost_bps: Decimal
+    min_edge_after_cost_bps: Decimal
+    cancel_if_signal_invalidated: bool
+    chase_price: bool
+    stop_loss_bps: Decimal
+    take_profit_bps: Decimal
+    max_holding_minutes: int
     enabled_strategies: tuple[str, ...]
     new_entries_start_moscow: time
     new_entries_stop_moscow: time
@@ -81,6 +88,22 @@ def load_intraday_config(path: Path) -> IntradayConfig:
         order_ttl_seconds=_integer(
             execution.get("order_ttl_seconds"), "order_ttl_seconds"
         ),
+        estimated_round_trip_cost_bps=Decimal(
+            str(execution.get("estimated_round_trip_cost_bps", "12"))
+        ),
+        min_edge_after_cost_bps=Decimal(
+            str(execution.get("min_edge_after_cost_bps", "8"))
+        ),
+        cancel_if_signal_invalidated=_boolean(
+            execution.get("cancel_if_signal_invalidated", True),
+            "cancel_if_signal_invalidated",
+        ),
+        chase_price=_boolean(execution.get("chase_price", False), "chase_price"),
+        stop_loss_bps=Decimal(str(risk.get("stop_loss_bps", "60"))),
+        take_profit_bps=Decimal(str(risk.get("take_profit_bps", "120"))),
+        max_holding_minutes=_integer(
+            risk.get("max_holding_minutes", 120), "max_holding_minutes"
+        ),
         enabled_strategies=tuple(enabled),
         new_entries_start_moscow=time.fromisoformat(
             str(session.get("new_entries_start_moscow", ""))
@@ -123,6 +146,20 @@ def _validate(config: IntradayConfig) -> None:
         raise ValueError("intraday positions cannot be carried overnight")
     if config.order_type != "limit" or not 5 <= config.order_ttl_seconds <= 300:
         raise ValueError("intraday v1 requires short-lived limit orders")
+    if config.chase_price:
+        raise ValueError("intraday v1 forbids chasing an unfilled order")
+    for name, value in (
+        ("estimated_round_trip_cost_bps", config.estimated_round_trip_cost_bps),
+        ("min_edge_after_cost_bps", config.min_edge_after_cost_bps),
+        ("stop_loss_bps", config.stop_loss_bps),
+        ("take_profit_bps", config.take_profit_bps),
+    ):
+        if not value.is_finite() or value <= 0 or value > 1000:
+            raise ValueError(f"intraday {name} must be in (0, 1000] basis points")
+    if config.take_profit_bps <= config.stop_loss_bps:
+        raise ValueError("intraday take_profit_bps must exceed stop_loss_bps")
+    if not 5 <= config.max_holding_minutes <= 480:
+        raise ValueError("intraday max_holding_minutes must be between 5 and 480")
     if not config.enabled_strategies or any(not item for item in config.enabled_strategies):
         raise ValueError("at least one named intraday strategy must be enabled")
     if not (

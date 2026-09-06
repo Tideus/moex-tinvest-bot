@@ -55,14 +55,14 @@ active-order reconciliation.
 - cash-reserve, position-weight and gross-exposure diversification gates;
 - 13 independently cross-checked TQBR shares with sector and correlated-risk limits;
 - verified Russian Trusted CA bundle installed by Ubuntu install/update scripts;
-- T-Invest sandbox-only REST execution adapter with timeout-to-UNKNOWN semantics;
+- T-Invest sandbox-only REST execution adapter with state polling, TTL cancellation and diagnosed UNKNOWN semantics;
 - broker-operation recovery of daily turnover, per-security daily P&L and Friday weekly review;
 - unit and integration-style replay tests;
 - CI workflow.
 - durable SQLite notification outbox with idempotent one-way Telegram delivery;
-- entitled ALGOPACK TradeStats/FUTOI/HI2 flow reports;
+- entitled ALGOPACK TradeStats/OrderStats/OBStats confirmation for new long entries; FUTOI/HI2 remain research evidence;
 - exact five-minute TradeStats/OrderStats/OBStats joins and a dedicated intraday signal store;
-- isolated intraday Sandbox account, pre-cycle cancellation/reconciliation and forced flat close;
+- isolated intraday Sandbox account, reconciliation, stop/take/time/reversal exits and forced flat close;
 - separate intraday systemd timer and full decision artifacts;
 - compact Telegram policy: long morning/evening, intraday broker fills/evening only;
 - dated, source-linked ownership disclosure registry.
@@ -71,7 +71,7 @@ active-order reconciliation.
 
 `ExecutionMode.LIVE` remains denied by configuration validation and the executor. The only
 mutation path is hard-wired to the official T-Invest sandbox REST host, uses limit entries and
-market exits only for the mandatory intraday flattening phase, uses
+market exits for managed intraday risk exits and mandatory flattening, uses
 verified instrument UID and idempotency UUID, and requires both `t_invest_environment=sandbox`
 and the explicit operator switch. Production credentials may be configured for read-only shadow
 synchronization, but cannot enable order submission.
@@ -200,8 +200,9 @@ in the audit artifacts.
 supervisor to invoke it hourly at `HH:05` Moscow time. It reads completed MOEX candles and writes
 a fail-closed execution plan; the Ubuntu runner separately submits validated intents to Sandbox.
 The runner first polls allowlisted official CBR and MOEX RSS feeds. If any feed fails or
-the timestamp is older than two hours, exposure is automatically reduced. Keyword classification
-is intentionally conservative and must be expanded with verified issuer and sanctions sources.
+the timestamp is older than two hours, exposure is automatically reduced. Technical MOEX risk
+parameter notices are classified as infrastructure rather than geopolitics. The current official
+source set is still narrow and must be expanded only with verified issuer and sanctions sources.
 
 Register the included Windows task after creating `.venv`:
 

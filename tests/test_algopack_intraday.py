@@ -1,6 +1,7 @@
 from datetime import datetime
 from decimal import Decimal
 from typing import Any
+from urllib.error import URLError
 from zoneinfo import ZoneInfo
 
 from moex_bot.integrations.algopack_intraday import AlgoPackIntradayAdapter
@@ -50,3 +51,26 @@ def test_adapter_joins_three_latest_supercandle_datasets() -> None:
     assert bars[0].book_imbalance == Decimal("0.4")
     assert len(transport.urls) == 3
     assert all("latest=1" in url for url in transport.urls)
+
+
+def test_adapter_retries_transient_read_failure() -> None:
+    class FlakyTransport(FakeGetTransport):
+        attempts = 0
+
+        def get(self, url: str, *, headers: dict[str, str], timeout: float) -> object:
+            self.attempts += 1
+            if self.attempts == 1:
+                raise URLError("temporary timeout")
+            return super().get(url, headers=headers, timeout=timeout)
+
+    transport = FlakyTransport()
+    delays: list[float] = []
+    adapter = AlgoPackIntradayAdapter(
+        "token", transport, retry_attempts=2, retry_backoff=0.25, sleeper=delays.append
+    )
+    bars = adapter.latest(
+        secids=("SBER",),
+        as_of=datetime(2026, 8, 20, 10, 30, tzinfo=MOSCOW),
+    )
+    assert bars
+    assert delays == [0.25]

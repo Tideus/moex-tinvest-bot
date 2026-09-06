@@ -103,6 +103,10 @@ else
   : >"${target}/logs/.gitkeep"
 fi
 
+build_revision="$(git -C "${PROJECT_DIR}" rev-parse HEAD 2>/dev/null || printf unknown)"
+printf '%s\n' "${build_revision}" >"$(root_path "${APP_DIR}")/VERSION"
+chmod 0644 "$(root_path "${APP_DIR}")/VERSION"
+
 install -m 0644 "${PROJECT_DIR}/deploy/ubuntu/moex-tinvest-shadow.service" \
   "$(root_path /etc/systemd/system/moex-tinvest-shadow.service)"
 install -m 0644 "${PROJECT_DIR}/deploy/ubuntu/moex-tinvest-shadow.timer" \

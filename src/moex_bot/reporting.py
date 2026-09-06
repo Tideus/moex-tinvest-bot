@@ -245,6 +245,22 @@ def render_shadow_report(result: HarnessResult, as_of: datetime) -> str:
                     f"{_number(diagnostic.momentum_threshold * 100, signed=True)}%); "
                     f"цена {trend_sign} тренда"
                 )
+    if result.flow_diagnostics:
+        lines.extend(("", "🌊 ALGOPACK · ПОДТВЕРЖДЕНИЕ ВХОДА"))
+        for flow_item in result.flow_diagnostics[:12]:
+            icon = "✅" if flow_item.passed else "⛔"
+            detail = (
+                "фильтр пройден"
+                if flow_item.passed
+                else "; ".join(flow_item.reasons)
+            )
+            lines.append(
+                f"{icon} {flow_item.secid}: сделки "
+                f"{_number(flow_item.trade_imbalance * 100, signed=True)}% · "
+                f"заявки {_number(flow_item.order_flow * 100, signed=True)}% · "
+                f"стакан {_number(flow_item.book_imbalance * 100, signed=True)}% — "
+                f"{detail}"
+            )
     if result.orders:
         lines.extend(("", "🧾 ЗАЯВКИ ДЛЯ T‑INVEST SANDBOX"))
         for record in result.orders[:12]:

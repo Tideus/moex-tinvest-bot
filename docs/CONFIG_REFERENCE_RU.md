@@ -77,12 +77,17 @@ exec /opt/moex-tinvest-bot/.venv/bin/python -m moex_bot.cli \
 | `risk.max_entries_per_day` | `1…3` | Новые сигналы, зафиксированные в SQLite за московский день. |
 | `risk.max_daily_loss_weight` | `(0,0.01]` | При достижении убытка относительно первого equity дня новые входы блокируются, позиции закрываются. |
 | `risk.max_daily_turnover_rub` | положительная сумма | Двусторонний оборот по операциям intraday-счёта. |
+| `risk.stop_loss_bps` | `(0,1000]` б.п. | Закрывает открытую позицию market-заявкой при достижении заданного убытка от цены сигнала входа. |
+| `risk.take_profit_bps` | `(0,1000]` б.п.; больше stop | Закрывает позицию при достижении цели прибыли. |
+| `risk.max_holding_minutes` | `5…480` | Максимальное время удержания intraday-позиции независимо от P&L. |
 | `risk.allow_short` | boolean | Разрешает short только при подтверждённом `shortEnabledFlag`. |
 | `risk.allow_overnight` | только `false` | Перенос позиции запрещён. |
 | `execution.order_type` | только `limit` | Входы — лимитные; обязательное закрытие использует market отдельно в коде. |
-| `execution.order_ttl_seconds` | `5…300` | Документированный TTL; фактически активный остаток отменяется в начале следующего 5-минутного цикла. |
-| `execution.cancel_if_signal_invalidated` | boolean | Политика отмены устаревшего входа. |
-| `execution.chase_price` | `false` | Запрещает переставлять вход вслед за ценой. |
+| `execution.order_ttl_seconds` | `5…300` | После отправки бот опрашивает финальный статус; незаполненный остаток отменяется сразу по истечении TTL. |
+| `execution.cancel_if_signal_invalidated` | boolean | При подтверждённом противоположном сигнале открытая позиция закрывается market-заявкой. |
+| `execution.chase_price` | только `false` | Валидатор запрещает переставлять вход вслед за ценой. |
+| `execution.estimated_round_trip_cost_bps` | `(0,1000]` | Оценка комиссии и прочих двусторонних издержек для фильтра входа. |
+| `execution.min_edge_after_cost_bps` | `(0,1000]` | Минимальный запас движения после вычета round-trip cost и текущего spread. |
 | `signal.history_bars` | `3…12` | Число строго последовательных завершённых интервалов. |
 | `signal.min_price_move` | `(0,1]` | Минимальное абсолютное движение цены за окно. |
 | `signal.min_abs_trade_imbalance` | `(0,1]` | Порог исполненного потока `(Σval_b−Σval_s)/(Σval_b+Σval_s)`. |
@@ -195,8 +200,15 @@ sudo moex-botctl sandbox-disable
 | `strategy.require_below_trend_for_short` | JSON boolean | При `true` short возможен только при цене ниже trend. |
 | `strategy.long_target_gross` | доля `[0,1]` | Совокупный исходный бюджет long до остальных risk caps. |
 | `strategy.short_target_gross` | доля `(0,1]` при shorts | Совокупный абсолютный бюджет short до caps. |
+| `strategy.flow_confirmation_enabled` | boolean | Требует свежий 5-минутный TradeStats/OrderStats/OBStats для каждого нового long-кандидата; отсутствие данных блокирует утреннюю ребалансировку. |
+| `strategy.flow_min_trade_imbalance` | `[-1,1]` | Минимальный дисбаланс исполненных покупок/продаж для нового long. |
+| `strategy.flow_min_order_flow` | `[-1,1]` | Минимальный нормированный поток выставлений минус отмены для нового long. |
+| `strategy.flow_min_book_imbalance` | `[-1,1]` | Минимальный дисбаланс видимой ликвидности для нового long. |
+| `strategy.flow_max_spread_bbo` | `(0,100]` б.п. | Максимальный spread для нового long-входа. |
 
-Адаптер считает blended momentum, trend и volatility только по завершённым свечам. Инструменты
+Адаптер считает blended momentum, trend и volatility только по завершённым свечам. На разрешённом
+часе ребалансировки новые long-входы дополнительно проходят свежий ALGOPACK flow-фильтр; уже
+открытая позиция не продаётся только из-за одного 5-минутного отрицательного бара. Инструменты
 получают inverse-volatility либо равные исходные веса, после чего применяются лимит одной бумаги,
 сектора, риск-кластера, денежного резерва и геополитический множитель.
 

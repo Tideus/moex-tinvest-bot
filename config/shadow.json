@@ -32,6 +32,11 @@
     "max_short_momentum": "-0.03",
     "require_below_trend_for_short": true,
     "long_target_gross": "0.60",
-    "short_target_gross": "0"
+    "short_target_gross": "0",
+    "flow_confirmation_enabled": true,
+    "flow_min_trade_imbalance": "-0.25",
+    "flow_min_order_flow": "-0.10",
+    "flow_min_book_imbalance": "-0.20",
+    "flow_max_spread_bbo": "3.0"
   }
 }

@@ -2,7 +2,7 @@ from decimal import Decimal
 from typing import Any
 from uuid import uuid4
 
-from moex_bot.domain import Instrument, OrderIntent, OrderStatus, Side
+from moex_bot.domain import Instrument, OrderIntent, OrderRecord, OrderStatus, Side
 from moex_bot.integrations.tinvest_sandbox import (
     SANDBOX_BASE_URL,
     TInvestSandboxAccountService,
@@ -80,7 +80,68 @@ def test_timeout_becomes_unknown_without_blind_retry() -> None:
     adapter = TInvestSandboxExecutionAdapter("sandbox-token", "sandbox-account", transport)
     record = adapter.submit(_intent())
     assert record.status is OrderStatus.UNKNOWN
+    assert record.broker_order_id == record.intent.order_request_id
+    assert record.status_detail == "TimeoutError"
     assert transport.call is not None
+
+
+def test_order_lifecycle_polls_until_fill() -> None:
+    class StateTransport(RecordingTransport):
+        def __init__(self) -> None:
+            super().__init__()
+            self.responses = iter(
+                (
+                    {
+                        "executionReportStatus": "EXECUTION_REPORT_STATUS_FILL",
+                        "lotsExecuted": "2",
+                    },
+                )
+            )
+
+        def post(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
+            return next(self.responses)
+
+    record = OrderRecord(_intent(), OrderStatus.ACCEPTED, broker_order_id="broker-1")
+    settled = TInvestSandboxExecutionAdapter(
+        "token", "account", StateTransport()
+    ).settle((record,), ttl_seconds=0)
+    assert settled[0].status is OrderStatus.FILLED
+    assert settled[0].filled_lots == 2
+
+
+def test_order_lifecycle_cancels_still_active_order_at_ttl() -> None:
+    class ActiveTransport(RecordingTransport):
+        def __init__(self) -> None:
+            super().__init__()
+            self.urls: list[str] = []
+            self.state_calls = 0
+
+        def post(
+            self,
+            url: str,
+            **kwargs: Any,
+        ) -> dict[str, Any]:
+            self.urls.append(url)
+            if "GetOrderState" in url:
+                self.state_calls += 1
+                return {
+                    "executionReportStatus": (
+                        "EXECUTION_REPORT_STATUS_NEW"
+                        if self.state_calls == 1
+                        else "EXECUTION_REPORT_STATUS_CANCELLED"
+                    ),
+                    "lotsExecuted": "0",
+                }
+            return {}
+
+    transport = ActiveTransport()
+    record = OrderRecord(_intent(), OrderStatus.ACCEPTED, broker_order_id="broker-1")
+    settled = TInvestSandboxExecutionAdapter(
+        "token", "account", transport
+    ).settle((record,), ttl_seconds=0)
+    assert settled[0].status is OrderStatus.CANCELLED
+    assert settled[0].status_detail == "ttl_expired"
+    assert any("CancelSandboxOrder" in url for url in transport.urls)
 
 
 def test_mandatory_flat_market_order_omits_limit_price() -> None:

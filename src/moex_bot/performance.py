@@ -55,6 +55,8 @@ class PerformanceSummary:
     unattributed_pnl: Decimal
     profitable_securities: int
     verdict: str
+    total_commission: Decimal
+    attribution_reliable: bool
 
 
 @dataclass(frozen=True, slots=True)
@@ -177,6 +179,9 @@ def summarize_performance(
     rejected = sum(item.rejected for item in points)
     verdict = _verdict(len(points), len(period_operations), blocked, drawdown, return_pct)
     unattributed = pnl - sum((row.pnl for row in rows), Decimal("0"))
+    total_commission = sum((item.commission for item in period_operations), Decimal("0"))
+    attribution_tolerance = max(Decimal("1"), abs(pnl) * Decimal("0.02"))
+    attribution_reliable = abs(unattributed) <= attribution_tolerance
     return PerformanceSummary(
         label,
         first.observed_at,
@@ -198,6 +203,8 @@ def summarize_performance(
         unattributed,
         sum(1 for row in rows if row.pnl > 0),
         verdict,
+        total_commission,
+        attribution_reliable,
     )
 
 
@@ -211,9 +218,14 @@ def render_performance_report(summary: PerformanceSummary, *, weekly: bool) -> s
         f"Баланс в начале: {_money(summary.start_equity)}",
         f"Баланс в конце: {_money(summary.end_equity)}",
         f"Результат: {_signed_money(summary.pnl)} ({summary.return_pct:+.2f}%)",
-        f"Равновзвешенный universe: {summary.equal_weight_return_pct:+.2f}%",
+        f"Справочный равновзвешенный universe: {summary.equal_weight_return_pct:+.2f}%",
         f"Период цен benchmark: {summary.benchmark_period}",
-        f"Разница к нему: {summary.excess_return_pct:+.2f} п.п.",
+        (
+            f"Разница к нему: {summary.excess_return_pct:+.2f} п.п."
+            if summary.benchmark_aligned
+            else "Разница к benchmark: недоступна из-за несовпадения периода"
+        ),
+        f"Комиссии по операциям: {_money(summary.total_commission)}",
         f"Максимальная просадка: {summary.max_drawdown_pct:.2f}%",
         "",
         "📊 ПО БУМАГАМ",
@@ -221,13 +233,23 @@ def render_performance_report(summary: PerformanceSummary, *, weekly: bool) -> s
     if not summary.benchmark_aligned:
         lines.insert(
             9,
-            "⚠️ Benchmark не совпадает с датами отчёта; сравнение носит справочный характер.",
+            "⚠️ Benchmark не совпадает с датами отчёта; excess-доходность не рассчитана.",
+        )
+    if not summary.attribution_reliable:
+        lines.append(
+            "⚠️ Разбивка по бумагам не прошла сверку с балансом; "
+            "её нельзя использовать для оценки сигналов."
         )
     if not summary.rows:
         lines.append("• позиции и исполненные сделки отсутствуют")
+    if any(row.end_units for row in summary.rows):
+        lines.append(
+            "ℹ️ Открытые позиции переоценены по последнему снимку; "
+            "их вклад ещё не является реализованной прибылью/убытком."
+        )
     for row in sorted(summary.rows, key=lambda item: (-item.pnl, item.secid)):
         lines.append(
-            f"• {row.secid}: {_signed_money(row.pnl)} · "
+            f"• {row.secid}: {_signed_money(row.pnl)} · вклад MTM · "
             f"позиция {row.start_units}→{row.end_units} шт."
         )
     if summary.unattributed_pnl != 0:
@@ -242,6 +264,11 @@ def render_performance_report(summary: PerformanceSummary, *, weekly: bool) -> s
             f"Циклов: {summary.cycles} · blocked: {summary.blocked_cycles}",
             f"Операций: {summary.operations} · risk-отклонений: {summary.rejected_intents}",
             f"Бумаг с положительным вкладом: {summary.profitable_securities}/{len(summary.rows)}",
+            (
+                "Сверка атрибуции: PASS"
+                if summary.attribution_reliable
+                else "Сверка атрибуции: FAIL"
+            ),
         )
     )
     if weekly:

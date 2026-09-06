@@ -89,6 +89,7 @@ class IntradayStateStore:
                     secid TEXT NOT NULL,
                     observed_at TEXT NOT NULL,
                     side TEXT NOT NULL,
+                    price TEXT NOT NULL DEFAULT '0',
                     PRIMARY KEY(secid, observed_at, side)
                 );
                 CREATE TABLE IF NOT EXISTS intraday_sessions (
@@ -97,6 +98,15 @@ class IntradayStateStore:
                 );
                 """
             )
+            columns = {
+                str(row[1])
+                for row in conn.execute("PRAGMA table_info(intraday_signals)")
+            }
+            if "price" not in columns:
+                conn.execute(
+                    "ALTER TABLE intraday_signals "
+                    "ADD COLUMN price TEXT NOT NULL DEFAULT '0'"
+                )
 
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.path, timeout=5)
@@ -131,10 +141,29 @@ class IntradayStateStore:
         with self._connect() as conn:
             cursor = conn.execute(
                 "INSERT OR IGNORE INTO intraday_signals"
-                "(trade_day,secid,observed_at,side) VALUES(?,?,?,?)",
-                (local_day, signal.secid, signal.observed_at.isoformat(), signal.side.value),
+                "(trade_day,secid,observed_at,side,price) VALUES(?,?,?,?,?)",
+                (
+                    local_day,
+                    signal.secid,
+                    signal.observed_at.isoformat(),
+                    signal.side.value,
+                    str(signal.price),
+                ),
             )
         return cursor.rowcount == 1
+
+    def latest_signal(
+        self, trade_day: str, secid: str
+    ) -> tuple[datetime, Side, Decimal] | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT observed_at, side, price FROM intraday_signals "
+                "WHERE trade_day=? AND secid=? ORDER BY observed_at DESC LIMIT 1",
+                (trade_day, secid),
+            ).fetchone()
+        if row is None:
+            return None
+        return datetime.fromisoformat(str(row[0])), Side(str(row[1])), Decimal(str(row[2]))
 
     def entries(self, trade_day: str) -> int:
         with self._connect() as conn:
@@ -190,27 +219,23 @@ def build_intraday_plan(
         phase = "monitor"
 
     latest_prices = {bar.secid: bar.close for bar in bars}
+    broker_prices = _broker_position_prices(portfolio, instruments, positions)
+    position_prices = {**broker_prices, **latest_prices}
     if phase in {"force_flat", "loss_limit_flat"}:
-        missing_prices = sorted(set(positions) - set(latest_prices))
+        missing_prices = sorted(set(positions) - set(position_prices))
         if missing_prices:
             raise ValueError(
-                "cannot flatten positions without fresh prices: " + ", ".join(missing_prices)
+                "cannot flatten positions without broker or market prices: "
+                + ", ".join(missing_prices)
             )
-        flat_orders = _flatten_orders(instruments, positions, latest_prices, as_of)
-        notes = ("forced flat before overnight" if phase == "force_flat" else "daily loss gate",)
+        flat_orders = _flatten_orders(instruments, positions, position_prices, as_of)
+        notes = [
+            "forced flat before overnight" if phase == "force_flat" else "daily loss gate"
+        ]
+        if not bars:
+            notes.append("ALGOPACK unavailable; broker valuation used for mandatory exit")
         return IntradayPlan(
-            run_id, bool(bars), phase, (), flat_orders, notes, quality_errors, {}
-        )
-    if phase != "entries":
-        return IntradayPlan(
-            run_id,
-            bool(bars),
-            phase,
-            (),
-            (),
-            ("new entries disabled",),
-            quality_errors,
-            {},
+            run_id, True, phase, (), flat_orders, tuple(notes), (), {}
         )
     if _integer_value(portfolio.get("open_orders", 0), "open_orders") != 0:
         return IntradayPlan(
@@ -223,13 +248,12 @@ def build_intraday_plan(
             ("active sandbox orders remain after reconciliation",),
             {},
         )
-    missing_position_prices = sorted(set(positions) - set(latest_prices))
+    missing_position_prices = sorted(set(positions) - set(position_prices))
     if missing_position_prices:
         raise ValueError(
-            "cannot size intraday exposure without fresh prices: "
+            "cannot size intraday exposure without broker or market prices: "
             + ", ".join(missing_position_prices)
         )
-
     gate_counts: Counter[str] = Counter()
     signals = tuple(
         sorted(
@@ -249,6 +273,46 @@ def build_intraday_plan(
             key=lambda item: (-item.score, item.secid),
         )
     )
+    exit_orders, exit_notes = _position_exit_orders(
+        config=config,
+        instruments=instruments,
+        positions=positions,
+        prices=position_prices,
+        signals=signals,
+        store=store,
+        trade_day=trade_day,
+        as_of=as_of,
+    )
+    if exit_orders:
+        return IntradayPlan(
+            run_id,
+            True,
+            "position_exit",
+            signals,
+            exit_orders,
+            exit_notes,
+            (),
+            dict(sorted(gate_counts.items())),
+        )
+    if phase != "entries":
+        monitoring_required = bool(positions)
+        return IntradayPlan(
+            run_id,
+            bool(bars) or not monitoring_required,
+            phase,
+            signals,
+            (),
+            (
+                "new entries disabled",
+                *(
+                    ("ALGOPACK unavailable; no open positions require monitoring",)
+                    if not bars and not monitoring_required
+                    else ()
+                ),
+            ),
+            quality_errors if monitoring_required else (),
+            dict(sorted(gate_counts.items())),
+        )
     entry_slots = max(0, config.max_entries_per_day - store.entries(trade_day))
     position_slots = max(0, config.max_concurrent_positions - len(positions))
     turnover_left = max(Decimal("0"), config.max_daily_turnover_rub - daily_turnover)
@@ -256,7 +320,7 @@ def build_intraday_plan(
         (
             abs(lots)
             * instruments[secid].lot_size
-            * latest_prices[secid]
+            * position_prices[secid]
             for secid, lots in positions.items()
         ),
         Decimal("0"),
@@ -291,6 +355,26 @@ def build_intraday_plan(
         quality_errors,
         dict(sorted(gate_counts.items())),
     )
+
+
+def _broker_position_prices(
+    portfolio: Mapping[str, object],
+    instruments: Mapping[str, Instrument],
+    positions: Mapping[str, int],
+) -> dict[str, Decimal]:
+    raw_positions = portfolio.get("positions", {})
+    if not isinstance(raw_positions, Mapping):
+        raise ValueError("intraday portfolio positions must be an object")
+    prices: dict[str, Decimal] = {}
+    for secid, lots in positions.items():
+        raw = raw_positions.get(secid)
+        if not isinstance(raw, Mapping) or raw.get("current_value") is None:
+            continue
+        units = abs(lots) * instruments[secid].lot_size
+        value = abs(Decimal(str(raw["current_value"])))
+        if units > 0 and value > 0:
+            prices[secid] = value / Decimal(units)
+    return prices
 
 
 def render_intraday_report(plan: IntradayPlan, *, account_label: str = "intraday") -> str:
@@ -363,6 +447,13 @@ def _signal(
         failed.append("book_imbalance")
     if latest.spread_bbo > config.max_spread_bbo:
         failed.append("spread_bbo")
+    expected_edge_bps = (
+        abs(move) * Decimal("10000")
+        - config.estimated_round_trip_cost_bps
+        - latest.spread_bbo
+    )
+    if expected_edge_bps < config.min_edge_after_cost_bps:
+        failed.append("cost_edge")
     if failed:
         for name in failed:
             counts[f"failed_{name}"] += 1
@@ -439,6 +530,105 @@ def _flatten_orders(
             )
         )
     return tuple(orders)
+
+
+def _position_exit_orders(
+    *,
+    config: IntradayConfig,
+    instruments: Mapping[str, Instrument],
+    positions: Mapping[str, int],
+    prices: Mapping[str, Decimal],
+    signals: tuple[IntradaySignal, ...],
+    store: IntradayStateStore,
+    trade_day: str,
+    as_of: datetime,
+) -> tuple[tuple[OrderIntent, ...], tuple[str, ...]]:
+    signals_by_secid = {signal.secid: signal for signal in signals}
+    orders: list[OrderIntent] = []
+    notes: list[str] = []
+    for secid, lots in sorted(positions.items()):
+        if not lots or secid not in prices or secid not in instruments:
+            continue
+        entry = store.latest_signal(trade_day, secid)
+        if entry is None:
+            missing_reason = "missing_entry_state"
+            orders.append(
+                _position_exit_order(
+                    instruments[secid], lots, prices[secid], as_of, missing_reason
+                )
+            )
+            notes.append(f"{secid}: {missing_reason}; unmanaged intraday exposure")
+            continue
+        entered_at, entry_side, entry_price = entry
+        if entered_at.tzinfo is None:
+            entered_at = entered_at.replace(tzinfo=MOSCOW)
+        current_price = prices[secid]
+        position_side = Side.BUY if lots > 0 else Side.SELL
+        direction = Decimal("1") if lots > 0 else Decimal("-1")
+        return_bps: Decimal | None = None
+        if entry_price > 0:
+            return_bps = direction * (current_price / entry_price - Decimal("1")) * Decimal(
+                "10000"
+            )
+        held_minutes = max(
+            Decimal("0"),
+            Decimal(str((as_of - entered_at).total_seconds())) / Decimal("60"),
+        )
+        reason: str | None = None
+        if return_bps is not None and return_bps <= -config.stop_loss_bps:
+            reason = f"stop_loss:{return_bps:.1f}bps"
+        elif return_bps is not None and return_bps >= config.take_profit_bps:
+            reason = f"take_profit:{return_bps:.1f}bps"
+        elif held_minutes >= config.max_holding_minutes:
+            reason = f"max_holding:{held_minutes:.0f}min"
+        else:
+            current_signal = signals_by_secid.get(secid)
+            if (
+                config.cancel_if_signal_invalidated
+                and current_signal is not None
+                and current_signal.side is not position_side
+            ):
+                reason = "signal_reversal"
+        if reason is None:
+            continue
+        orders.append(
+            _position_exit_order(
+                instruments[secid], lots, current_price, as_of, reason
+            )
+        )
+        notes.append(
+            f"{secid}: {reason}; entry_side={entry_side.value}; "
+            f"entry={entry_price}; current={current_price}"
+        )
+    return tuple(orders), tuple(notes)
+
+
+def _position_exit_order(
+    instrument: Instrument,
+    lots: int,
+    current_price: Decimal,
+    as_of: datetime,
+    reason: str,
+) -> OrderIntent:
+    side = Side.SELL if lots > 0 else Side.BUY
+    price = _rounded(current_price, instrument.tick_size)
+    quantity = abs(lots)
+    return OrderIntent(
+        str(
+            uuid5(
+                NAMESPACE_URL,
+                f"intraday-exit:{as_of.isoformat()}:{instrument.uid}:{reason}",
+            )
+        ),
+        instrument,
+        side,
+        quantity,
+        price,
+        price * instrument.lot_size * quantity,
+        f"intraday managed exit;{reason}",
+        confirm_margin_trade=False,
+        order_type="market",
+    )
 
 
 def _tick_price(side: Side, signal: IntradaySignal, tick: Decimal) -> Decimal:
