@@ -60,6 +60,8 @@ active-order reconciliation.
 - unit and integration-style replay tests;
 - CI workflow.
 - durable SQLite notification outbox with idempotent one-way Telegram delivery;
+- authenticated ALGOPACK health probe plus systemd next-elapse checks (an active timer with no
+  next trigger is unhealthy);
 - entitled ALGOPACK TradeStats/OrderStats/OBStats confirmation for new long entries; FUTOI/HI2 remain research evidence;
 - exact five-minute TradeStats/OrderStats/OBStats joins and a dedicated intraday signal store;
 - isolated intraday Sandbox account, reconciliation, stop/take/time/reversal exits and forced flat close;

@@ -61,6 +61,18 @@ check() {
   return 0
 }
 
+timer_has_next_elapse() {
+  local unit="$1"
+  local realtime=""
+  local monotonic=""
+  realtime="$(systemctl show "${unit}" --property=NextElapseUSecRealtime --value 2>/dev/null)"
+  monotonic="$(systemctl show "${unit}" --property=NextElapseUSecMonotonic --value 2>/dev/null)"
+  if [[ -n "${realtime}" && "${realtime}" != "n/a" && "${realtime}" != "0" ]]; then
+    return 0
+  fi
+  [[ -n "${monotonic}" && "${monotonic}" != "n/a" && "${monotonic}" != "0" ]]
+}
+
 require_root() {
   if [[ "${EUID}" -ne 0 ]]; then
     printf 'FAIL: run with sudo.\n' >&2
@@ -171,6 +183,10 @@ prelaunch() {
       --services "${SERVICES_FILE}" --runtime "${RUNTIME_FILE}" \
       --require moex_algopack --require telegram \
       --require "${requirement}"
+  check "ALGOPACK принимает токен" \
+    "обновите MOEX_APIKEY в bot.env; HTTP 401 означает отклонённый токен" \
+    as_service "${PYTHON_BIN}" -m moex_bot.cli algopack-health \
+      --services "${SERVICES_FILE}" --timeout 10
 
   heading "4/5 Systemd"
   check "Unit-файлы корректны" \
@@ -237,6 +253,15 @@ start_bot() {
   check "Таймеры включены" "проверьте systemctl status таймеров" \
     systemctl enable --now moex-tinvest-shadow.timer moex-tinvest-health.timer \
       moex-tinvest-daily-report.timer moex-tinvest-intraday.timer
+  for timer in \
+    moex-tinvest-shadow.timer \
+    moex-tinvest-health.timer \
+    moex-tinvest-daily-report.timer \
+    moex-tinvest-intraday.timer; do
+    check "Назначен следующий запуск ${timer}" \
+      "таймер включён, но NEXT отсутствует; перезапустите timer после daemon-reload" \
+      timer_has_next_elapse "${timer}"
+  done
   heading "Фактическое расписание"
   systemctl list-timers 'moex-tinvest-*' --no-pager || true
   if [[ "${FAILURES}" -ne 0 ]]; then
@@ -314,6 +339,19 @@ diagnose_once() {
     systemctl is-active --quiet moex-tinvest-daily-report.timer
   check "Intraday timer активен" "выполните sudo moex-botctl start" \
     systemctl is-active --quiet moex-tinvest-intraday.timer
+  for timer in \
+    moex-tinvest-shadow.timer \
+    moex-tinvest-health.timer \
+    moex-tinvest-daily-report.timer \
+    moex-tinvest-intraday.timer; do
+    check "Следующий запуск ${timer}" \
+      "таймер активен, но NEXT отсутствует; выполните daemon-reload и restart таймера" \
+      timer_has_next_elapse "${timer}"
+  done
+  check "ALGOPACK принимает токен" \
+    "обновите MOEX_APIKEY в bot.env; HTTP 401 означает отклонённый токен" \
+    as_service "${PYTHON_BIN}" -m moex_bot.cli algopack-health \
+      --services "${SERVICES_FILE}" --timeout 10
   check "Outbox Telegram здоров" "проверьте очередь и доступность Telegram" \
     as_service "${PYTHON_BIN}" -m moex_bot.cli outbox-health \
       --outbox "${STATE_DIR}/data/notifications.sqlite3" --max-pending-due 20

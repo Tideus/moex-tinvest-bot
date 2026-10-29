@@ -312,8 +312,32 @@ sudo moex-botctl diagnose --watch --interval 30
 ```
 
 Диагностика проверяет окружение, credentials, четыре timer, Telegram outbox и свежесть последнего
-shadow artifact, а также состояние отдельного intraday timer. При ошибке показывает комментарий
-и последние сообщения units.
+shadow artifact, а также состояние отдельного intraday timer. Для каждого timer проверяются не
+только `active`, но и рассчитанное systemd время следующего запуска: активный timer с пустым
+`NEXT` считается неисправным. Отдельный read-only запрос ALGOPACK проверяет токен на сервере;
+`HTTP 401` блокирует положительный health-результат и означает, что `MOEX_APIKEY` отклонён,
+просрочен либо отозван. Значение токена никогда не выводится. При ошибке команда показывает
+комментарий и последние сообщения units.
+
+Точечная проверка ALGOPACK после обновления токена:
+
+```bash
+sudo -u moexbot bash -c '
+set -a
+source /etc/moex-tinvest-bot/bot.env
+set +a
+exec /opt/moex-tinvest-bot/.venv/bin/python -m moex_bot.cli algopack-health \
+  --services /opt/moex-tinvest-bot/config/services.json
+'
+```
+
+Если у активного timer отсутствует следующий запуск:
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl restart moex-tinvest-health.timer
+systemctl list-timers 'moex-tinvest-*' --all --no-pager
+```
 
 Историческая проверка текущей стратегии на реальных дневных свечах MOEX запускается одной
 командой:

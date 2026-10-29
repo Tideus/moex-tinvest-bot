@@ -26,6 +26,7 @@ from .domain import GeoEvent, Instrument, MarketObservation, PortfolioSnapshot, 
 from .env_file import upsert_env_value
 from .geo_feed import refresh_geo_feed
 from .harness import TradingHarness
+from .integration_health import probe_algopack
 from .integrations.algopack_flow import AlgoPackFlowAdapter
 from .integrations.algopack_intraday import AlgoPackIntradayAdapter
 from .integrations.moexalgo_data import MoexAlgoReadOnlyAdapter
@@ -252,6 +253,24 @@ def integration_preflight(
         return 2
     print("PASS: replay remains available; missing credentials only disable their integration")
     return 0
+
+
+def algopack_health(
+    *, services_path: Path, as_of: datetime, timeout: float = 10
+) -> int:
+    try:
+        services = load_service_config(services_path)
+        result = probe_algopack(
+            base_url=services.moex_algopack,
+            token=os.getenv("MOEX_APIKEY", ""),
+            as_of=as_of,
+            timeout=timeout,
+        )
+    except (OSError, ValueError, KeyError, json.JSONDecodeError) as exc:
+        print(f"FAIL: ALGOPACK health configuration: {exc}")
+        return 2
+    print(f"ALGOPACK probe status={result.status}: {result.detail}")
+    return 0 if result.ok else 2
 
 
 def _format_rub(value: Decimal) -> str:
@@ -1077,6 +1096,30 @@ def telegram_send(*, outbox_path: Path, as_of: datetime, limit: int) -> int:
     return 0 if failed == 0 else 2
 
 
+def health_alert(
+    *, outbox_path: Path, stage: str, status: int, as_of: datetime
+) -> int:
+    safe_stage = " ".join(stage.split())[:160]
+    if not safe_stage or status <= 0:
+        print("FAIL: health alert requires a stage and positive exit status")
+        return 2
+    hour = as_of.astimezone(UTC).strftime("%Y-%m-%dT%H")
+    body = (
+        "🚨 MOEX BOT · HEALTH\n"
+        f"Этап: {safe_stage}\n"
+        f"Код завершения: {status}\n"
+        "Торговый цикл требует диагностики. Выполните: sudo moex-botctl diagnose"
+    )
+    queued = SQLiteOutbox(outbox_path).enqueue(
+        kind="health_failure",
+        dedupe_key=f"health-failure:{hour}:{safe_stage}",
+        body=body,
+        now=as_of,
+    )
+    print(f"health alert queued={'yes' if queued else 'deduplicated'}")
+    return 0
+
+
 def daily_trade_report(
     *,
     artifacts_dir: Path,
@@ -1377,6 +1420,15 @@ def build_parser() -> argparse.ArgumentParser:
         choices=("moex_algopack", "telegram", "tinvest_sandbox", "tinvest_prod"),
         default=[],
     )
+    algopack_health_parser = sub.add_parser(
+        "algopack-health",
+        help="Make one authenticated read-only request to detect rejected ALGOPACK tokens",
+    )
+    algopack_health_parser.add_argument(
+        "--services", type=Path, default=Path("config/services.json")
+    )
+    algopack_health_parser.add_argument("--as-of", type=datetime.fromisoformat)
+    algopack_health_parser.add_argument("--timeout", type=float, default=10)
     sandbox_parser = sub.add_parser(
         "sandbox-bootstrap",
         help="Verify/create the sandbox account, show cash and optionally top it up",
@@ -1574,6 +1626,15 @@ def build_parser() -> argparse.ArgumentParser:
     telegram_parser.add_argument("--outbox", type=Path, default=Path("data/notifications.sqlite3"))
     telegram_parser.add_argument("--as-of", type=datetime.fromisoformat)
     telegram_parser.add_argument("--limit", type=int, default=20)
+    health_alert_parser = sub.add_parser(
+        "health-alert", help="Queue an hourly-deduplicated Telegram health failure alert"
+    )
+    health_alert_parser.add_argument(
+        "--outbox", type=Path, default=Path("data/notifications.sqlite3")
+    )
+    health_alert_parser.add_argument("--stage", required=True)
+    health_alert_parser.add_argument("--status", type=int, required=True)
+    health_alert_parser.add_argument("--as-of", type=datetime.fromisoformat)
     daily_parser = sub.add_parser(
         "daily-trade-report",
         help="Aggregate one Moscow trading day and enqueue a Telegram shadow-trade report",
@@ -1660,6 +1721,14 @@ def main() -> int:
         return preflight(args.config)
     if args.command == "integration-preflight":
         return integration_preflight(args.services, tuple(args.require), args.runtime)
+    if args.command == "algopack-health":
+        as_of = args.as_of or datetime.now(UTC)
+        if as_of.tzinfo is None:
+            print("FAIL: --as-of must include a timezone offset")
+            return 2
+        return algopack_health(
+            services_path=args.services, as_of=as_of, timeout=args.timeout
+        )
     if args.command == "sandbox-bootstrap":
         return sandbox_bootstrap(
             env_path=args.env_file,
@@ -1799,6 +1868,17 @@ def main() -> int:
             print("FAIL: --as-of must include a timezone offset")
             return 2
         return telegram_send(outbox_path=args.outbox, as_of=as_of, limit=args.limit)
+    if args.command == "health-alert":
+        as_of = args.as_of or datetime.now(UTC)
+        if as_of.tzinfo is None:
+            print("FAIL: --as-of must include a timezone offset")
+            return 2
+        return health_alert(
+            outbox_path=args.outbox,
+            stage=args.stage,
+            status=args.status,
+            as_of=as_of,
+        )
     if args.command == "daily-trade-report":
         as_of = args.as_of or datetime.now(UTC)
         if as_of.tzinfo is None:

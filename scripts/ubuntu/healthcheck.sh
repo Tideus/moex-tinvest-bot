@@ -12,7 +12,14 @@ CURRENT_STAGE="initialization"
 
 on_error() {
   local status="$?"
+  trap - ERR
   printf 'FAIL: healthcheck stage=%s status=%s\n' "${CURRENT_STAGE}" "${status}" >&2
+  set +e
+  "${PYTHON_BIN}" -m moex_bot.cli health-alert \
+    --outbox "${STATE_DIR}/data/notifications.sqlite3" \
+    --stage "${CURRENT_STAGE}" --status "${status}"
+  "${PYTHON_BIN}" -m moex_bot.cli telegram-send \
+    --outbox "${STATE_DIR}/data/notifications.sqlite3" --limit 20
   exit "${status}"
 }
 
@@ -33,6 +40,9 @@ stage "required credentials and integrations"
   --services "${APP_DIR}/config/services.json" \
   --runtime "${CONFIG_DIR}/runtime.json" \
   --require moex_algopack --require telegram
+stage "ALGOPACK authenticated read-only probe"
+"${PYTHON_BIN}" -m moex_bot.cli algopack-health \
+  --services "${APP_DIR}/config/services.json" --timeout 10
 stage "selected T-Invest environment"
 "${PYTHON_BIN}" -m moex_bot.cli environment-status \
   --runtime "${CONFIG_DIR}/runtime.json" \

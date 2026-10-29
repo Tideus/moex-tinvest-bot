@@ -40,6 +40,15 @@ def test_health_timer_and_service_contract_match() -> None:
     assert "ExecStart=/usr/bin/bash /opt/moex-tinvest-bot/scripts/ubuntu/healthcheck.sh" in service
 
 
+def test_trading_services_fail_fast_on_rejected_algopack_token() -> None:
+    for unit in ("moex-tinvest-shadow.service", "moex-tinvest-intraday.service"):
+        text = _unit(unit)
+        assert (
+            "ExecStartPre=/opt/moex-tinvest-bot/.venv/bin/python "
+            "-m moex_bot.cli algopack-health" in text
+        )
+
+
 def test_daily_report_timer_and_service_send_at_moscow_eod() -> None:
     timer = _unit("moex-tinvest-daily-report.timer")
     service = _unit("moex-tinvest-daily-report.service")
@@ -246,6 +255,23 @@ def test_control_stop_disables_all_timers_and_stops_current_cycles() -> None:
     assert "moex-tinvest-intraday.service" in text
     assert "timers_are_stopped" in text
     assert "данные и конфиги сохранены" in text
+
+
+def test_health_checks_authenticated_algopack_and_future_timer_elapses() -> None:
+    health = (PROJECT_ROOT / "scripts" / "ubuntu" / "healthcheck.sh").read_text(
+        encoding="utf-8"
+    )
+    control = (PROJECT_ROOT / "scripts" / "ubuntu" / "moex-botctl.sh").read_text(
+        encoding="utf-8"
+    )
+    assert "algopack-health" in health
+    assert "ALGOPACK authenticated read-only probe" in health
+    assert "health-alert" in health
+    assert "telegram-send" in health
+    assert "timer_has_next_elapse" in control
+    assert "NextElapseUSecRealtime" in control
+    assert "NextElapseUSecMonotonic" in control
+    assert "ALGOPACK принимает токен" in control
 
 
 def test_shadow_runner_uses_selected_broker_snapshot_not_empty_example() -> None:

@@ -9,6 +9,7 @@ from moex_bot.cli import (
     build_parser,
     environment_set,
     geo_refresh,
+    health_alert,
     integration_preflight,
     preflight,
     replay,
@@ -65,6 +66,17 @@ def test_integration_preflight_enforces_required_credentials(
 ) -> None:
     monkeypatch.delenv("MOEX_APIKEY", raising=False)
     assert integration_preflight(required=("moex_algopack",)) == 2
+
+
+def test_health_alert_is_hourly_deduplicated(tmp_path: Path) -> None:
+    outbox = tmp_path / "notifications.sqlite3"
+    now = datetime(2026, 10, 30, 7, 15, tzinfo=UTC)
+    assert health_alert(outbox_path=outbox, stage="ALGOPACK probe", status=2, as_of=now) == 0
+    assert health_alert(outbox_path=outbox, stage="ALGOPACK probe", status=2, as_of=now) == 0
+
+    from moex_bot.notifications import SQLiteOutbox
+
+    assert SQLiteOutbox(outbox).counts()["pending"] == 1
 
 
 @pytest.mark.parametrize(
