@@ -453,9 +453,10 @@ sudo moex-botctl disaster-backup
 ```
 
 В `/var/backups/moex-tinvest-bot` появятся `moex-disaster-<UTC>.tar.gz` и файл `.sha256`.
-Комплект содержит state, SQLite, artifacts, `runtime.json`, `maintenance.json` и сведения о
-развёрнутой версии. `bot.env` принципиально не включается: храните его отдельно в зашифрованном
-хранилище. Скопируйте на новую ВМ архив, `.sha256` и сохранённый `bot.env`.
+Комплект содержит state, SQLite, artifacts, файловые журналы бота, `runtime.json`,
+`maintenance.json` и сведения о развёрнутой версии. `bot.env` принципиально не включается:
+храните его отдельно в зашифрованном хранилище. Скопируйте на новую ВМ архив, `.sha256` и
+сохранённый `bot.env`.
 
 На чистой Ubuntu 24.04:
 

@@ -7,6 +7,7 @@ SERVICE_USER="${MOEX_BOT_USER:-moexbot}"
 APP_DIR="${MOEX_BOT_APP_DIR:-/opt/${APP_NAME}}"
 CONFIG_DIR="${MOEX_BOT_CONFIG_DIR:-/etc/${APP_NAME}}"
 STATE_DIR="${MOEX_BOT_STATE_DIR:-/var/lib/${APP_NAME}}"
+LOG_DIR="${MOEX_BOT_LOG_DIR:-/var/log/${APP_NAME}}"
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 
 usage() {
@@ -94,8 +95,10 @@ install -o root -g "${SERVICE_USER}" -m 0644 \
 install -o root -g "${SERVICE_USER}" -m 0644 \
   "${stage_dir}/config/maintenance.json" "${CONFIG_DIR}/maintenance.json"
 rsync -a --delete "${stage_dir}/state/" "${STATE_DIR}/"
+rsync -a --delete "${stage_dir}/logs/" "${LOG_DIR}/"
 chown -R "${SERVICE_USER}:${SERVICE_USER}" "${STATE_DIR}"
-chmod 0750 "${STATE_DIR}"
+chown -R "${SERVICE_USER}:${SERVICE_USER}" "${LOG_DIR}"
+chmod 0750 "${STATE_DIR}" "${LOG_DIR}"
 
 /usr/local/sbin/moex-botctl prelaunch
 if [[ "${enable}" -eq 1 ]]; then

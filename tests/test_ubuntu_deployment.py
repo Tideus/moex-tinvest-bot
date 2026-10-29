@@ -384,6 +384,8 @@ def test_disaster_recovery_is_portable_verified_and_keeps_secrets_separate() -> 
     )
     assert "secrets_included=no" in backup
     assert "runtime.json" in backup and "maintenance.json" in backup
+    assert '"${LOG_DIR}/." "${stage_dir}/logs/"' in backup
+    assert '"${stage_dir}/logs/" "${LOG_DIR}/"' in restore
     assert "sha256sum -c" in backup and "sha256sum -c" in restore
     assert "unsafe archive path" in restore
     assert "--env-file" in restore

@@ -5,6 +5,7 @@ umask 077
 APP_DIR="${MOEX_BOT_APP_DIR:-/opt/moex-tinvest-bot}"
 CONFIG_DIR="${MOEX_BOT_CONFIG_DIR:-/etc/moex-tinvest-bot}"
 STATE_DIR="${MOEX_BOT_STATE_DIR:-/var/lib/moex-tinvest-bot}"
+LOG_DIR="${MOEX_BOT_LOG_DIR:-/var/log/moex-tinvest-bot}"
 BACKUP_DIR="${MOEX_BOT_BACKUP_DIR:-/var/backups/moex-tinvest-bot}"
 
 if [[ "${EUID}" -ne 0 ]]; then
@@ -21,7 +22,7 @@ if [[ $# -gt 0 ]]; then
   output_dir="$2"
 fi
 
-for required in "${STATE_DIR}" "${CONFIG_DIR}/runtime.json" \
+for required in "${STATE_DIR}" "${LOG_DIR}" "${CONFIG_DIR}/runtime.json" \
   "${CONFIG_DIR}/maintenance.json"; do
   if [[ ! -e "${required}" ]]; then
     printf 'FAIL: required recovery source is missing: %s\n' "${required}" >&2
@@ -71,8 +72,10 @@ systemctl stop "${timers[@]}" "${services[@]}" 2>/dev/null || true
 
 mkdir -p "${output_dir}"
 stage_dir="$(mktemp -d -t moex-disaster-backup.XXXXXXXX)"
-mkdir -p "${stage_dir}/state" "${stage_dir}/config" "${stage_dir}/metadata"
+mkdir -p "${stage_dir}/state" "${stage_dir}/logs" \
+  "${stage_dir}/config" "${stage_dir}/metadata"
 cp -a "${STATE_DIR}/." "${stage_dir}/state/"
+cp -a "${LOG_DIR}/." "${stage_dir}/logs/"
 install -m 0644 "${CONFIG_DIR}/runtime.json" "${stage_dir}/config/runtime.json"
 install -m 0644 "${CONFIG_DIR}/maintenance.json" \
   "${stage_dir}/config/maintenance.json"
