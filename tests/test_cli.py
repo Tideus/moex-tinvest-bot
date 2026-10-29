@@ -10,6 +10,7 @@ from moex_bot.cli import (
     environment_set,
     geo_refresh,
     health_alert,
+    history_reset_safety,
     integration_preflight,
     preflight,
     replay,
@@ -77,6 +78,62 @@ def test_health_alert_is_hourly_deduplicated(tmp_path: Path) -> None:
     from moex_bot.notifications import SQLiteOutbox
 
     assert SQLiteOutbox(outbox).counts()["pending"] == 1
+
+
+def test_history_reset_safety_allows_long_positions_when_intraday_is_flat(
+    tmp_path: Path,
+) -> None:
+    runtime = tmp_path / "runtime.json"
+    long_snapshot = tmp_path / "long.json"
+    intraday_snapshot = tmp_path / "intraday.json"
+    runtime.write_text('{"t_invest_environment":"sandbox"}', encoding="utf-8")
+    long_snapshot.write_text(
+        '{"positions":{"SBER":{"lots":1}},"open_orders":0}', encoding="utf-8"
+    )
+    intraday_snapshot.write_text('{"positions":{},"open_orders":0}', encoding="utf-8")
+    assert history_reset_safety(
+        runtime_path=runtime,
+        long_snapshot=long_snapshot,
+        intraday_snapshot=intraday_snapshot,
+    ) == 0
+
+
+@pytest.mark.parametrize(
+    ("environment", "long_orders", "intraday_orders", "intraday_positions"),
+    [
+        ("prod", 0, 0, {}),
+        ("sandbox", 1, 0, {}),
+        ("sandbox", 0, 1, {}),
+        ("sandbox", 0, 0, {"SBER": {"lots": 1}}),
+    ],
+)
+def test_history_reset_safety_rejects_unsafe_broker_state(
+    tmp_path: Path,
+    environment: str,
+    long_orders: int,
+    intraday_orders: int,
+    intraday_positions: dict[str, object],
+) -> None:
+    runtime = tmp_path / "runtime.json"
+    long_snapshot = tmp_path / "long.json"
+    intraday_snapshot = tmp_path / "intraday.json"
+    runtime.write_text(
+        json.dumps({"t_invest_environment": environment}), encoding="utf-8"
+    )
+    long_snapshot.write_text(
+        json.dumps({"positions": {}, "open_orders": long_orders}), encoding="utf-8"
+    )
+    intraday_snapshot.write_text(
+        json.dumps(
+            {"positions": intraday_positions, "open_orders": intraday_orders}
+        ),
+        encoding="utf-8",
+    )
+    assert history_reset_safety(
+        runtime_path=runtime,
+        long_snapshot=long_snapshot,
+        intraday_snapshot=intraday_snapshot,
+    ) == 2
 
 
 @pytest.mark.parametrize(

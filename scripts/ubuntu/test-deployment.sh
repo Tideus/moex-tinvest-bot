@@ -143,4 +143,25 @@ checksum="$(find "${RUNTIME_DIR}/backups" -name '*.sha256' -print -quit)"
 [[ -n "${checksum}" ]]
 (cd "$(dirname "${checksum}")" && sha256sum -c "$(basename "${checksum}")") >/dev/null
 
+printf 'history-before-reset\n' >"${RUNTIME_DIR}/state/data/history-marker.txt"
+printf 'log-before-reset\n' >"${RUNTIME_DIR}/logs/history-marker.log"
+MOEX_BOT_ALLOW_NON_ROOT_TEST=1 \
+MOEX_BOT_APP_DIR="${PROJECT_DIR}" \
+MOEX_BOT_CONFIG_DIR="${STAGE_DIR}/etc/moex-tinvest-bot" \
+MOEX_BOT_STATE_DIR="${RUNTIME_DIR}/state" \
+MOEX_BOT_LOG_DIR="${RUNTIME_DIR}/logs" \
+MOEX_BOT_BACKUP_DIR="${RUNTIME_DIR}/reset-backups" \
+MOEX_BOT_PYTHON="${FAKE_PYTHON}" \
+PATH="${RUNTIME_DIR}/bin:${PATH}" \
+  bash "${PROJECT_DIR}/scripts/ubuntu/reset-history.sh" --confirm-reset-history
+[[ ! -e "${RUNTIME_DIR}/state/data/history-marker.txt" ]]
+[[ ! -e "${RUNTIME_DIR}/logs/history-marker.log" ]]
+[[ -d "${RUNTIME_DIR}/state/artifacts" && -d "${RUNTIME_DIR}/state/data" ]]
+reset_archive="$(find "${RUNTIME_DIR}/reset-backups" -name 'moex-history-reset-*.tar.gz' -print -quit)"
+[[ -n "${reset_archive}" && -f "${reset_archive}.sha256" ]]
+(cd "$(dirname "${reset_archive}")" && sha256sum -c "$(basename "${reset_archive}.sha256")") \
+  >/dev/null
+tar -tzf "${reset_archive}" | grep -q 'state/data/history-marker.txt'
+tar -tzf "${reset_archive}" | grep -q 'logs/history-marker.log'
+
 printf 'PASS: Ubuntu deployment staging, runner, health and backup contracts\n'

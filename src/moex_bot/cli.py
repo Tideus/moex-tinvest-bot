@@ -273,6 +273,33 @@ def algopack_health(
     return 0 if result.ok else 2
 
 
+def history_reset_safety(
+    *, runtime_path: Path, long_snapshot: Path, intraday_snapshot: Path
+) -> int:
+    try:
+        runtime = load_runtime_config(runtime_path)
+        if runtime.environment is not TInvestEnvironment.SANDBOX:
+            raise ValueError("history reset is allowed only in the sandbox contour")
+        long_state = json.loads(long_snapshot.read_text(encoding="utf-8"))
+        intraday_state = json.loads(intraday_snapshot.read_text(encoding="utf-8"))
+        if not isinstance(long_state, dict) or not isinstance(intraday_state, dict):
+            raise ValueError("broker snapshots must be JSON objects")
+        if int(long_state.get("open_orders", 0)) != 0:
+            raise ValueError("long account has active broker orders; history was not reset")
+        if int(intraday_state.get("open_orders", 0)) != 0:
+            raise ValueError("intraday account has active broker orders; history was not reset")
+        positions = intraday_state.get("positions", {})
+        if not isinstance(positions, dict):
+            raise ValueError("intraday positions must be an object")
+        if positions:
+            raise ValueError("intraday account is not flat; history was not reset")
+    except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError) as exc:
+        print(f"FAIL: {exc}")
+        return 2
+    print("PASS: broker safety gate: no active orders and intraday account is flat")
+    return 0
+
+
 def _format_rub(value: Decimal) -> str:
     return f"{value.quantize(Decimal('0.01')):,.2f}".replace(",", " ")
 
@@ -1429,6 +1456,13 @@ def build_parser() -> argparse.ArgumentParser:
     )
     algopack_health_parser.add_argument("--as-of", type=datetime.fromisoformat)
     algopack_health_parser.add_argument("--timeout", type=float, default=10)
+    reset_safety_parser = sub.add_parser(
+        "history-reset-safety",
+        help="Refuse local history reset when the broker state is unsafe",
+    )
+    reset_safety_parser.add_argument("--runtime", type=Path, required=True)
+    reset_safety_parser.add_argument("--long-snapshot", type=Path, required=True)
+    reset_safety_parser.add_argument("--intraday-snapshot", type=Path, required=True)
     sandbox_parser = sub.add_parser(
         "sandbox-bootstrap",
         help="Verify/create the sandbox account, show cash and optionally top it up",
@@ -1728,6 +1762,12 @@ def main() -> int:
             return 2
         return algopack_health(
             services_path=args.services, as_of=as_of, timeout=args.timeout
+        )
+    if args.command == "history-reset-safety":
+        return history_reset_safety(
+            runtime_path=args.runtime,
+            long_snapshot=args.long_snapshot,
+            intraday_snapshot=args.intraday_snapshot,
         )
     if args.command == "sandbox-bootstrap":
         return sandbox_bootstrap(

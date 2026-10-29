@@ -114,6 +114,7 @@ def test_all_deployment_shell_scripts_use_strict_mode() -> None:
         "install.sh", "moex-botctl.sh", "run-shadow-cycle.sh", "test-deployment.sh",
         "run-daily-report.sh", "run-intraday-cycle.sh", "uninstall.sh", "update.sh",
         "write-build-metadata.sh",
+        "reset-history.sh",
     }
     for script in scripts:
         text = script.read_text(encoding="utf-8")
@@ -337,3 +338,21 @@ def test_package_and_runtime_versions_are_identical() -> None:
     from moex_bot import __version__
 
     assert project["project"]["version"] == __version__
+
+
+def test_history_reset_is_confirmed_backed_up_and_broker_safe() -> None:
+    reset = (PROJECT_ROOT / "scripts" / "ubuntu" / "reset-history.sh").read_text(
+        encoding="utf-8"
+    )
+    control = (PROJECT_ROOT / "scripts" / "ubuntu" / "moex-botctl.sh").read_text(
+        encoding="utf-8"
+    )
+    cli = (PROJECT_ROOT / "src" / "moex_bot" / "cli.py").read_text(encoding="utf-8")
+    assert "--confirm-reset-history" in reset
+    assert "history-reset-safety" in reset
+    assert "history reset is allowed only in the sandbox contour" in cli
+    assert "intraday account is not flat" in cli
+    assert "active broker orders" in cli
+    assert "moex-history-reset-" in reset
+    assert "sha256sum -c" in reset
+    assert "reset-history)" in control

@@ -31,6 +31,7 @@ Usage:
   sudo moex-botctl decisions [SHADOW_JSON]
   sudo moex-botctl backtest
   sudo moex-botctl collect-report [--from YYYY-MM-DD] [--to YYYY-MM-DD] [--output-dir DIR]
+  sudo moex-botctl reset-history --confirm-reset-history
   sudo moex-botctl telegram-recover
   sudo moex-botctl contour sandbox|prod
 EOF
@@ -782,6 +783,7 @@ case "${command}" in
   decisions) show_decisions "$@" ;;
   backtest) historical_backtest "$@" ;;
   collect-report) collect_report "$@" ;;
+  reset-history) bash "${APP_DIR}/scripts/ubuntu/reset-history.sh" "$@" ;;
   telegram-recover) recover_telegram_outbox ;;
   contour) set_contour "$@" ;;
   sandbox-enable) set_sandbox_execution true "$@" ;;

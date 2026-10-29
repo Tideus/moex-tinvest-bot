@@ -25,6 +25,7 @@ sudo moex-botctl version --remote
 sudo moex-botctl portfolio
 sudo moex-botctl decisions
 sudo moex-botctl collect-report --from 2026-08-24 --to 2026-08-31
+sudo moex-botctl reset-history --confirm-reset-history
 sudo moex-botctl sandbox-enable --confirm-sandbox
 sudo moex-botctl sandbox-disable
 ```
