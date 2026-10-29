@@ -31,6 +31,7 @@ class ProdLongPolicy:
     manual_position_policy: str
     protected_secids: frozenset[str]
     managed_secids: frozenset[str]
+    allowed_secids: frozenset[str]
     canary: ProdLongCanary
 
 
@@ -49,6 +50,7 @@ def load_prod_long_policy(path: Path) -> ProdLongPolicy:
         manual_position_policy=str(raw.get("manual_position_policy", "")),
         protected_secids=_secids(raw.get("protected_secids"), "protected_secids"),
         managed_secids=_secids(raw.get("managed_secids"), "managed_secids"),
+        allowed_secids=_secids(raw.get("allowed_secids"), "allowed_secids"),
         canary=ProdLongCanary(
             capital_limit_rub=_decimal(
                 canary_raw.get("capital_limit_rub"), "capital_limit_rub"
@@ -129,6 +131,7 @@ def prepare_prod_long_sleeve(
             "capital_limit_rub": str(policy.canary.capital_limit_rub),
             "protected_secids": sorted(policy.protected_secids & held),
             "managed_secids": sorted(policy.managed_secids & held),
+            "allowed_secids": sorted(policy.allowed_secids),
         },
     }
     return result
@@ -171,6 +174,12 @@ def _validate(policy: ProdLongPolicy) -> None:
         raise ValueError("manual positions must remain protected")
     if policy.protected_secids & policy.managed_secids:
         raise ValueError("protected and managed SECIDs must be disjoint")
+    if policy.protected_secids & policy.allowed_secids:
+        raise ValueError("protected and allowed SECIDs must be disjoint")
+    if not policy.managed_secids <= policy.allowed_secids:
+        raise ValueError("managed SECIDs must belong to the production allowlist")
+    if len(policy.allowed_secids) != 20:
+        raise ValueError("production allowlist must contain exactly 20 SECIDs")
     canary = policy.canary
     for label, value in (
         ("capital_limit_rub", canary.capital_limit_rub),
@@ -183,8 +192,8 @@ def _validate(policy: ProdLongPolicy) -> None:
         raise ValueError("max order cannot exceed canary capital")
     if canary.max_order_notional_rub > canary.max_daily_turnover_rub:
         raise ValueError("max order cannot exceed daily turnover")
-    if canary.max_orders_per_day != 1:
-        raise ValueError("initial production canary permits exactly one order per day")
+    if not 1 <= canary.max_orders_per_day <= 4:
+        raise ValueError("production canary permits from one to four orders per day")
     if not Decimal("0") < canary.max_account_daily_loss_weight <= Decimal("0.02"):
         raise ValueError("account daily loss gate must be in (0, 0.02]")
     if canary.allow_margin:

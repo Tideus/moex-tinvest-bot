@@ -58,5 +58,41 @@
   {
     "secid": "TATNP", "board": "TQBR", "t_invest_uid": "efdb54d3-2f92-44da-b7a3-8849e96039f6", "isin": "RU0006944147", "class_code": "TQBR", "lot_size_verified": 1, "api_trade_available": true, "short_enabled_verified": true,
     "issuer_id": "tatneft", "sector": "energy", "risk_cluster": "hydrocarbons", "asset_class": "share", "verified_at": "2026-10-30T00:00:00+05:00", "verification_source": "official T-Invest MCP get_share"
+  },
+  {
+    "secid": "ROSN", "board": "TQBR", "t_invest_uid": "fd417230-19cf-4e7b-9623-f7c9ca18ec6b", "isin": "RU000A0J2Q06", "class_code": "TQBR", "lot_size_verified": 1, "api_trade_available": true, "short_enabled_verified": true,
+    "issuer_id": "rosneft", "sector": "energy", "risk_cluster": "hydrocarbons", "asset_class": "share", "verified_at": "2026-10-30T03:55:00+05:00", "verification_source": "MOEX ISS TQBR + official T-Invest MCP"
+  },
+  {
+    "secid": "VTBR", "board": "TQBR", "t_invest_uid": "8e2b0325-0292-4654-8a18-4f63ed3b0e09", "isin": "RU000A0JP5V6", "class_code": "TQBR", "lot_size_verified": 1, "api_trade_available": true, "short_enabled_verified": true,
+    "issuer_id": "vtb", "sector": "financials", "risk_cluster": "domestic_financial", "asset_class": "share", "verified_at": "2026-10-30T03:55:00+05:00", "verification_source": "MOEX ISS TQBR + official T-Invest MCP"
+  },
+  {
+    "secid": "AFLT", "board": "TQBR", "t_invest_uid": "1c69e020-f3b1-455c-affa-45f8b8049234", "isin": "RU0009062285", "class_code": "TQBR", "lot_size_verified": 10, "api_trade_available": true, "short_enabled_verified": true,
+    "issuer_id": "aeroflot", "sector": "transportation", "risk_cluster": "domestic_cyclical", "asset_class": "share", "verified_at": "2026-10-30T03:55:00+05:00", "verification_source": "MOEX ISS TQBR + official T-Invest MCP"
+  },
+  {
+    "secid": "ALRS", "board": "TQBR", "t_invest_uid": "30817fea-20e6-4fee-ab1f-d20fc1a1bb72", "isin": "RU0007252813", "class_code": "TQBR", "lot_size_verified": 10, "api_trade_available": true, "short_enabled_verified": true,
+    "issuer_id": "alrosa", "sector": "metals_mining", "risk_cluster": "cyclical_exporters", "asset_class": "share", "verified_at": "2026-10-30T03:55:00+05:00", "verification_source": "MOEX ISS TQBR + official T-Invest MCP"
+  },
+  {
+    "secid": "MAGN", "board": "TQBR", "t_invest_uid": "7132b1c9-ee26-4464-b5b5-1046264b61d9", "isin": "RU0009084396", "class_code": "TQBR", "lot_size_verified": 10, "api_trade_available": true, "short_enabled_verified": true,
+    "issuer_id": "mmk", "sector": "materials", "risk_cluster": "cyclical_exporters", "asset_class": "share", "verified_at": "2026-10-30T03:55:00+05:00", "verification_source": "MOEX ISS TQBR + official T-Invest MCP"
+  },
+  {
+    "secid": "IRAO", "board": "TQBR", "t_invest_uid": "2dfbc1fd-b92a-436e-b011-928c79e805f2", "isin": "RU000A0JPNM1", "class_code": "TQBR", "lot_size_verified": 100, "api_trade_available": true, "short_enabled_verified": true,
+    "issuer_id": "inter_rao", "sector": "utilities", "risk_cluster": "domestic_defensive", "asset_class": "share", "verified_at": "2026-10-30T03:55:00+05:00", "verification_source": "MOEX ISS TQBR + official T-Invest MCP"
+  },
+  {
+    "secid": "SBERP", "board": "TQBR", "t_invest_uid": "c190ff1f-1447-4227-b543-316332699ca5", "isin": "RU0009029557", "class_code": "TQBR", "lot_size_verified": 1, "api_trade_available": true, "short_enabled_verified": true,
+    "issuer_id": "sberbank", "sector": "financials", "risk_cluster": "domestic_financial", "asset_class": "share", "verified_at": "2026-10-30T03:55:00+05:00", "verification_source": "MOEX ISS TQBR + official T-Invest MCP"
+  },
+  {
+    "secid": "TATN", "board": "TQBR", "t_invest_uid": "88468f6c-c67a-4fb4-a006-53eed803883c", "isin": "RU0009033591", "class_code": "TQBR", "lot_size_verified": 1, "api_trade_available": true, "short_enabled_verified": true,
+    "issuer_id": "tatneft", "sector": "energy", "risk_cluster": "hydrocarbons", "asset_class": "share", "verified_at": "2026-10-30T03:55:00+05:00", "verification_source": "MOEX ISS TQBR + official T-Invest MCP"
+  },
+  {
+    "secid": "TRNFP", "board": "TQBR", "t_invest_uid": "653d47e9-dbd4-407a-a1c3-47f897df4694", "isin": "RU0009091573", "class_code": "TQBR", "lot_size_verified": 1, "api_trade_available": true, "short_enabled_verified": true,
+    "issuer_id": "transneft", "sector": "energy", "risk_cluster": "hydrocarbons", "asset_class": "share", "verified_at": "2026-10-30T03:55:00+05:00", "verification_source": "MOEX ISS TQBR + official T-Invest MCP"
   }
 ]

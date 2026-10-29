@@ -16,8 +16,9 @@
 отправляет отчёты в Telegram через SQLite outbox.
 
 Отдельный production IIS observer один раз утром читает реальный счёт и строит виртуальный
-long canary-план на лимит 20 000 ₽. Он не отправляет production-заявки, не меняет ручные позиции
-и не мешает Sandbox intraday. Запуск вручную: `sudo moex-botctl prod-observe`.
+long canary-план на выделенный лимит 40 000 ₽ по allowlist из 20 акций. Он не отправляет
+production-заявки, не меняет защищённые GAZP, LKOH, RAGR и TATNP и не мешает Sandbox intraday.
+Запуск вручную: `sudo moex-botctl prod-observe`.
 
 ALGOPACK добавляет:
 

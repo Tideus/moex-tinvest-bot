@@ -6,11 +6,15 @@
   "manual_position_policy": "protect",
   "protected_secids": ["GAZP", "LKOH", "RAGR", "TATNP"],
   "managed_secids": [],
+  "allowed_secids": [
+    "SBER", "T", "MOEX", "NVTK", "GMKN", "PLZL", "PHOR", "CHMF", "YDEX", "X5",
+    "MTSS", "ROSN", "VTBR", "AFLT", "ALRS", "MAGN", "IRAO", "SBERP", "TATN", "TRNFP"
+  ],
   "canary": {
-    "capital_limit_rub": "20000",
-    "max_order_notional_rub": "8000",
-    "max_daily_turnover_rub": "10000",
-    "max_orders_per_day": 1,
+    "capital_limit_rub": "40000",
+    "max_order_notional_rub": "10000",
+    "max_daily_turnover_rub": "20000",
+    "max_orders_per_day": 2,
     "max_account_daily_loss_weight": "0.015",
     "allow_margin": false,
     "allowed_asset_classes": ["share"]

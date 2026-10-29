@@ -72,8 +72,13 @@ def validate_project_configs(root: Path) -> tuple[str, ...]:
     if prod_shadow.max_open_orders != prod_policy.canary.max_orders_per_day:
         raise ValueError("prod observer order count must match canary policy")
     universe_secids = {item.secid for item in load_universe(root / "config" / "universe.json")}
-    if not (prod_policy.protected_secids | prod_policy.managed_secids) <= universe_secids:
-        raise ValueError("prod observer classified positions must belong to verified universe")
+    configured_prod_secids = (
+        prod_policy.protected_secids
+        | prod_policy.managed_secids
+        | prod_policy.allowed_secids
+    )
+    if not configured_prod_secids <= universe_secids:
+        raise ValueError("prod observer SECIDs must belong to verified universe")
     checks.append("config/prod_long.json")
     load_backtest_settings(root / "config" / "backtest.json")
     checks.append("config/backtest.json")

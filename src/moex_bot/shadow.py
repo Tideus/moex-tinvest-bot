@@ -107,6 +107,18 @@ def load_universe(path: Path) -> tuple[UniverseEntry, ...]:
     return entries
 
 
+def select_allowed_universe(
+    universe: tuple[UniverseEntry, ...], allowed_secids: frozenset[str]
+) -> tuple[UniverseEntry, ...]:
+    selected = tuple(entry for entry in universe if entry.secid in allowed_secids)
+    missing = allowed_secids - {entry.secid for entry in selected}
+    if missing:
+        raise ValueError(
+            f"production allowlist is not fully present in universe: {sorted(missing)}"
+        )
+    return selected
+
+
 def load_geo_feed(
     path: Path,
     *,

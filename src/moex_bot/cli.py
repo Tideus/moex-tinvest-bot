@@ -50,7 +50,7 @@ from .notification_policy import load_notification_policy, should_send_long_morn
 from .notifications import SQLiteOutbox, TelegramBotApiSender, deliver_pending
 from .ownership import load_ownership_disclosures, render_ownership_report
 from .performance import render_performance_report, summarize_performance
-from .prod_long import write_prod_long_sleeve
+from .prod_long import load_prod_long_policy, write_prod_long_sleeve
 from .reporting import (
     render_flow_report,
     render_persisted_shadow_decisions,
@@ -72,7 +72,7 @@ from .service_config import (
     load_service_config,
     resolve_tinvest_runtime,
 )
-from .shadow import load_universe, run_hourly_shadow
+from .shadow import load_universe, run_hourly_shadow, select_allowed_universe
 from .storage_maintenance import directory_bytes, load_storage_policy, maintain_storage
 from .validation import validate_project_configs
 
@@ -650,10 +650,14 @@ def hourly_shadow(
     outbox_path: Path | None = None,
     notifications_path: Path = Path("config/notifications.json"),
     report_environment: str = "SANDBOX",
+    allowed_secids_policy_path: Path | None = None,
 ) -> int:
     try:
         config = load_config(config_path)
         universe = load_universe(universe_path)
+        if allowed_secids_policy_path is not None:
+            allowed = load_prod_long_policy(allowed_secids_policy_path).allowed_secids
+            universe = select_allowed_universe(universe, allowed)
         market_data = MoexAlgoReadOnlyAdapter.from_environment(require_token=require_token)
         local_hour = as_of.astimezone(ZoneInfo("Europe/Moscow")).hour
         long_flow = (
@@ -1742,6 +1746,7 @@ def build_parser() -> argparse.ArgumentParser:
         choices=("SANDBOX", "PROD OBSERVER"),
         default="SANDBOX",
     )
+    shadow_parser.add_argument("--allowed-secids-policy", type=Path)
     prod_prepare_parser = sub.add_parser("prod-long-prepare")
     prod_prepare_parser.add_argument(
         "--policy", type=Path, default=Path("config/prod_long.json")
@@ -2133,6 +2138,7 @@ def main() -> int:
             outbox_path=args.outbox,
             notifications_path=args.notifications,
             report_environment=args.report_environment,
+            allowed_secids_policy_path=args.allowed_secids_policy,
         )
     if args.command == "sandbox-execute":
         as_of = args.as_of or datetime.now(UTC)

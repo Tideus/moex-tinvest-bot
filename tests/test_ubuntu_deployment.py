@@ -83,6 +83,7 @@ def test_prod_long_observer_is_read_only_and_separately_scheduled() -> None:
     assert "broker-portfolio-snapshot" in runner
     assert "prod-long-prepare" in runner
     assert '--report-environment "PROD OBSERVER"' in runner
+    assert '--allowed-secids-policy "${APP_DIR}/config/prod_long.json"' in runner
     assert "sandbox-execute" not in runner
     assert "intraday-sandbox-execute" not in runner
 

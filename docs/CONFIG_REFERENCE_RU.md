@@ -39,10 +39,11 @@ Sandbox intraday. `prod_runtime.json` выбирает официальный pr
 | `manual_position_policy` | `protect` | Ручные позиции не входят в управляемый субпортфель. |
 | `protected_secids` | `GAZP`, `LKOH`, `RAGR`, `TATNP` | Текущие ручные позиции ИИС; observer не создаёт намерения на их продажу. |
 | `managed_secids` | пусто | До отдельного live-подтверждения бот не владеет реальными позициями. |
-| `canary.capital_limit_rub` | `20000` | Виртуальный капитал первого production-пилота. |
-| `canary.max_order_notional_rub` | `8000` | Максимальный размер одной будущей canary-заявки. |
-| `canary.max_daily_turnover_rub` | `10000` | Будущий дневной лимит оборота. |
-| `canary.max_orders_per_day` | `1` | Будущий лимит — одна заявка за день. |
+| `allowed_secids` | 20 SECID | Отдельный торговый allowlist; защищённые ручные бумаги в него не входят. |
+| `canary.capital_limit_rub` | `40000` | Выделенный капитал production-пилота; остальной ИИС не является бюджетом бота. |
+| `canary.max_order_notional_rub` | `10000` | Максимальный размер одной будущей canary-заявки. |
+| `canary.max_daily_turnover_rub` | `20000` | Дневной лимит оборота, чтобы не развернуть весь пилот за одно утро. |
+| `canary.max_orders_per_day` | `2` | Не более двух будущих заявок за день; код допускает настройку от 1 до 4. |
 | `canary.max_account_daily_loss_weight` | `0.015` | Проектируемый account-level kill switch; observer только отображает план. |
 | `canary.allow_margin` | `false` | Маржа и short запрещены. |
 | `canary.allowed_asset_classes` | `["share"]` | Фьючерсы и опционы исключены. |
@@ -50,6 +51,10 @@ Sandbox intraday. `prod_runtime.json` выбирает официальный pr
 Любая ненулевая позиция production-счёта должна быть явно указана в `protected_secids` или
 `managed_secids`; иначе цикл завершается ошибкой. Это предотвращает случайную торговлю поверх
 ручного портфеля. Лимиты `prod_shadow.json` сверяются с canary-политикой в `config-check`.
+Стратегия production observer получает только `allowed_secids`, даже если мастер-universe содержит
+дополнительные бумаги для reconciliation. Текущий allowlist: `SBER`, `T`, `MOEX`, `NVTK`,
+`GMKN`, `PLZL`, `PHOR`, `CHMF`, `YDEX`, `X5`, `MTSS`, `ROSN`, `VTBR`, `AFLT`, `ALRS`,
+`MAGN`, `IRAO`, `SBERP`, `TATN`, `TRNFP`.
 
 ## `accounts.json`
 
@@ -336,9 +341,10 @@ Point-in-time список разрешённых инструментов. Сп
 Изменение universe требует повторной независимой проверки SECID/board/UID/lot. Нельзя копировать
 UID по похожему названию бумаги.
 
-Текущий список содержит 15 акций TQBR — только пересечение независимо проверенных
+Текущий мастер-список содержит 24 акции TQBR — только пересечение независимо проверенных
 MOEX ISS и T‑Invest записей: `SBER`, `T`, `MOEX`, `LKOH`, `GAZP`, `NVTK`, `GMKN`, `PLZL`,
-`PHOR`, `CHMF`, `YDEX`, `X5`, `MTSS`, `RAGR`, `TATNP`. RAGR и TATNP добавлены как
+`PHOR`, `CHMF`, `YDEX`, `X5`, `MTSS`, `RAGR`, `TATNP`, `ROSN`, `VTBR`, `AFLT`, `ALRS`,
+`MAGN`, `IRAO`, `SBERP`, `TATN`, `TRNFP`. RAGR и TATNP добавлены как
 защищённые позиции ИИС по официальным данным T‑Invest. Для неоднозначных тикеров `T` и `X5` обязательны exact
 UID, ISIN и `TQBR`; поиск только по тикеру запрещён.
 
