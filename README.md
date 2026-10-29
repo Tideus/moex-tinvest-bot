@@ -20,6 +20,8 @@ sudo moex-botctl start
 sudo moex-botctl stop
 sudo moex-botctl diagnose
 sudo moex-botctl diagnose --watch
+sudo moex-botctl version
+sudo moex-botctl version --remote
 sudo moex-botctl portfolio
 sudo moex-botctl decisions
 sudo moex-botctl collect-report --from 2026-08-24 --to 2026-08-31
@@ -62,6 +64,8 @@ active-order reconciliation.
 - durable SQLite notification outbox with idempotent one-way Telegram delivery;
 - authenticated ALGOPACK health probe plus systemd next-elapse checks (an active timer with no
   next trigger is unhealthy);
+- deployment metadata with package version, Git revision, UTC deployment time, a tracked-file
+  SHA-256 manifest and optional comparison with `origin/<branch>`;
 - entitled ALGOPACK TradeStats/OrderStats/OBStats confirmation for new long entries; FUTOI/HI2 remain research evidence;
 - exact five-minute TradeStats/OrderStats/OBStats joins and a dedicated intraday signal store;
 - isolated intraday Sandbox account, reconciliation, stop/take/time/reversal exits and forced flat close;

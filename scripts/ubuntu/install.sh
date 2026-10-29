@@ -103,9 +103,10 @@ else
   : >"${target}/logs/.gitkeep"
 fi
 
-build_revision="$(git -C "${PROJECT_DIR}" rev-parse HEAD 2>/dev/null || printf unknown)"
-printf '%s\n' "${build_revision}" >"$(root_path "${APP_DIR}")/VERSION"
-chmod 0644 "$(root_path "${APP_DIR}")/VERSION"
+allow_dirty=0
+if [[ -n "${DESTDIR}" ]]; then allow_dirty=1; fi
+bash "${PROJECT_DIR}/scripts/ubuntu/write-build-metadata.sh" \
+  "${PROJECT_DIR}" "$(root_path "${APP_DIR}")" "${allow_dirty}"
 
 install -m 0644 "${PROJECT_DIR}/deploy/ubuntu/moex-tinvest-shadow.service" \
   "$(root_path /etc/systemd/system/moex-tinvest-shadow.service)"
@@ -156,6 +157,15 @@ chmod 0640 "${CONFIG_DIR}/bot.env"
 python3.12 -m venv "${APP_DIR}/.venv"
 "${APP_DIR}/.venv/bin/python" -m pip install --upgrade pip
 "${APP_DIR}/.venv/bin/python" -m pip install "${APP_DIR}[server]"
+(cd "${APP_DIR}" && sha256sum --quiet -c BUILD_MANIFEST.sha256)
+installed_version="$("${APP_DIR}/.venv/bin/python" -c \
+  'from moex_bot import __version__; print(__version__)')"
+expected_version="$(sed -n 's/^app_version=//p' "${APP_DIR}/BUILD_INFO")"
+if [[ "${installed_version}" != "${expected_version}" ]]; then
+  printf 'Installed package version mismatch: expected=%s actual=%s\n' \
+    "${expected_version}" "${installed_version}" >&2
+  exit 2
+fi
 "${APP_DIR}/.venv/bin/python" -m moex_bot.cli runtime-normalize \
   --runtime "${CONFIG_DIR}/runtime.json"
 chown root:"${SERVICE_USER}" "${CONFIG_DIR}/runtime.json"

@@ -1,5 +1,6 @@
 import hashlib
 import subprocess
+import tomllib
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -112,6 +113,7 @@ def test_all_deployment_shell_scripts_use_strict_mode() -> None:
         "activate.sh", "backup.sh", "healthcheck.sh", "install-ca-certificates.sh",
         "install.sh", "moex-botctl.sh", "run-shadow-cycle.sh", "test-deployment.sh",
         "run-daily-report.sh", "run-intraday-cycle.sh", "uninstall.sh", "update.sh",
+        "write-build-metadata.sh",
     }
     for script in scripts:
         text = script.read_text(encoding="utf-8")
@@ -306,7 +308,7 @@ def test_runners_apply_compact_telegram_policy_without_losing_artifacts() -> Non
     assert 'intraday-daily-performance-${report_date}.txt' in daily
 
 
-def test_install_update_and_report_preserve_deployed_git_revision() -> None:
+def test_install_update_and_report_preserve_verifiable_build_metadata() -> None:
     install = (PROJECT_ROOT / "scripts" / "ubuntu" / "install.sh").read_text(
         encoding="utf-8"
     )
@@ -316,6 +318,22 @@ def test_install_update_and_report_preserve_deployed_git_revision() -> None:
     control = (PROJECT_ROOT / "scripts" / "ubuntu" / "moex-botctl.sh").read_text(
         encoding="utf-8"
     )
-    assert 'rev-parse HEAD' in install and '/VERSION"' in install
-    assert 'rev-parse HEAD' in update and '${APP_DIR}/VERSION' in update
+    metadata = (PROJECT_ROOT / "scripts" / "ubuntu" / "write-build-metadata.sh").read_text(
+        encoding="utf-8"
+    )
+    assert "write-build-metadata.sh" in install
+    assert "write-build-metadata.sh" in update
+    assert "BUILD_MANIFEST.sha256" in install and "BUILD_MANIFEST.sha256" in update
+    assert "rev-parse HEAD" in metadata
+    assert "git_revision=" in metadata
+    assert "deployed_at=" in metadata
     assert '[[ -r "${APP_DIR}/VERSION" ]]' in control
+    assert "version_status" in control
+    assert "ls-remote --exit-code origin" in control
+
+
+def test_package_and_runtime_versions_are_identical() -> None:
+    project = tomllib.loads((PROJECT_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    from moex_bot import __version__
+
+    assert project["project"]["version"] == __version__

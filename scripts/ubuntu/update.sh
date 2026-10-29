@@ -70,9 +70,8 @@ rsync -a --delete \
   --exclude '.git' --exclude '.venv' --exclude '.env' --exclude 'artifacts/*' \
   --exclude 'logs/*' --exclude 'data' --exclude 'work' \
   "${PROJECT_DIR}/" "${APP_DIR}/"
-build_revision="$(git -C "${PROJECT_DIR}" rev-parse HEAD 2>/dev/null || printf unknown)"
-printf '%s\n' "${build_revision}" >"${APP_DIR}/VERSION"
-chmod 0644 "${APP_DIR}/VERSION"
+bash "${PROJECT_DIR}/scripts/ubuntu/write-build-metadata.sh" \
+  "${PROJECT_DIR}" "${APP_DIR}"
 find "${APP_DIR}/scripts/ubuntu" -type f -name '*.sh' -exec chmod 0755 {} +
 chown -R root:root "${APP_DIR}"
 install -d -o root -g "${SERVICE_USER}" -m 0750 "${CONFIG_DIR}"
@@ -87,6 +86,15 @@ bash "${PROJECT_DIR}/scripts/ubuntu/install-ca-certificates.sh"
 chown root:"${SERVICE_USER}" "${CONFIG_DIR}/runtime.json"
 chmod 0644 "${CONFIG_DIR}/runtime.json"
 "${APP_DIR}/.venv/bin/python" -m moex_bot.cli config-check --root "${APP_DIR}"
+(cd "${APP_DIR}" && sha256sum --quiet -c BUILD_MANIFEST.sha256)
+installed_version="$("${APP_DIR}/.venv/bin/python" -c \
+  'from moex_bot import __version__; print(__version__)')"
+expected_version="$(sed -n 's/^app_version=//p' "${APP_DIR}/BUILD_INFO")"
+if [[ "${installed_version}" != "${expected_version}" ]]; then
+  printf 'Installed package version mismatch: expected=%s actual=%s\n' \
+    "${expected_version}" "${installed_version}" >&2
+  exit 2
+fi
 install -m 0644 "${PROJECT_DIR}/deploy/ubuntu/"*.service /etc/systemd/system/
 install -m 0644 "${PROJECT_DIR}/deploy/ubuntu/"*.timer /etc/systemd/system/
 install -m 0644 "${PROJECT_DIR}/deploy/ubuntu/moex-tinvest-bot.logrotate" \

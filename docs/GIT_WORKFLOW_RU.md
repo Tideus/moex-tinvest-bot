@@ -84,6 +84,7 @@ sudo bash scripts/ubuntu/update.sh
 sudo moex-botctl prelaunch
 sudo moex-botctl start
 sudo moex-botctl diagnose --once
+sudo moex-botctl version --remote
 ```
 
 Если `git status --short` на сервере показывает локальные изменения, не выполняйте

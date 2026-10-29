@@ -26,6 +26,7 @@ Usage:
   sudo moex-botctl sandbox-disable
   sudo moex-botctl diagnose [--once|--watch] [--interval SECONDS]
   sudo moex-botctl status
+  sudo moex-botctl version [--remote]
   sudo moex-botctl portfolio
   sudo moex-botctl decisions [SHADOW_JSON]
   sudo moex-botctl backtest
@@ -71,6 +72,126 @@ timer_has_next_elapse() {
     return 0
   fi
   [[ -n "${monotonic}" && "${monotonic}" != "n/a" && "${monotonic}" != "0" ]]
+}
+
+build_value() {
+  local key="$1"
+  sed -n "s/^${key}=//p" "${APP_DIR}/BUILD_INFO" | head -n 1
+}
+
+deployment_file_count() {
+  find "${APP_DIR}" -type f \
+    ! -path "${APP_DIR}/.venv/*" \
+    ! -path "${APP_DIR}/artifacts/*" \
+    ! -path "${APP_DIR}/logs/*" \
+    ! -path "${APP_DIR}/data/*" \
+    ! -path "${APP_DIR}/work/*" \
+    ! -name VERSION \
+    ! -name BUILD_INFO \
+    ! -name BUILD_MANIFEST.sha256 \
+    -print | wc -l
+}
+
+version_status() {
+  local check_remote=0
+  if [[ "${1:-}" == "--remote" ]]; then check_remote=1; shift; fi
+  if [[ $# -ne 0 ]]; then
+    printf 'Usage: sudo moex-botctl version [--remote]\n' >&2
+    return 2
+  fi
+  if [[ ! -r "${APP_DIR}/BUILD_INFO" \
+     || ! -r "${APP_DIR}/VERSION" \
+     || ! -r "${APP_DIR}/BUILD_MANIFEST.sha256" ]]; then
+    printf 'FAIL: build metadata is absent; run update.sh from a clean Git checkout.\n' >&2
+    return 2
+  fi
+
+  local app_version revision branch tree_state deployed_at source_checkout version_file
+  local installed_version="unknown"
+  app_version="$(build_value app_version)"
+  revision="$(build_value git_revision)"
+  branch="$(build_value git_branch)"
+  tree_state="$(build_value tree_state)"
+  deployed_at="$(build_value deployed_at)"
+  source_checkout="$(build_value source_checkout)"
+  version_file="$(tr -d '[:space:]' <"${APP_DIR}/VERSION")"
+  installed_version="$("${PYTHON_BIN}" -c \
+    'from moex_bot import __version__; print(__version__)' 2>/dev/null || printf unknown)"
+
+  printf 'Application version: %s\n' "${app_version:-unknown}"
+  printf 'Git revision: %s\n' "${revision:-unknown}"
+  printf 'Git branch: %s\n' "${branch:-unknown}"
+  printf 'Deployed at UTC: %s\n' "${deployed_at:-unknown}"
+  printf 'Build tree: %s\n' "${tree_state:-unknown}"
+
+  local failed=0
+  if [[ -z "${revision}" || "${revision}" != "${version_file}" ]]; then
+    printf 'FAIL: VERSION and BUILD_INFO revisions differ.\n' >&2
+    failed=1
+  else
+    printf 'PASS: revision metadata agrees.\n'
+  fi
+  if [[ "${installed_version}" != "${app_version}" ]]; then
+    printf 'FAIL: installed package=%s build=%s.\n' \
+      "${installed_version}" "${app_version:-unknown}" >&2
+    failed=1
+  else
+    printf 'PASS: installed package version agrees.\n'
+  fi
+  if (cd "${APP_DIR}" && sha256sum --quiet -c BUILD_MANIFEST.sha256); then
+    printf 'PASS: deployed tracked files match the build manifest.\n'
+  else
+    printf 'FAIL: deployed files differ from the build manifest.\n' >&2
+    failed=1
+  fi
+  local expected_files actual_files
+  expected_files="$(wc -l <"${APP_DIR}/BUILD_MANIFEST.sha256")"
+  actual_files="$(deployment_file_count)"
+  if [[ "${actual_files}" == "${expected_files}" ]]; then
+    printf 'PASS: deployment file set contains %s expected files.\n' "${expected_files}"
+  else
+    printf 'FAIL: deployment file count expected=%s actual=%s.\n' \
+      "${expected_files}" "${actual_files}" >&2
+    failed=1
+  fi
+
+  if [[ -n "${source_checkout}" && -d "${source_checkout}/.git" ]]; then
+    local checkout_revision
+    checkout_revision="$(git -C "${source_checkout}" rev-parse HEAD 2>/dev/null || printf unknown)"
+    if [[ "${checkout_revision}" == "${revision}" ]]; then
+      printf 'PASS: deployment matches source checkout HEAD.\n'
+    else
+      printf 'FAIL: source checkout has a different HEAD: %s.\n' \
+        "${checkout_revision}" >&2
+      failed=1
+    fi
+    if [[ "${check_remote}" -eq 1 ]]; then
+      if [[ "${branch}" == "detached" || -z "${branch}" ]]; then
+        printf 'FAIL: remote comparison is unavailable for detached HEAD.\n' >&2
+        failed=1
+      else
+        local remote_revision
+        remote_revision="$(git -C "${source_checkout}" ls-remote --exit-code origin \
+          "refs/heads/${branch}" 2>/dev/null | awk 'NR==1 {print $1}')" || true
+        if [[ -z "${remote_revision}" ]]; then
+          printf 'FAIL: cannot read origin/%s.\n' "${branch}" >&2
+          failed=1
+        elif [[ "${remote_revision}" != "${revision}" ]]; then
+          printf 'STALE: origin/%s=%s deployment=%s.\n' \
+            "${branch}" "${remote_revision}" "${revision}" >&2
+          failed=1
+        else
+          printf 'PASS: deployment matches origin/%s.\n' "${branch}"
+        fi
+      fi
+    fi
+  elif [[ "${check_remote}" -eq 1 ]]; then
+    printf 'FAIL: source checkout is unavailable; remote freshness cannot be verified.\n' >&2
+    failed=1
+  else
+    printf 'WARN: source checkout unavailable; build integrity was verified locally.\n'
+  fi
+  [[ "${failed}" -eq 0 ]]
 }
 
 require_root() {
@@ -183,6 +304,8 @@ prelaunch() {
       --services "${SERVICES_FILE}" --runtime "${RUNTIME_FILE}" \
       --require moex_algopack --require telegram \
       --require "${requirement}"
+  check "Версия развёрнутого приложения целостна" \
+    "выполните update.sh из чистого Git checkout" version_status
   check "ALGOPACK принимает токен" \
     "обновите MOEX_APIKEY в bot.env; HTTP 401 означает отклонённый токен" \
     as_service "${PYTHON_BIN}" -m moex_bot.cli algopack-health \
@@ -326,6 +449,9 @@ diagnose_once() {
   check "Окружение" "проверьте runtime.json и bot.env" \
     as_service "${PYTHON_BIN}" -m moex_bot.cli environment-status \
       --runtime "${RUNTIME_FILE}" --services "${SERVICES_FILE}"
+  check "Версия и целостность deployment" \
+    "выполните update.sh; для GitHub-сверки: moex-botctl version --remote" \
+    version_status
   check "Интеграции" "проверьте credentials в bot.env" \
     as_service "${PYTHON_BIN}" -m moex_bot.cli integration-preflight \
       --services "${SERVICES_FILE}" --runtime "${RUNTIME_FILE}" \
@@ -404,6 +530,8 @@ diagnose() {
 
 status_bot() {
   load_secrets || true
+  heading "Версия deployment"
+  version_status || true
   diagnose_once || true
   systemctl list-timers 'moex-tinvest-*' --no-pager || true
 }
@@ -601,11 +729,22 @@ for path in root.rglob("*"):
     revision="$(git -C "${APP_DIR}" rev-parse HEAD 2>/dev/null || printf unknown)"
   fi
   [[ -n "${revision}" ]] || revision="unknown"
+  local app_version="unknown"
+  local deployed_at="unknown"
+  if [[ -r "${APP_DIR}/BUILD_INFO" ]]; then
+    app_version="$(build_value app_version)"
+    deployed_at="$(build_value deployed_at)"
+    cp -a "${APP_DIR}/BUILD_INFO" "${work_dir}/diagnostics/BUILD_INFO"
+    cp -a "${APP_DIR}/BUILD_MANIFEST.sha256" \
+      "${work_dir}/diagnostics/BUILD_MANIFEST.sha256"
+  fi
   {
     printf 'report_from=%s\n' "${from_date}"
     printf 'report_to=%s\n' "${to_date}"
     printf 'created_at=%s\n' "$(date --iso-8601=seconds)"
     printf 'git_revision=%s\n' "${revision}"
+    printf 'app_version=%s\n' "${app_version}"
+    printf 'deployed_at=%s\n' "${deployed_at}"
     printf 'secrets_included=no\n'
     printf 'bot_env_included=no\n'
     printf 'artifacts=%s\n' "$(find "${work_dir}/state/artifacts" -type f | wc -l)"
@@ -626,9 +765,13 @@ for path in root.rglob("*"):
   printf 'Секреты и bot.env в архив не включены.\n'
 )
 
-require_root
 command="${1:-}"
 if [[ $# -gt 0 ]]; then shift; fi
+if [[ "${command}" == "version" ]]; then
+  version_status "$@"
+  exit $?
+fi
+require_root
 case "${command}" in
   prelaunch) prelaunch ;;
   start) start_bot ;;
