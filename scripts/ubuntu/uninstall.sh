@@ -11,6 +11,7 @@ fi
 systemctl disable --now moex-tinvest-shadow.timer moex-tinvest-health.timer \
   moex-tinvest-daily-report.timer 2>/dev/null || true
 systemctl disable --now moex-tinvest-intraday.timer 2>/dev/null || true
+systemctl disable --now moex-tinvest-maintenance.timer 2>/dev/null || true
 rm -f /etc/systemd/system/moex-tinvest-shadow.service \
   /etc/systemd/system/moex-tinvest-shadow.timer \
   /etc/systemd/system/moex-tinvest-health.service \
@@ -19,6 +20,8 @@ rm -f /etc/systemd/system/moex-tinvest-shadow.service \
   /etc/systemd/system/moex-tinvest-daily-report.timer \
   /etc/systemd/system/moex-tinvest-intraday.service \
   /etc/systemd/system/moex-tinvest-intraday.timer \
+  /etc/systemd/system/moex-tinvest-maintenance.service \
+  /etc/systemd/system/moex-tinvest-maintenance.timer \
   /etc/logrotate.d/moex-tinvest-bot \
   /usr/local/sbin/moex-botctl
 rm -rf /etc/systemd/system/moex-tinvest-shadow.timer.d \

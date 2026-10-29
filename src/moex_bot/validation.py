@@ -16,6 +16,7 @@ from .ownership import load_ownership_disclosures
 from .runtime_config import load_runtime_config
 from .service_config import load_service_config
 from .shadow import load_geo_feed, load_universe
+from .storage_maintenance import load_storage_policy
 
 
 def validate_project_configs(root: Path) -> tuple[str, ...]:
@@ -60,6 +61,8 @@ def validate_project_configs(root: Path) -> tuple[str, ...]:
     checks.append("config/promotion_gates.json")
     load_sources(root / "config" / "geo_sources.json")
     checks.append("config/geo_sources.json")
+    load_storage_policy(root / "config" / "maintenance.json")
+    checks.append("config/maintenance.json")
 
     ownership = _array(root / "config" / "ownership_disclosures.json")
     for item in ownership:

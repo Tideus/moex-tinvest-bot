@@ -70,6 +70,17 @@ def test_intraday_timer_and_service_are_isolated_and_five_minute() -> None:
     assert "ReadWritePaths=/var/lib/moex-tinvest-bot /var/log/moex-tinvest-bot" in service
 
 
+def test_storage_maintenance_has_daily_root_timer_and_bounded_paths() -> None:
+    timer = _unit("moex-tinvest-maintenance.timer")
+    service = _unit("moex-tinvest-maintenance.service")
+    assert "OnCalendar=*-*-* 03:40:00 Europe/Moscow" in timer
+    assert "Persistent=true" in timer
+    assert "User=root" in service
+    assert "storage-maintenance" in service
+    assert "ReadWritePaths=/var/lib/moex-tinvest-bot" in service
+    assert "/var/log/moex-tinvest-bot /var/backups/moex-tinvest-bot" in service
+
+
 def test_network_services_and_runners_use_system_ca_bundle() -> None:
     for unit_name in (
         "moex-tinvest-shadow.service",
@@ -115,6 +126,8 @@ def test_all_deployment_shell_scripts_use_strict_mode() -> None:
         "run-daily-report.sh", "run-intraday-cycle.sh", "uninstall.sh", "update.sh",
         "write-build-metadata.sh",
         "reset-history.sh",
+        "disaster-backup.sh",
+        "restore-new-vm.sh",
     }
     for script in scripts:
         text = script.read_text(encoding="utf-8")
@@ -252,6 +265,7 @@ def test_control_stop_disables_all_timers_and_stops_current_cycles() -> None:
     assert "moex-tinvest-health.timer" in text
     assert "moex-tinvest-daily-report.timer" in text
     assert "moex-tinvest-intraday.timer" in text
+    assert "moex-tinvest-maintenance.timer" in text
     assert "moex-tinvest-shadow.service" in text
     assert "moex-tinvest-health.service" in text
     assert "moex-tinvest-daily-report.service" in text
@@ -356,3 +370,22 @@ def test_history_reset_is_confirmed_backed_up_and_broker_safe() -> None:
     assert "moex-history-reset-" in reset
     assert "sha256sum -c" in reset
     assert "reset-history)" in control
+
+
+def test_disaster_recovery_is_portable_verified_and_keeps_secrets_separate() -> None:
+    backup = (PROJECT_ROOT / "scripts" / "ubuntu" / "disaster-backup.sh").read_text(
+        encoding="utf-8"
+    )
+    restore = (PROJECT_ROOT / "scripts" / "ubuntu" / "restore-new-vm.sh").read_text(
+        encoding="utf-8"
+    )
+    control = (PROJECT_ROOT / "scripts" / "ubuntu" / "moex-botctl.sh").read_text(
+        encoding="utf-8"
+    )
+    assert "secrets_included=no" in backup
+    assert "runtime.json" in backup and "maintenance.json" in backup
+    assert "sha256sum -c" in backup and "sha256sum -c" in restore
+    assert "unsafe archive path" in restore
+    assert "--env-file" in restore
+    assert "moex-botctl prelaunch" in restore
+    assert "disaster-backup)" in control

@@ -124,6 +124,10 @@ install -m 0644 "${PROJECT_DIR}/deploy/ubuntu/moex-tinvest-intraday.service" \
   "$(root_path /etc/systemd/system/moex-tinvest-intraday.service)"
 install -m 0644 "${PROJECT_DIR}/deploy/ubuntu/moex-tinvest-intraday.timer" \
   "$(root_path /etc/systemd/system/moex-tinvest-intraday.timer)"
+install -m 0644 "${PROJECT_DIR}/deploy/ubuntu/moex-tinvest-maintenance.service" \
+  "$(root_path /etc/systemd/system/moex-tinvest-maintenance.service)"
+install -m 0644 "${PROJECT_DIR}/deploy/ubuntu/moex-tinvest-maintenance.timer" \
+  "$(root_path /etc/systemd/system/moex-tinvest-maintenance.timer)"
 install -m 0644 "${PROJECT_DIR}/deploy/ubuntu/moex-tinvest-bot.logrotate" \
   "$(root_path /etc/logrotate.d/moex-tinvest-bot)"
 install -m 0755 "${PROJECT_DIR}/scripts/ubuntu/moex-botctl.sh" \
@@ -139,6 +143,10 @@ runtime_path="$(root_path "${CONFIG_DIR}/runtime.json")"
 if [[ ! -e "${runtime_path}" ]]; then
   install -m 0644 "${PROJECT_DIR}/config/runtime.json" "${runtime_path}"
 fi
+maintenance_path="$(root_path "${CONFIG_DIR}/maintenance.json")"
+if [[ ! -e "${maintenance_path}" ]]; then
+  install -m 0644 "${PROJECT_DIR}/config/maintenance.json" "${maintenance_path}"
+fi
 
 find "$(root_path "${APP_DIR}")/scripts/ubuntu" -type f -name '*.sh' -exec chmod 0755 {} +
 
@@ -150,9 +158,10 @@ fi
 chown -R root:root "${APP_DIR}"
 chown -R "${SERVICE_USER}:${SERVICE_USER}" "${STATE_DIR}" "${LOG_DIR}" "${BACKUP_DIR}"
 chown root:"${SERVICE_USER}" "${CONFIG_DIR}" "${CONFIG_DIR}/bot.env" \
-  "${CONFIG_DIR}/runtime.json"
+  "${CONFIG_DIR}/runtime.json" "${CONFIG_DIR}/maintenance.json"
 chmod 0750 "${CONFIG_DIR}"
 chmod 0640 "${CONFIG_DIR}/bot.env"
+chmod 0644 "${CONFIG_DIR}/maintenance.json"
 
 python3.12 -m venv "${APP_DIR}/.venv"
 "${APP_DIR}/.venv/bin/python" -m pip install --upgrade pip

@@ -32,6 +32,9 @@ Usage:
   sudo moex-botctl backtest
   sudo moex-botctl collect-report [--from YYYY-MM-DD] [--to YYYY-MM-DD] [--output-dir DIR]
   sudo moex-botctl reset-history --confirm-reset-history
+  sudo moex-botctl disaster-backup [--output-dir DIR]
+  sudo moex-botctl storage
+  sudo moex-botctl cleanup
   sudo moex-botctl telegram-recover
   sudo moex-botctl contour sandbox|prod
 EOF
@@ -261,6 +264,7 @@ check_permissions() {
   require_permissions "750:root:${SERVICE_USER}" "${CONFIG_DIR}"
   require_permissions "640:root:${SERVICE_USER}" "${ENV_FILE}"
   require_permissions "644:root:${SERVICE_USER}" "${RUNTIME_FILE}"
+  require_permissions "644:root:${SERVICE_USER}" "${CONFIG_DIR}/maintenance.json"
   require_permissions "750:${SERVICE_USER}:${SERVICE_USER}" "${STATE_DIR}"
   require_permissions "750:${SERVICE_USER}:${SERVICE_USER}" "${LOG_DIR}"
   require_permissions "750:${SERVICE_USER}:${SERVICE_USER}" "${BACKUP_DIR}"
@@ -288,6 +292,11 @@ prelaunch() {
     "исправьте ${RUNTIME_FILE}" \
     as_service "${PYTHON_BIN}" -m moex_bot.cli environment-status \
       --runtime "${RUNTIME_FILE}" --services "${SERVICES_FILE}"
+  check "Политика хранения и свободное место валидны" \
+    "исправьте ${CONFIG_DIR}/maintenance.json или освободите диск" \
+    "${PYTHON_BIN}" -m moex_bot.cli storage-maintenance \
+      --config "${CONFIG_DIR}/maintenance.json" --filesystem /var/lib \
+      --state-dir "${STATE_DIR}" --log-dir "${LOG_DIR}" --backup-dir "${BACKUP_DIR}"
   check "Shadow risk-конфигурация валидна" \
     "исправьте config/shadow.json; торговые действия останутся заблокированы" \
     as_service "${PYTHON_BIN}" -m moex_bot.cli preflight \
@@ -323,7 +332,9 @@ prelaunch() {
       "${SYSTEMD_DIR}/moex-tinvest-daily-report.service" \
       "${SYSTEMD_DIR}/moex-tinvest-daily-report.timer" \
       "${SYSTEMD_DIR}/moex-tinvest-intraday.service" \
-      "${SYSTEMD_DIR}/moex-tinvest-intraday.timer"
+      "${SYSTEMD_DIR}/moex-tinvest-intraday.timer" \
+      "${SYSTEMD_DIR}/moex-tinvest-maintenance.service" \
+      "${SYSTEMD_DIR}/moex-tinvest-maintenance.timer"
 
   heading "5/5 Итог"
   if [[ "${FAILURES}" -eq 0 ]]; then
@@ -348,7 +359,8 @@ start_bot() {
       "${SYSTEMD_DIR}/moex-tinvest-shadow.timer" \
       "${SYSTEMD_DIR}/moex-tinvest-health.timer" \
       "${SYSTEMD_DIR}/moex-tinvest-daily-report.timer" \
-      "${SYSTEMD_DIR}/moex-tinvest-intraday.timer"
+      "${SYSTEMD_DIR}/moex-tinvest-intraday.timer" \
+      "${SYSTEMD_DIR}/moex-tinvest-maintenance.timer"
   if [[ "${FAILURES}" -ne 0 ]]; then
     printf '\033[1;31mBLOCKED\033[0m: расписание не применено; сервисы не запускались.\n'
     return 2
@@ -376,12 +388,14 @@ start_bot() {
   fi
   check "Таймеры включены" "проверьте systemctl status таймеров" \
     systemctl enable --now moex-tinvest-shadow.timer moex-tinvest-health.timer \
-      moex-tinvest-daily-report.timer moex-tinvest-intraday.timer
+      moex-tinvest-daily-report.timer moex-tinvest-intraday.timer \
+      moex-tinvest-maintenance.timer
   for timer in \
     moex-tinvest-shadow.timer \
     moex-tinvest-health.timer \
     moex-tinvest-daily-report.timer \
-    moex-tinvest-intraday.timer; do
+    moex-tinvest-intraday.timer \
+    moex-tinvest-maintenance.timer; do
     check "Назначен следующий запуск ${timer}" \
       "таймер включён, но NEXT отсутствует; перезапустите timer после daemon-reload" \
       timer_has_next_elapse "${timer}"
@@ -406,7 +420,8 @@ timers_are_stopped() {
     moex-tinvest-shadow.timer \
     moex-tinvest-health.timer \
     moex-tinvest-daily-report.timer \
-    moex-tinvest-intraday.timer; do
+    moex-tinvest-intraday.timer \
+    moex-tinvest-maintenance.timer; do
     if systemctl is-active --quiet "${unit}"; then
       printf 'FAIL: timer remains active: %s\n' "${unit}" >&2
       return 2
@@ -426,13 +441,15 @@ stop_bot() {
       moex-tinvest-shadow.timer \
       moex-tinvest-health.timer \
       moex-tinvest-daily-report.timer \
-      moex-tinvest-intraday.timer
+      moex-tinvest-intraday.timer \
+      moex-tinvest-maintenance.timer
   check "Текущие циклы остановлены" "проверьте journalctl сервисов" \
     systemctl stop \
       moex-tinvest-shadow.service \
       moex-tinvest-health.service \
       moex-tinvest-daily-report.service \
-      moex-tinvest-intraday.service
+      moex-tinvest-intraday.service \
+      moex-tinvest-maintenance.service
   check "Автозапуск действительно выключен" \
     "один или несколько timers остались active/enabled" timers_are_stopped
   if [[ "${FAILURES}" -ne 0 ]]; then
@@ -466,11 +483,14 @@ diagnose_once() {
     systemctl is-active --quiet moex-tinvest-daily-report.timer
   check "Intraday timer активен" "выполните sudo moex-botctl start" \
     systemctl is-active --quiet moex-tinvest-intraday.timer
+  check "Maintenance timer активен" "выполните sudo moex-botctl start" \
+    systemctl is-active --quiet moex-tinvest-maintenance.timer
   for timer in \
     moex-tinvest-shadow.timer \
     moex-tinvest-health.timer \
     moex-tinvest-daily-report.timer \
-    moex-tinvest-intraday.timer; do
+    moex-tinvest-intraday.timer \
+    moex-tinvest-maintenance.timer; do
     check "Следующий запуск ${timer}" \
       "таймер активен, но NEXT отсутствует; выполните daemon-reload и restart таймера" \
       timer_has_next_elapse "${timer}"
@@ -482,6 +502,10 @@ diagnose_once() {
   check "Outbox Telegram здоров" "проверьте очередь и доступность Telegram" \
     as_service "${PYTHON_BIN}" -m moex_bot.cli outbox-health \
       --outbox "${STATE_DIR}/data/notifications.sqlite3" --max-pending-due 20
+  check "Дисковое пространство" "выполните sudo moex-botctl cleanup и проверьте диск" \
+    "${PYTHON_BIN}" -m moex_bot.cli storage-maintenance \
+      --config "${CONFIG_DIR}/maintenance.json" --filesystem /var/lib \
+      --state-dir "${STATE_DIR}" --log-dir "${LOG_DIR}" --backup-dir "${BACKUP_DIR}"
   check "Последний цикл свежий" \
     "проверьте journalctl сервисов и доступность MOEX/ALGOPACK" \
     as_service /usr/bin/bash "${APP_DIR}/scripts/ubuntu/healthcheck.sh"
@@ -636,6 +660,12 @@ recover_telegram_outbox() {
   printf 'TELEGRAM HEALTHY: dead-сообщения повторно отправлены.\n'
 }
 
+storage_command() {
+  "${PYTHON_BIN}" -m moex_bot.cli storage-maintenance \
+    --config "${CONFIG_DIR}/maintenance.json" --filesystem /var/lib \
+    --state-dir "${STATE_DIR}" --log-dir "${LOG_DIR}" --backup-dir "${BACKUP_DIR}" "$@"
+}
+
 collect_report() (
   set -Eeuo pipefail
   load_secrets || {
@@ -693,10 +723,12 @@ collect_report() (
   systemctl --no-pager --full status \
     moex-tinvest-shadow.service moex-tinvest-intraday.service \
     moex-tinvest-health.service moex-tinvest-daily-report.service \
+    moex-tinvest-maintenance.service \
     >"${work_dir}/diagnostics/systemd-status.txt" 2>&1 || true
   journalctl --since "${from_date} 00:00:00" --until "${to_date} 23:59:59" \
     -u moex-tinvest-shadow.service -u moex-tinvest-intraday.service \
     -u moex-tinvest-health.service -u moex-tinvest-daily-report.service \
+    -u moex-tinvest-maintenance.service \
     --no-pager >"${work_dir}/diagnostics/systemd-journal.txt" 2>&1 || true
 
   REPORT_ROOT="${work_dir}" "${PYTHON_BIN}" -c '
@@ -784,6 +816,9 @@ case "${command}" in
   backtest) historical_backtest "$@" ;;
   collect-report) collect_report "$@" ;;
   reset-history) bash "${APP_DIR}/scripts/ubuntu/reset-history.sh" "$@" ;;
+  disaster-backup) bash "${APP_DIR}/scripts/ubuntu/disaster-backup.sh" "$@" ;;
+  storage) storage_command "$@" ;;
+  cleanup) storage_command --apply "$@" ;;
   telegram-recover) recover_telegram_outbox ;;
   contour) set_contour "$@" ;;
   sandbox-enable) set_sandbox_execution true "$@" ;;

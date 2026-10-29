@@ -11,6 +11,7 @@ EXPECTED_CONFIGS = {
     "backtest.json",
     "geo_sources.json",
     "intraday.json",
+    "maintenance.json",
     "notifications.json",
     "ownership_disclosures.json",
     "replay.json",
@@ -28,7 +29,7 @@ def test_config_directory_contains_only_documented_files() -> None:
 
 def test_all_committed_project_configs_are_valid() -> None:
     checked = validate_project_configs(PROJECT_ROOT)
-    assert len(checked) == 15
+    assert len(checked) == 16
 
 
 def test_invalid_runtime_environment_is_rejected(tmp_path: Path) -> None:

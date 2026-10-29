@@ -1,0 +1,11 @@
+[Unit]
+Description=Run MOEX/T-Invest storage maintenance daily
+
+[Timer]
+OnCalendar=*-*-* 03:40:00 Europe/Moscow
+RandomizedDelaySec=10min
+Persistent=true
+Unit=moex-tinvest-maintenance.service
+
+[Install]
+WantedBy=timers.target

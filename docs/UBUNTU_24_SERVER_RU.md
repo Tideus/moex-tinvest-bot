@@ -147,7 +147,8 @@ sudo moex-botctl start
 ```
 
 `start` повторяет prelaunch, применяет расписание, запускает первые shadow и intraday cycles,
-затем health-check, включает четыре timer (`shadow`, `intraday`, `health`, `daily-report`) и
+затем health-check, включает пять timers (`shadow`, `intraday`, `health`, `daily-report`,
+`maintenance`) и
 показывает фактически назначенные следующие запуски. Вне intraday-окна первый intraday service
 завершается успешным `SKIP`.
 
@@ -288,12 +289,41 @@ token/account ID.
 | `/opt/moex-tinvest-bot` | код и venv, только root может изменять |
 | `/etc/moex-tinvest-bot/bot.env` | секреты |
 | `/etc/moex-tinvest-bot/runtime.json` | активный контур и расписание без секретов |
+| `/etc/moex-tinvest-bot/maintenance.json` | пороги диска и сроки хранения |
 | `/var/lib/moex-tinvest-bot/artifacts` | shadow/flow/geo результаты |
 | `/var/lib/moex-tinvest-bot/data` | SQLite Telegram outbox |
 | `/var/log/moex-tinvest-bot` | отдельные логи циклов |
 | `/var/backups/moex-tinvest-bot` | локальные backup-архивы |
 
 ## 7. Диагностика
+
+Быстрая проверка всего диска:
+
+```bash
+df -h /
+df -h /var/lib
+sudo du -xhd1 /var /opt 2>/dev/null | sort -h
+sudo du -sh /var/lib/moex-tinvest-bot /var/log/moex-tinvest-bot \
+  /var/backups/moex-tinvest-bot
+```
+
+Проверка по политике бота без удаления:
+
+```bash
+sudo moex-botctl storage
+```
+
+Ручной запуск той же ограниченной очистки, которую выполняет timer:
+
+```bash
+sudo moex-botctl cleanup
+```
+
+`moex-tinvest-maintenance.timer` запускается ежедневно в `03:40 МСК`. Очистка начинается только
+при заполнении от 80% либо остатке не более 2 GiB. Удаляются только логи старше 14 дней,
+артефакты старше 90 дней и backup старше 90 дней; последние три backup сохраняются всегда.
+SQLite в `state/data`, конфиги, секреты и позиции брокера не удаляются. Если после очистки занято
+90% или свободно менее 2 GiB, сервис завершается ошибкой, которую подхватывает health-check.
 
 Версия установленного приложения и целостность файлов:
 
@@ -330,7 +360,7 @@ sudo moex-botctl diagnose --watch
 sudo moex-botctl diagnose --watch --interval 30
 ```
 
-Диагностика проверяет окружение, credentials, четыре timer, Telegram outbox и свежесть последнего
+Диагностика проверяет окружение, credentials, пять timers, Telegram outbox и свежесть последнего
 shadow artifact, а также состояние отдельного intraday timer. Для каждого timer проверяются не
 только `active`, но и рассчитанное systemd время следующего запуска: активный timer с пустым
 `NEXT` считается неисправным. Отдельный read-only запрос ALGOPACK проверяет токен на сервере;
@@ -409,9 +439,50 @@ sudo /opt/moex-tinvest-bot/scripts/ubuntu/backup.sh
 sudo sha256sum -c /var/backups/moex-tinvest-bot/*.sha256
 ```
 
-Скрипт сохраняет state/SQLite/artifacts, пишет SHA-256 и удаляет локальные архивы старше 30 дней.
+Скрипт сохраняет state/SQLite/artifacts и пишет SHA-256. Удаление старых архивов выполняет
+maintenance-политика только при достижении порога диска, сохраняя не менее трёх последних копий.
 Для production нужен ещё зашифрованный off-host backup и проверка восстановления. Секреты из
 `/etc` намеренно не входят в архив состояния.
+
+### Полное восстановление на новой Ubuntu 24.04
+
+Перед переносом создайте disaster-комплект:
+
+```bash
+sudo moex-botctl disaster-backup
+```
+
+В `/var/backups/moex-tinvest-bot` появятся `moex-disaster-<UTC>.tar.gz` и файл `.sha256`.
+Комплект содержит state, SQLite, artifacts, `runtime.json`, `maintenance.json` и сведения о
+развёрнутой версии. `bot.env` принципиально не включается: храните его отдельно в зашифрованном
+хранилище. Скопируйте на новую ВМ архив, `.sha256` и сохранённый `bot.env`.
+
+На чистой Ubuntu 24.04:
+
+```bash
+sudo apt-get update
+sudo apt-get install -y git ca-certificates
+git clone https://github.com/Tideus/moex-tinvest-bot.git
+cd moex-tinvest-bot
+sudo ./scripts/ubuntu/restore-new-vm.sh \
+  --backup /root/moex-disaster-YYYYmmddTHHMMSSZ.tar.gz \
+  --env-file /root/bot.env
+```
+
+Скрипт проверяет SHA-256 и безопасность путей внутри архива, устанавливает приложение и CA,
+возвращает runtime/state, владельцев и права, затем выполняет `moex-botctl prelaunch`. По
+умолчанию timers остаются выключенными, чтобы оператор изучил результат. После проверки:
+
+```bash
+sudo moex-botctl version --remote
+sudo moex-botctl diagnose --once
+sudo moex-botctl start
+```
+
+Если восстановленную ВМ допустимо запустить сразу после успешного prelaunch, передайте
+`--enable`. Не размещайте `bot.env` или disaster-архив в Git. Периодически проверяйте процедуру
+на отдельной тестовой ВМ; наличие архива без успешной пробной распаковки не считается проверенным
+планом восстановления.
 
 Полный пакет для недельной оценки стратегии и диагностики собирается отдельно:
 
@@ -467,7 +538,7 @@ sudo /opt/moex-tinvest-bot/scripts/ubuntu/uninstall.sh --purge
 
 Серверный shadow считается здоровым, если:
 
-- четыре timers (`shadow`, `intraday`, `health`, `daily-report`) enabled/active;
+- пять timers (`shadow`, `intraday`, `health`, `daily-report`, `maintenance`) enabled/active;
 - последний service result `success`;
 - healthcheck проходит;
 - новый artifact появляется каждый торговый час;

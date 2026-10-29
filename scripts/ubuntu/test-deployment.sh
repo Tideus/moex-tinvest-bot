@@ -16,6 +16,7 @@ required=(
   "opt/moex-tinvest-bot/config/geo_sources.json"
   "opt/moex-tinvest-bot/config/accounts.json"
   "opt/moex-tinvest-bot/config/intraday.json"
+  "opt/moex-tinvest-bot/config/maintenance.json"
   "opt/moex-tinvest-bot/config/ownership_disclosures.json"
   "opt/moex-tinvest-bot/config/replay.json"
   "opt/moex-tinvest-bot/config/runtime.json"
@@ -30,6 +31,7 @@ required=(
   "opt/moex-tinvest-bot/deploy/ubuntu/certificates/SHA256SUMS"
   "etc/moex-tinvest-bot/bot.env"
   "etc/moex-tinvest-bot/runtime.json"
+  "etc/moex-tinvest-bot/maintenance.json"
   "etc/systemd/system/moex-tinvest-shadow.service"
   "etc/systemd/system/moex-tinvest-shadow.timer"
   "etc/systemd/system/moex-tinvest-health.service"
@@ -38,6 +40,8 @@ required=(
   "etc/systemd/system/moex-tinvest-daily-report.timer"
   "etc/systemd/system/moex-tinvest-intraday.service"
   "etc/systemd/system/moex-tinvest-intraday.timer"
+  "etc/systemd/system/moex-tinvest-maintenance.service"
+  "etc/systemd/system/moex-tinvest-maintenance.timer"
   "etc/logrotate.d/moex-tinvest-bot"
   "usr/local/sbin/moex-botctl"
   "usr/local/share/ca-certificates/moex-tinvest-russian_trusted_root_ca.crt"
@@ -68,6 +72,8 @@ for config in "${PROJECT_DIR}"/config/*.json; do
 done
 cmp "${PROJECT_DIR}/config/runtime.json" \
   "${STAGE_DIR}/etc/moex-tinvest-bot/runtime.json"
+cmp "${PROJECT_DIR}/config/maintenance.json" \
+  "${STAGE_DIR}/etc/moex-tinvest-bot/maintenance.json"
 
 (cd "${PROJECT_DIR}/deploy/ubuntu/certificates" && \
   sha256sum --check --strict SHA256SUMS)

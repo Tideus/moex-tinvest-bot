@@ -43,15 +43,20 @@ restart_timers() {
   if [[ "${WAS_INTRADAY_ACTIVE}" -eq 1 ]]; then
     systemctl start moex-tinvest-intraday.timer || true
   fi
+  if [[ "${WAS_MAINTENANCE_ACTIVE}" -eq 1 ]]; then
+    systemctl start moex-tinvest-maintenance.timer || true
+  fi
 }
 WAS_SHADOW_ACTIVE=0
 WAS_HEALTH_ACTIVE=0
 WAS_DAILY_ACTIVE=0
 WAS_INTRADAY_ACTIVE=0
+WAS_MAINTENANCE_ACTIVE=0
 systemctl is-active --quiet moex-tinvest-shadow.timer && WAS_SHADOW_ACTIVE=1
 systemctl is-active --quiet moex-tinvest-health.timer && WAS_HEALTH_ACTIVE=1
 systemctl is-active --quiet moex-tinvest-daily-report.timer && WAS_DAILY_ACTIVE=1
 systemctl is-active --quiet moex-tinvest-intraday.timer && WAS_INTRADAY_ACTIVE=1
+systemctl is-active --quiet moex-tinvest-maintenance.timer && WAS_MAINTENANCE_ACTIVE=1
 trap restart_timers EXIT
 
 "${APP_DIR}/.venv/bin/python" -m moex_bot.cli preflight \
@@ -66,6 +71,7 @@ stop_timer_if_installed moex-tinvest-shadow.timer
 stop_timer_if_installed moex-tinvest-health.timer
 stop_timer_if_installed moex-tinvest-daily-report.timer
 stop_timer_if_installed moex-tinvest-intraday.timer
+stop_timer_if_installed moex-tinvest-maintenance.timer
 rsync -a --delete \
   --exclude '.git' --exclude '.venv' --exclude '.env' --exclude 'artifacts/*' \
   --exclude 'logs/*' --exclude 'data' --exclude 'work' \
@@ -85,6 +91,12 @@ bash "${PROJECT_DIR}/scripts/ubuntu/install-ca-certificates.sh"
   --runtime "${CONFIG_DIR}/runtime.json"
 chown root:"${SERVICE_USER}" "${CONFIG_DIR}/runtime.json"
 chmod 0644 "${CONFIG_DIR}/runtime.json"
+if [[ ! -e "${CONFIG_DIR}/maintenance.json" ]]; then
+  install -m 0644 -o root -g "${SERVICE_USER}" \
+    "${APP_DIR}/config/maintenance.json" "${CONFIG_DIR}/maintenance.json"
+fi
+chown root:"${SERVICE_USER}" "${CONFIG_DIR}/maintenance.json"
+chmod 0644 "${CONFIG_DIR}/maintenance.json"
 "${APP_DIR}/.venv/bin/python" -m moex_bot.cli config-check --root "${APP_DIR}"
 (cd "${APP_DIR}" && sha256sum --quiet -c BUILD_MANIFEST.sha256)
 installed_version="$("${APP_DIR}/.venv/bin/python" -c \

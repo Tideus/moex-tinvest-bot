@@ -52,7 +52,10 @@ stage "Telegram durable outbox"
   --outbox "${STATE_DIR}/data/notifications.sqlite3" --max-pending-due 20
 
 stage "last trading service results"
-for unit in moex-tinvest-shadow.service moex-tinvest-intraday.service; do
+for unit in \
+  moex-tinvest-shadow.service \
+  moex-tinvest-intraday.service \
+  moex-tinvest-maintenance.service; do
   if systemctl is-failed --quiet "${unit}"; then
     printf 'FAIL: last service result is failed: %s\n' "${unit}" >&2
     exit 2

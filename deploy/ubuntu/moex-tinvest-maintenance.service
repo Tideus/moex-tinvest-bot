@@ -1,0 +1,16 @@
+[Unit]
+Description=MOEX/T-Invest disk usage check and bounded retention cleanup
+Documentation=file:///opt/moex-tinvest-bot/docs/UBUNTU_24_SERVER_RU.md
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+WorkingDirectory=/opt/moex-tinvest-bot
+ExecStart=/opt/moex-tinvest-bot/.venv/bin/python -m moex_bot.cli storage-maintenance --config /etc/moex-tinvest-bot/maintenance.json --filesystem /var/lib --state-dir /var/lib/moex-tinvest-bot --log-dir /var/log/moex-tinvest-bot --backup-dir /var/backups/moex-tinvest-bot --apply
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/moex-tinvest-bot /var/log/moex-tinvest-bot /var/backups/moex-tinvest-bot
+UMask=0077

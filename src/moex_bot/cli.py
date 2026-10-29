@@ -72,6 +72,7 @@ from .service_config import (
     resolve_tinvest_runtime,
 )
 from .shadow import load_universe, run_hourly_shadow
+from .storage_maintenance import directory_bytes, load_storage_policy, maintain_storage
 from .validation import validate_project_configs
 
 
@@ -297,6 +298,58 @@ def history_reset_safety(
         print(f"FAIL: {exc}")
         return 2
     print("PASS: broker safety gate: no active orders and intraday account is flat")
+    return 0
+
+
+def storage_maintenance(
+    *,
+    config_path: Path,
+    filesystem_path: Path,
+    state_dir: Path,
+    log_dir: Path,
+    backup_dir: Path,
+    apply: bool,
+    as_of: datetime,
+) -> int:
+    try:
+        policy = load_storage_policy(config_path)
+        result = maintain_storage(
+            policy=policy,
+            filesystem_path=filesystem_path,
+            artifacts_dir=state_dir / "artifacts",
+            logs_dir=log_dir,
+            backups_dir=backup_dir,
+            apply=apply,
+            now=as_of,
+        )
+        print(
+            f"disk total={result.before.total} used={result.before.used} "
+            f"free={result.before.free} used_percent={result.before.used_percent}%"
+        )
+        print(
+            f"bot storage state={directory_bytes(state_dir)} "
+            f"logs={directory_bytes(log_dir)} backups={directory_bytes(backup_dir)} bytes"
+        )
+        action = "applied" if apply else "dry-run"
+        print(
+            f"cleanup={action} triggered={'yes' if result.cleanup_triggered else 'no'} "
+            f"deleted_files={result.deleted_files} deleted_bytes={result.deleted_bytes}"
+        )
+        if result.before.used_percent >= policy.warning_used_percent:
+            print(
+                f"WARN: disk usage reached warning threshold "
+                f"{policy.warning_used_percent}%"
+            )
+        if result.critical:
+            print(
+                f"FAIL: disk remains critical: used={result.after.used_percent}% "
+                f"free={result.after.free} bytes"
+            )
+            return 2
+    except (OSError, ValueError, KeyError, json.JSONDecodeError) as exc:
+        print(f"FAIL: storage maintenance: {exc}")
+        return 2
+    print("PASS: storage is within configured critical limits")
     return 0
 
 
@@ -1463,6 +1516,24 @@ def build_parser() -> argparse.ArgumentParser:
     reset_safety_parser.add_argument("--runtime", type=Path, required=True)
     reset_safety_parser.add_argument("--long-snapshot", type=Path, required=True)
     reset_safety_parser.add_argument("--intraday-snapshot", type=Path, required=True)
+    storage_parser = sub.add_parser(
+        "storage-maintenance", help="Report disk usage and optionally prune expired bot files"
+    )
+    storage_parser.add_argument(
+        "--config", type=Path, default=Path("config/maintenance.json")
+    )
+    storage_parser.add_argument("--filesystem", type=Path, default=Path("/var/lib"))
+    storage_parser.add_argument(
+        "--state-dir", type=Path, default=Path("/var/lib/moex-tinvest-bot")
+    )
+    storage_parser.add_argument(
+        "--log-dir", type=Path, default=Path("/var/log/moex-tinvest-bot")
+    )
+    storage_parser.add_argument(
+        "--backup-dir", type=Path, default=Path("/var/backups/moex-tinvest-bot")
+    )
+    storage_parser.add_argument("--apply", action="store_true")
+    storage_parser.add_argument("--as-of", type=datetime.fromisoformat)
     sandbox_parser = sub.add_parser(
         "sandbox-bootstrap",
         help="Verify/create the sandbox account, show cash and optionally top it up",
@@ -1768,6 +1839,20 @@ def main() -> int:
             runtime_path=args.runtime,
             long_snapshot=args.long_snapshot,
             intraday_snapshot=args.intraday_snapshot,
+        )
+    if args.command == "storage-maintenance":
+        as_of = args.as_of or datetime.now(UTC)
+        if as_of.tzinfo is None:
+            print("FAIL: --as-of must include a timezone offset")
+            return 2
+        return storage_maintenance(
+            config_path=args.config,
+            filesystem_path=args.filesystem,
+            state_dir=args.state_dir,
+            log_dir=args.log_dir,
+            backup_dir=args.backup_dir,
+            apply=args.apply,
+            as_of=as_of,
         )
     if args.command == "sandbox-bootstrap":
         return sandbox_bootstrap(

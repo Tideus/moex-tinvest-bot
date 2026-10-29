@@ -1,0 +1,11 @@
+{
+  "enabled": true,
+  "warning_used_percent": 75,
+  "cleanup_used_percent": 80,
+  "critical_used_percent": 90,
+  "minimum_free_bytes": 2147483648,
+  "log_retention_days": 14,
+  "artifact_retention_days": 90,
+  "backup_retention_days": 90,
+  "keep_min_backups": 3
+}

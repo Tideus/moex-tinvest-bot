@@ -26,6 +26,8 @@ sudo moex-botctl portfolio
 sudo moex-botctl decisions
 sudo moex-botctl collect-report --from 2026-08-24 --to 2026-08-31
 sudo moex-botctl reset-history --confirm-reset-history
+sudo moex-botctl storage
+sudo moex-botctl cleanup
 sudo moex-botctl sandbox-enable --confirm-sandbox
 sudo moex-botctl sandbox-disable
 ```
@@ -244,6 +246,11 @@ docs/plan/                   full Russian project plan
 docs/practices.md            global control-practice mapping
 docs/GIT_WORKFLOW_RU.md      Git setup, commit, push and server update guide
 ```
+
+Ubuntu installation, disaster backup and clean-VM recovery are documented in
+`docs/UBUNTU_24_SERVER_RU.md`. The portable recovery workflow uses
+`moex-botctl disaster-backup` and `scripts/ubuntu/restore-new-vm.sh`; secrets remain outside
+the archive and must be supplied separately as `bot.env`.
 
 ## Next integrations
 
