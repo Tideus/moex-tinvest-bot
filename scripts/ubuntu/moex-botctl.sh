@@ -28,6 +28,7 @@ Usage:
   sudo moex-botctl status
   sudo moex-botctl version [--remote]
   sudo moex-botctl portfolio
+  sudo moex-botctl prod-observe
   sudo moex-botctl decisions [SHADOW_JSON]
   sudo moex-botctl backtest
   sudo moex-botctl collect-report [--from YYYY-MM-DD] [--to YYYY-MM-DD] [--output-dir DIR]
@@ -220,6 +221,11 @@ check_sandbox_profile_credentials() {
   [[ -n "${MOEX_APIKEY:-}" ]]
 }
 
+check_prod_observer_credentials() {
+  [[ -n "${T_INVEST_PROD_TOKEN:-}" ]]
+  [[ -n "${T_INVEST_PROD_ACCOUNT_ID:-}" ]]
+}
+
 as_service() {
   runuser --user "${SERVICE_USER}" --preserve-environment -- "$@"
 }
@@ -304,6 +310,9 @@ prelaunch() {
   check "Long и intraday Sandbox credentials присутствуют" \
     "выполните sandbox-bootstrap-profiles и заполните MOEX_APIKEY" \
     check_sandbox_profile_credentials
+  check "Prod observer credentials присутствуют" \
+    "заполните T_INVEST_PROD_TOKEN и T_INVEST_PROD_ACCOUNT_ID" \
+    check_prod_observer_credentials
 
   heading "3/5 Интеграции"
   local requirement="tinvest_sandbox"
@@ -334,7 +343,9 @@ prelaunch() {
       "${SYSTEMD_DIR}/moex-tinvest-intraday.service" \
       "${SYSTEMD_DIR}/moex-tinvest-intraday.timer" \
       "${SYSTEMD_DIR}/moex-tinvest-maintenance.service" \
-      "${SYSTEMD_DIR}/moex-tinvest-maintenance.timer"
+      "${SYSTEMD_DIR}/moex-tinvest-maintenance.timer" \
+      "${SYSTEMD_DIR}/moex-tinvest-prod-long-observer.service" \
+      "${SYSTEMD_DIR}/moex-tinvest-prod-long-observer.timer"
 
   heading "5/5 Итог"
   if [[ "${FAILURES}" -eq 0 ]]; then
@@ -360,7 +371,8 @@ start_bot() {
       "${SYSTEMD_DIR}/moex-tinvest-health.timer" \
       "${SYSTEMD_DIR}/moex-tinvest-daily-report.timer" \
       "${SYSTEMD_DIR}/moex-tinvest-intraday.timer" \
-      "${SYSTEMD_DIR}/moex-tinvest-maintenance.timer"
+      "${SYSTEMD_DIR}/moex-tinvest-maintenance.timer" \
+      "${SYSTEMD_DIR}/moex-tinvest-prod-long-observer.timer"
   if [[ "${FAILURES}" -ne 0 ]]; then
     printf '\033[1;31mBLOCKED\033[0m: расписание не применено; сервисы не запускались.\n'
     return 2
@@ -379,6 +391,13 @@ start_bot() {
     printf '\033[1;31mBLOCKED\033[0m: первый intraday-цикл не пройден; timers не включены.\n'
     return 2
   fi
+  check "Первый prod long observer завершён" \
+    "посмотрите journalctl -u moex-tinvest-prod-long-observer.service" \
+    systemctl start moex-tinvest-prod-long-observer.service
+  if [[ "${FAILURES}" -ne 0 ]]; then
+    printf '\033[1;31mBLOCKED\033[0m: prod observer не пройден; timers не включены.\n'
+    return 2
+  fi
   check "Health-check завершён" \
     "посмотрите journalctl -u moex-tinvest-health.service" \
     systemctl start moex-tinvest-health.service
@@ -389,13 +408,14 @@ start_bot() {
   check "Таймеры включены" "проверьте systemctl status таймеров" \
     systemctl enable --now moex-tinvest-shadow.timer moex-tinvest-health.timer \
       moex-tinvest-daily-report.timer moex-tinvest-intraday.timer \
-      moex-tinvest-maintenance.timer
+      moex-tinvest-maintenance.timer moex-tinvest-prod-long-observer.timer
   for timer in \
     moex-tinvest-shadow.timer \
     moex-tinvest-health.timer \
     moex-tinvest-daily-report.timer \
     moex-tinvest-intraday.timer \
-    moex-tinvest-maintenance.timer; do
+    moex-tinvest-maintenance.timer \
+    moex-tinvest-prod-long-observer.timer; do
     check "Назначен следующий запуск ${timer}" \
       "таймер включён, но NEXT отсутствует; перезапустите timer после daemon-reload" \
       timer_has_next_elapse "${timer}"
@@ -410,7 +430,7 @@ start_bot() {
   sandbox_state="$("${PYTHON_BIN}" -c \
     'import sys; from pathlib import Path; from moex_bot.runtime_config import load_runtime_config; print("ENABLED" if load_runtime_config(Path(sys.argv[1])).sandbox_orders_enabled else "DISABLED")' \
     "${RUNTIME_FILE}")"
-  printf '\033[1;32mSTARTED\033[0m: timers активны; production orders DISABLED; sandbox orders %s.\n' \
+  printf '\033[1;32mSTARTED\033[0m: timers активны; prod observer READ-ONLY; production orders DISABLED; sandbox orders %s.\n' \
     "${sandbox_state}"
 }
 
@@ -421,7 +441,8 @@ timers_are_stopped() {
     moex-tinvest-health.timer \
     moex-tinvest-daily-report.timer \
     moex-tinvest-intraday.timer \
-    moex-tinvest-maintenance.timer; do
+    moex-tinvest-maintenance.timer \
+    moex-tinvest-prod-long-observer.timer; do
     if systemctl is-active --quiet "${unit}"; then
       printf 'FAIL: timer remains active: %s\n' "${unit}" >&2
       return 2
@@ -442,14 +463,16 @@ stop_bot() {
       moex-tinvest-health.timer \
       moex-tinvest-daily-report.timer \
       moex-tinvest-intraday.timer \
-      moex-tinvest-maintenance.timer
+      moex-tinvest-maintenance.timer \
+      moex-tinvest-prod-long-observer.timer
   check "Текущие циклы остановлены" "проверьте journalctl сервисов" \
     systemctl stop \
       moex-tinvest-shadow.service \
       moex-tinvest-health.service \
       moex-tinvest-daily-report.service \
       moex-tinvest-intraday.service \
-      moex-tinvest-maintenance.service
+      moex-tinvest-maintenance.service \
+      moex-tinvest-prod-long-observer.service
   check "Автозапуск действительно выключен" \
     "один или несколько timers остались active/enabled" timers_are_stopped
   if [[ "${FAILURES}" -ne 0 ]]; then
@@ -485,12 +508,15 @@ diagnose_once() {
     systemctl is-active --quiet moex-tinvest-intraday.timer
   check "Maintenance timer активен" "выполните sudo moex-botctl start" \
     systemctl is-active --quiet moex-tinvest-maintenance.timer
+  check "Prod long observer timer активен" "выполните sudo moex-botctl start" \
+    systemctl is-active --quiet moex-tinvest-prod-long-observer.timer
   for timer in \
     moex-tinvest-shadow.timer \
     moex-tinvest-health.timer \
     moex-tinvest-daily-report.timer \
     moex-tinvest-intraday.timer \
-    moex-tinvest-maintenance.timer; do
+    moex-tinvest-maintenance.timer \
+    moex-tinvest-prod-long-observer.timer; do
     check "Следующий запуск ${timer}" \
       "таймер активен, но NEXT отсутствует; выполните daemon-reload и restart таймера" \
       timer_has_next_elapse "${timer}"
@@ -515,6 +541,7 @@ diagnose_once() {
   fi
   printf '\033[1;31mUNHEALTHY\033[0m: ошибок: %s. Последние сообщения сервисов:\n' "${FAILURES}"
   journalctl -u moex-tinvest-shadow.service -u moex-tinvest-intraday.service \
+    -u moex-tinvest-prod-long-observer.service \
     -u moex-tinvest-health.service -u moex-tinvest-daily-report.service \
     -n 30 --no-pager 2>/dev/null | indent || true
   return 2
@@ -666,6 +693,16 @@ storage_command() {
     --state-dir "${STATE_DIR}" --log-dir "${LOG_DIR}" --backup-dir "${BACKUP_DIR}" "$@"
 }
 
+prod_observe() {
+  load_secrets || {
+    printf 'FAIL: cannot load %s\n' "${ENV_FILE}" >&2
+    return 2
+  }
+  heading "Prod IIS long observer · READ-ONLY"
+  as_service /usr/bin/bash "${APP_DIR}/scripts/ubuntu/run-prod-long-observer.sh"
+  printf 'READ-ONLY COMPLETE: production orders remain technically unavailable.\n'
+}
+
 collect_report() (
   set -Eeuo pipefail
   load_secrets || {
@@ -812,6 +849,7 @@ case "${command}" in
   diagnose) diagnose "$@" ;;
   status) status_bot ;;
   portfolio) show_portfolio ;;
+  prod-observe) prod_observe ;;
   decisions) show_decisions "$@" ;;
   backtest) historical_backtest "$@" ;;
   collect-report) collect_report "$@" ;;

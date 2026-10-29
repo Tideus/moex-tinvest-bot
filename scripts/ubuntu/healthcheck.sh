@@ -55,6 +55,7 @@ stage "last trading service results"
 for unit in \
   moex-tinvest-shadow.service \
   moex-tinvest-intraday.service \
+  moex-tinvest-prod-long-observer.service \
   moex-tinvest-maintenance.service; do
   if systemctl is-failed --quiet "${unit}"; then
     printf 'FAIL: last service result is failed: %s\n' "${unit}" >&2

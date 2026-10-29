@@ -17,6 +17,9 @@ required=(
   "opt/moex-tinvest-bot/config/accounts.json"
   "opt/moex-tinvest-bot/config/intraday.json"
   "opt/moex-tinvest-bot/config/maintenance.json"
+  "opt/moex-tinvest-bot/config/prod_long.json"
+  "opt/moex-tinvest-bot/config/prod_runtime.json"
+  "opt/moex-tinvest-bot/config/prod_shadow.json"
   "opt/moex-tinvest-bot/config/ownership_disclosures.json"
   "opt/moex-tinvest-bot/config/replay.json"
   "opt/moex-tinvest-bot/config/runtime.json"
@@ -25,6 +28,7 @@ required=(
   "opt/moex-tinvest-bot/config/universe.json"
   "opt/moex-tinvest-bot/scripts/ubuntu/run-shadow-cycle.sh"
   "opt/moex-tinvest-bot/scripts/ubuntu/run-intraday-cycle.sh"
+  "opt/moex-tinvest-bot/scripts/ubuntu/run-prod-long-observer.sh"
   "opt/moex-tinvest-bot/scripts/ubuntu/run-daily-report.sh"
   "opt/moex-tinvest-bot/scripts/ubuntu/activate.sh"
   "opt/moex-tinvest-bot/scripts/ubuntu/install-ca-certificates.sh"
@@ -42,6 +46,8 @@ required=(
   "etc/systemd/system/moex-tinvest-intraday.timer"
   "etc/systemd/system/moex-tinvest-maintenance.service"
   "etc/systemd/system/moex-tinvest-maintenance.timer"
+  "etc/systemd/system/moex-tinvest-prod-long-observer.service"
+  "etc/systemd/system/moex-tinvest-prod-long-observer.timer"
   "etc/logrotate.d/moex-tinvest-bot"
   "usr/local/sbin/moex-botctl"
   "usr/local/share/ca-certificates/moex-tinvest-russian_trusted_root_ca.crt"
@@ -128,6 +134,13 @@ MOEX_BOT_PYTHON="${FAKE_PYTHON}" \
   bash "${PROJECT_DIR}/scripts/ubuntu/run-shadow-cycle.sh"
 
 find "${RUNTIME_DIR}/state/artifacts" -name 'shadow-*.json' -print -quit | grep -q .
+MOEX_BOT_APP_DIR="${PROJECT_DIR}" \
+MOEX_BOT_STATE_DIR="${RUNTIME_DIR}/state" \
+MOEX_BOT_LOG_DIR="${RUNTIME_DIR}/logs" \
+MOEX_BOT_PYTHON="${FAKE_PYTHON}" \
+  bash "${PROJECT_DIR}/scripts/ubuntu/run-prod-long-observer.sh"
+find "${RUNTIME_DIR}/state/artifacts" -name 'prod-long-plan-*.json' -print -quit \
+  | grep -q .
 MOEX_BOT_APP_DIR="${PROJECT_DIR}" \
 MOEX_BOT_STATE_DIR="${RUNTIME_DIR}/state" \
 MOEX_BOT_LOG_DIR="${RUNTIME_DIR}/logs" \

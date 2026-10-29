@@ -70,6 +70,23 @@ def test_intraday_timer_and_service_are_isolated_and_five_minute() -> None:
     assert "ReadWritePaths=/var/lib/moex-tinvest-bot /var/log/moex-tinvest-bot" in service
 
 
+def test_prod_long_observer_is_read_only_and_separately_scheduled() -> None:
+    timer = _unit("moex-tinvest-prod-long-observer.timer")
+    service = _unit("moex-tinvest-prod-long-observer.service")
+    runner = (PROJECT_ROOT / "scripts" / "ubuntu" / "run-prod-long-observer.sh").read_text(
+        encoding="utf-8"
+    )
+    assert "Mon..Fri *-*-* 10:10:00 Europe/Moscow" in timer
+    assert "Persistent=true" in timer
+    assert "--require tinvest_prod" in service
+    assert "prod_runtime.json" in service
+    assert "broker-portfolio-snapshot" in runner
+    assert "prod-long-prepare" in runner
+    assert '--report-environment "PROD OBSERVER"' in runner
+    assert "sandbox-execute" not in runner
+    assert "intraday-sandbox-execute" not in runner
+
+
 def test_storage_maintenance_has_daily_root_timer_and_bounded_paths() -> None:
     timer = _unit("moex-tinvest-maintenance.timer")
     service = _unit("moex-tinvest-maintenance.service")
@@ -128,6 +145,7 @@ def test_all_deployment_shell_scripts_use_strict_mode() -> None:
         "reset-history.sh",
         "disaster-backup.sh",
         "restore-new-vm.sh",
+        "run-prod-long-observer.sh",
     }
     for script in scripts:
         text = script.read_text(encoding="utf-8")
@@ -244,11 +262,13 @@ def test_control_tool_exposes_safe_operator_workflow() -> None:
         "diagnose",
         "status",
         "portfolio",
+        "prod-observe",
         "decisions",
         "contour",
         "collect-report",
     ):
         assert f"{command})" in text
+    assert "production orders remain technically unavailable" in text
     assert "timers не включены" in text
     assert "bot_env_included=no" in text
     assert "sha256sum" in text

@@ -23,6 +23,34 @@ sudo moex-botctl prelaunch
 
 После изменения `runtime.json` примените настройки командой `sudo moex-botctl start`.
 
+## `prod_runtime.json`, `prod_long.json`, `prod_shadow.json`
+
+Это отдельный read-only контур ИИС. Он не заменяет основной `runtime.json` и не влияет на
+Sandbox intraday. `prod_runtime.json` выбирает официальный production endpoint, но содержит
+`sandbox_orders_enabled=false`. `prod_shadow.json` задаёт только расчёт виртуального canary-плана.
+
+`prod_long.json` фиксирует безопасную границу первой фазы:
+
+| Поле | Значение | Влияние |
+| --- | --- | --- |
+| `execution_stage` | `observer` | Любое другое значение отклоняется загрузчиком; реального adapter нет. |
+| `account_id_env` | `T_INVEST_PROD_ACCOUNT_ID` | ID читается только из защищённого `bot.env`. |
+| `account_type` | `ACCOUNT_TYPE_TINKOFF_IIS` | Контур привязан к проверенному типу счёта. |
+| `manual_position_policy` | `protect` | Ручные позиции не входят в управляемый субпортфель. |
+| `protected_secids` | `GAZP`, `LKOH`, `RAGR`, `TATNP` | Текущие ручные позиции ИИС; observer не создаёт намерения на их продажу. |
+| `managed_secids` | пусто | До отдельного live-подтверждения бот не владеет реальными позициями. |
+| `canary.capital_limit_rub` | `20000` | Виртуальный капитал первого production-пилота. |
+| `canary.max_order_notional_rub` | `8000` | Максимальный размер одной будущей canary-заявки. |
+| `canary.max_daily_turnover_rub` | `10000` | Будущий дневной лимит оборота. |
+| `canary.max_orders_per_day` | `1` | Будущий лимит — одна заявка за день. |
+| `canary.max_account_daily_loss_weight` | `0.015` | Проектируемый account-level kill switch; observer только отображает план. |
+| `canary.allow_margin` | `false` | Маржа и short запрещены. |
+| `canary.allowed_asset_classes` | `["share"]` | Фьючерсы и опционы исключены. |
+
+Любая ненулевая позиция production-счёта должна быть явно указана в `protected_secids` или
+`managed_secids`; иначе цикл завершается ошибкой. Это предотвращает случайную торговлю поверх
+ручного портфеля. Лимиты `prod_shadow.json` сверяются с canary-политикой в `config-check`.
+
 ## `accounts.json`
 
 Реестр независимых портфельных контуров. В нём нет реальных account ID: хранятся только имена
@@ -308,9 +336,10 @@ Point-in-time список разрешённых инструментов. Сп
 Изменение universe требует повторной независимой проверки SECID/board/UID/lot. Нельзя копировать
 UID по похожему названию бумаги.
 
-Текущий список содержит 13 обыкновенных акций TQBR — только пересечение независимо проверенных
+Текущий список содержит 15 акций TQBR — только пересечение независимо проверенных
 MOEX ISS и T‑Invest записей: `SBER`, `T`, `MOEX`, `LKOH`, `GAZP`, `NVTK`, `GMKN`, `PLZL`,
-`PHOR`, `CHMF`, `YDEX`, `X5`, `MTSS`. Для неоднозначных тикеров `T` и `X5` обязательны exact
+`PHOR`, `CHMF`, `YDEX`, `X5`, `MTSS`, `RAGR`, `TATNP`. RAGR и TATNP добавлены как
+защищённые позиции ИИС по официальным данным T‑Invest. Для неоднозначных тикеров `T` и `X5` обязательны exact
 UID, ISIN и `TQBR`; поиск только по тикеру запрещён.
 
 ## `geo_sources.json`

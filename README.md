@@ -57,6 +57,8 @@ active-order reconciliation.
 - read-only hourly MOEX snapshot command;
 - idempotent T-Invest sandbox account bootstrap and optional RUB top-up;
 - read-only sandbox/prod cash, equity, positions and active-order snapshots;
+- a separately scheduled production IIS long observer with protected manual positions,
+  a 20,000 RUB virtual canary sleeve and no production execution path;
 - cash-reserve, position-weight and gross-exposure diversification gates;
 - 13 independently cross-checked TQBR shares with sector and correlated-risk limits;
 - verified Russian Trusted CA bundle installed by Ubuntu install/update scripts;

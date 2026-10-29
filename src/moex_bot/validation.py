@@ -13,6 +13,7 @@ from .geo_feed import load_sources
 from .intraday_config import load_intraday_config
 from .notification_policy import load_notification_policy
 from .ownership import load_ownership_disclosures
+from .prod_long import load_prod_long_policy
 from .runtime_config import load_runtime_config
 from .service_config import load_service_config
 from .shadow import load_geo_feed, load_universe
@@ -26,6 +27,10 @@ def validate_project_configs(root: Path) -> tuple[str, ...]:
     if replay.mode.value != "replay" or shadow.mode.value != "shadow":
         raise ValueError("replay/shadow mode files are mismatched")
     checks.extend(("config/replay.json", "config/shadow.json"))
+    prod_shadow = load_config(root / "config" / "prod_shadow.json")
+    if prod_shadow.mode.value != "shadow":
+        raise ValueError("prod observer strategy must remain shadow-only")
+    checks.append("config/prod_shadow.json")
 
     load_service_config(root / "config" / "services.json")
     checks.append("config/services.json")
@@ -53,8 +58,23 @@ def validate_project_configs(root: Path) -> tuple[str, ...]:
             "long account execution gate must match runtime sandbox_orders_enabled"
         )
     checks.append("config/runtime.json")
+    prod_runtime = load_runtime_config(root / "config" / "prod_runtime.json")
+    if prod_runtime.environment.value != "prod" or prod_runtime.sandbox_orders_enabled:
+        raise ValueError("prod observer runtime must be prod with order submission disabled")
+    checks.append("config/prod_runtime.json")
     load_universe(root / "config" / "universe.json")
     checks.append("config/universe.json")
+    prod_policy = load_prod_long_policy(root / "config" / "prod_long.json")
+    if prod_shadow.max_order_notional != prod_policy.canary.max_order_notional_rub:
+        raise ValueError("prod observer order limit must match canary policy")
+    if prod_shadow.max_daily_turnover != prod_policy.canary.max_daily_turnover_rub:
+        raise ValueError("prod observer turnover limit must match canary policy")
+    if prod_shadow.max_open_orders != prod_policy.canary.max_orders_per_day:
+        raise ValueError("prod observer order count must match canary policy")
+    universe_secids = {item.secid for item in load_universe(root / "config" / "universe.json")}
+    if not (prod_policy.protected_secids | prod_policy.managed_secids) <= universe_secids:
+        raise ValueError("prod observer classified positions must belong to verified universe")
+    checks.append("config/prod_long.json")
     load_backtest_settings(root / "config" / "backtest.json")
     checks.append("config/backtest.json")
     load_promotion_gates(root / "config" / "promotion_gates.json")

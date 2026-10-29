@@ -15,6 +15,10 @@
 заявки-кандидаты, отправляет прошедшие risk-gate заявки в Sandbox API, пишет audit trail и
 отправляет отчёты в Telegram через SQLite outbox.
 
+Отдельный production IIS observer один раз утром читает реальный счёт и строит виртуальный
+long canary-план на лимит 20 000 ₽. Он не отправляет production-заявки, не меняет ручные позиции
+и не мешает Sandbox intraday. Запуск вручную: `sudo moex-botctl prod-observe`.
+
 ALGOPACK добавляет:
 
 - `TradeStats`: исполненный агрессивный поток покупок/продаж;

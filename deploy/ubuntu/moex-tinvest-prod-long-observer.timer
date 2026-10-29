@@ -1,0 +1,12 @@
+[Unit]
+Description=Run production IIS long observer on weekday mornings
+
+[Timer]
+OnCalendar=Mon..Fri *-*-* 10:10:00 Europe/Moscow
+Persistent=true
+RandomizedDelaySec=20s
+AccuracySec=1s
+Unit=moex-tinvest-prod-long-observer.service
+
+[Install]
+WantedBy=timers.target

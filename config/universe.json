@@ -50,5 +50,13 @@
   {
     "secid": "MTSS", "board": "TQBR", "t_invest_uid": "cd8063ad-73ad-4b31-bd0d-93138d9e99a2", "isin": "RU0007775219", "class_code": "TQBR", "lot_size_verified": 10, "api_trade_available": true, "short_enabled_verified": true,
     "issuer_id": "mts", "sector": "telecommunications", "risk_cluster": "domestic_defensive", "asset_class": "share", "verified_at": "2026-08-18T11:12:18+03:00", "verification_source": "MOEX ISS TQBR + official T-Invest read-only MCP"
+  },
+  {
+    "secid": "RAGR", "board": "TQBR", "t_invest_uid": "9b9a584e-448f-40da-9ba8-353b44ad697a", "isin": "RU000A0JQUZ6", "class_code": "TQBR", "lot_size_verified": 1, "api_trade_available": true, "short_enabled_verified": true,
+    "issuer_id": "rusagro", "sector": "consumer_staples", "risk_cluster": "agriculture", "asset_class": "share", "verified_at": "2026-10-30T00:00:00+05:00", "verification_source": "official T-Invest MCP get_share"
+  },
+  {
+    "secid": "TATNP", "board": "TQBR", "t_invest_uid": "efdb54d3-2f92-44da-b7a3-8849e96039f6", "isin": "RU0006944147", "class_code": "TQBR", "lot_size_verified": 1, "api_trade_available": true, "short_enabled_verified": true,
+    "issuer_id": "tatneft", "sector": "energy", "risk_cluster": "hydrocarbons", "asset_class": "share", "verified_at": "2026-10-30T00:00:00+05:00", "verification_source": "official T-Invest MCP get_share"
   }
 ]

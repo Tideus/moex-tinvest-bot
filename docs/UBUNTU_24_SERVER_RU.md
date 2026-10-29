@@ -7,6 +7,10 @@
 Выбор `prod` разрешает только чтение портфеля и отчётность; единственный mutation adapter
 жёстко привязан к официальному sandbox-host.
 
+Версия 0.4 добавляет отдельный production IIS observer. Он читает реальный ИИС, защищает
+ручные позиции и строит виртуальный canary-план, но не содержит вызова создания, замены или
+отмены production-заявки.
+
 ## Рекомендуемый сервер
 
 - Ubuntu Server 24.04 LTS x86_64;
@@ -147,8 +151,8 @@ sudo moex-botctl start
 ```
 
 `start` повторяет prelaunch, применяет расписание, запускает первые shadow и intraday cycles,
-затем health-check, включает пять timers (`shadow`, `intraday`, `health`, `daily-report`,
-`maintenance`) и
+затем health-check, включает шесть timers (`shadow`, `intraday`, `prod-long-observer`, `health`,
+`daily-report`, `maintenance`) и
 показывает фактически назначенные следующие запуски. Вне intraday-окна первый intraday service
 завершается успешным `SKIP`.
 
@@ -173,6 +177,17 @@ board и lot либо используйте отдельный счёт тол�
 ```bash
 sudo moex-botctl portfolio
 ```
+
+Запустить отдельное чтение ИИС и сформировать production canary-план без исполнения:
+
+```bash
+sudo moex-botctl prod-observe
+```
+
+В Telegram заголовок такого сообщения содержит `PROD OBSERVER`. Артефакты имеют префиксы
+`prod-portfolio-`, `prod-sleeve-` и `prod-long-plan-`. Виртуальный субпортфель ограничен
+20 000 ₽, а GAZP, LKOH, RAGR и TATNP считаются защищёнными ручными позициями. Любая новая
+неразмеченная позиция блокирует observer до осознанного обновления политики.
 
 Oneshot-сервис после успешного завершения будет `inactive (dead)` с кодом `0`; это нормально.
 Постоянно активным должен быть timer:
@@ -233,6 +248,11 @@ sudo journalctl -u moex-tinvest-intraday.service -n 100 --no-pager
 SuperCandles — в `/var/lib/moex-tinvest-bot/data/intraday.sqlite3`. Начало каждого цикла отменяет
 оставшиеся активные заявки только выделенного intraday-счёта и повторно читает позиции. Поэтому
 long-счёт этим reconciliation не затрагивается.
+
+`moex-tinvest-prod-long-observer.timer` запускается по рабочим дням в 10:10 МСК. Он использует
+production token/account ID только для чтения, после чего стратегия работает на виртуальном
+canary-субпортфеле. Sandbox long и intraday продолжают использовать свои отдельные тестовые
+счета. Production orders остаются `DISABLED` независимо от состояния timer.
 
 Telegram не повторяет полный поток циклов. Long отправляет только утренний анализ и вечерний
 итог; intraday — только дедуплицированные исполненные broker operations и вечерний

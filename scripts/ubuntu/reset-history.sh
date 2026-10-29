@@ -51,6 +51,7 @@ timers=(
   moex-tinvest-health.timer
   moex-tinvest-daily-report.timer
   moex-tinvest-maintenance.timer
+  moex-tinvest-prod-long-observer.timer
 )
 services=(
   moex-tinvest-shadow.service
@@ -58,6 +59,7 @@ services=(
   moex-tinvest-health.service
   moex-tinvest-daily-report.service
   moex-tinvest-maintenance.service
+  moex-tinvest-prod-long-observer.service
 )
 active_timers=()
 stage_dir=""

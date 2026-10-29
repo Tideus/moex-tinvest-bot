@@ -50,6 +50,7 @@ from .notification_policy import load_notification_policy, should_send_long_morn
 from .notifications import SQLiteOutbox, TelegramBotApiSender, deliver_pending
 from .ownership import load_ownership_disclosures, render_ownership_report
 from .performance import render_performance_report, summarize_performance
+from .prod_long import write_prod_long_sleeve
 from .reporting import (
     render_flow_report,
     render_persisted_shadow_decisions,
@@ -648,6 +649,7 @@ def hourly_shadow(
     require_token: bool,
     outbox_path: Path | None = None,
     notifications_path: Path = Path("config/notifications.json"),
+    report_environment: str = "SANDBOX",
 ) -> int:
     try:
         config = load_config(config_path)
@@ -679,7 +681,9 @@ def hourly_shadow(
             SQLiteOutbox(outbox_path).enqueue(
                 kind="shadow_run",
                 dedupe_key=f"shadow:{result.run_id}",
-                body=render_shadow_report(result, as_of),
+                body=render_shadow_report(
+                    result, as_of, environment_label=report_environment
+                ),
                 now=as_of,
             )
     except (RuntimeError, ValueError, OSError, json.JSONDecodeError) as exc:
@@ -691,6 +695,39 @@ def hourly_shadow(
     )
     print(f"result={output_path}")
     return 0 if result.quality.passed else 2
+
+
+def prod_long_prepare(
+    *,
+    policy_path: Path,
+    broker_snapshot_path: Path,
+    output_path: Path,
+) -> int:
+    try:
+        account_id = os.getenv("T_INVEST_PROD_ACCOUNT_ID", "").strip()
+        if not account_id:
+            raise ValueError("T_INVEST_PROD_ACCOUNT_ID is required")
+        result = write_prod_long_sleeve(
+            policy_path=policy_path,
+            broker_snapshot_path=broker_snapshot_path,
+            output_path=output_path,
+            expected_account_id=account_id,
+        )
+    except (OSError, ValueError, KeyError, json.JSONDecodeError) as exc:
+        print(f"FAIL: prod long observer: {exc}")
+        return 2
+    observer = result["observer"]
+    if not isinstance(observer, dict):
+        print("FAIL: prod long observer metadata is incomplete")
+        return 2
+    print(
+        "PASS: prod long observer sleeve prepared; "
+        f"capital={result['reported_equity']} RUB; "
+        f"protected={len(observer['protected_secids'])}; "
+        "real_orders=DISABLED"
+    )
+    print(f"result={output_path}")
+    return 0
 
 
 def sandbox_reconcile(
@@ -1700,6 +1737,17 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         default=Path("config/notifications.json"),
     )
+    shadow_parser.add_argument(
+        "--report-environment",
+        choices=("SANDBOX", "PROD OBSERVER"),
+        default="SANDBOX",
+    )
+    prod_prepare_parser = sub.add_parser("prod-long-prepare")
+    prod_prepare_parser.add_argument(
+        "--policy", type=Path, default=Path("config/prod_long.json")
+    )
+    prod_prepare_parser.add_argument("--broker-snapshot", type=Path, required=True)
+    prod_prepare_parser.add_argument("--output", type=Path, required=True)
     sandbox_execute_parser = sub.add_parser("sandbox-execute")
     sandbox_execute_parser.add_argument(
         "--accounts", type=Path, default=Path("config/accounts.json")
@@ -2036,6 +2084,12 @@ def main() -> int:
             as_of=as_of,
             notifications_path=args.notifications,
         )
+    if args.command == "prod-long-prepare":
+        return prod_long_prepare(
+            policy_path=args.policy,
+            broker_snapshot_path=args.broker_snapshot,
+            output_path=args.output,
+        )
     if args.command == "historical-backtest":
         if min(args.sandbox_weeks, args.reconciled_orders, args.unresolved_orders) < 0:
             print("FAIL: operational evidence values must be non-negative")
@@ -2078,6 +2132,7 @@ def main() -> int:
             require_token=args.require_token,
             outbox_path=args.outbox,
             notifications_path=args.notifications,
+            report_environment=args.report_environment,
         )
     if args.command == "sandbox-execute":
         as_of = args.as_of or datetime.now(UTC)

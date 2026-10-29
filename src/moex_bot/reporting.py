@@ -172,13 +172,22 @@ def _next_rebalance_window(now: datetime, hours: tuple[int, ...]) -> str | None:
     return None
 
 
-def render_shadow_report(result: HarnessResult, as_of: datetime) -> str:
+def render_shadow_report(
+    result: HarnessResult,
+    as_of: datetime,
+    *,
+    environment_label: str = "SANDBOX",
+) -> str:
     local_time = as_of.astimezone(MOSCOW)
     quality_icon = "✅" if result.quality.passed else "⛔"
     quality_text = "данные корректны" if result.quality.passed else "расчёт заблокирован"
     geo_label = _GEO_LABELS.get(result.geo.level.value, result.geo.level.value)
     lines = [
-        "🧪 MOEX BOT · УТРЕННИЙ АНАЛИЗ / SANDBOX",
+        (
+            "🧪 MOEX BOT · УТРЕННИЙ АНАЛИЗ / SANDBOX"
+            if environment_label == "SANDBOX"
+            else f"🔎 MOEX BOT · УТРЕННИЙ АНАЛИЗ / {environment_label}"
+        ),
         local_time.strftime("%d.%m.%Y · %H:%M МСК"),
         "",
         f"{quality_icon} Качество: {quality_text}",
@@ -262,7 +271,12 @@ def render_shadow_report(result: HarnessResult, as_of: datetime) -> str:
                 f"{detail}"
             )
     if result.orders:
-        lines.extend(("", "🧾 ЗАЯВКИ ДЛЯ T‑INVEST SANDBOX"))
+        order_heading = (
+            "🧾 ЗАЯВКИ ДЛЯ T‑INVEST SANDBOX"
+            if environment_label == "SANDBOX"
+            else "🧾 ВИРТУАЛЬНЫЙ CANARY-ПЛАН · НЕ ИСПОЛНЯЕТСЯ"
+        )
+        lines.extend(("", order_heading))
         for record in result.orders[:12]:
             intent = record.intent
             icon = "🟢" if intent.side.value == "buy" else "🔴"
@@ -311,12 +325,18 @@ def render_shadow_report(result: HarnessResult, as_of: datetime) -> str:
                 f"• {str(item.get('side', '?')).upper()} {item.get('secid', '?')} — "
                 f"{reasons or 'причина не указана'}"
             )
+    execution_note = (
+        "ℹ️ Это предварительный план. Разрешённые заявки отправляются только "
+        "на тестовый счёт T‑Invest Sandbox; результат исполнения приходит "
+        "отдельным сообщением."
+        if environment_label == "SANDBOX"
+        else "ℹ️ PROD OBSERVER: ИИС прочитан только на просмотр; реальные заявки "
+        "технически не отправляются."
+    )
     lines.extend(
         (
             "",
-            "ℹ️ Это предварительный план. Разрешённые заявки отправляются только "
-            "на тестовый счёт T‑Invest Sandbox; результат исполнения приходит "
-            "отдельным сообщением.",
+            execution_note,
             "Импульс — изменение цены в окне стратегии; "
             "тренд — средняя цена для фильтра направления.",
         )

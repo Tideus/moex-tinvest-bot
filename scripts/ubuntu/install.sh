@@ -112,6 +112,10 @@ install -m 0644 "${PROJECT_DIR}/deploy/ubuntu/moex-tinvest-shadow.service" \
   "$(root_path /etc/systemd/system/moex-tinvest-shadow.service)"
 install -m 0644 "${PROJECT_DIR}/deploy/ubuntu/moex-tinvest-shadow.timer" \
   "$(root_path /etc/systemd/system/moex-tinvest-shadow.timer)"
+install -m 0644 "${PROJECT_DIR}/deploy/ubuntu/moex-tinvest-prod-long-observer.service" \
+  "$(root_path /etc/systemd/system/moex-tinvest-prod-long-observer.service)"
+install -m 0644 "${PROJECT_DIR}/deploy/ubuntu/moex-tinvest-prod-long-observer.timer" \
+  "$(root_path /etc/systemd/system/moex-tinvest-prod-long-observer.timer)"
 install -m 0644 "${PROJECT_DIR}/deploy/ubuntu/moex-tinvest-health.service" \
   "$(root_path /etc/systemd/system/moex-tinvest-health.service)"
 install -m 0644 "${PROJECT_DIR}/deploy/ubuntu/moex-tinvest-health.timer" \
