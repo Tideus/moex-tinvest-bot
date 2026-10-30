@@ -1225,6 +1225,7 @@ def telegram_send(*, outbox_path: Path, as_of: datetime, limit: int) -> int:
         outbox,
         TelegramBotApiSender(token),
         chat_id=chat_id,
+        alert_chat_id=os.getenv("TELEGRAM_ALERT_CHAT_ID", "").strip() or None,
         now=as_of,
         limit=limit,
     )

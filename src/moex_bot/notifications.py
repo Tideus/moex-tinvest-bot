@@ -229,11 +229,14 @@ def deliver_pending(
     chat_id: str,
     now: datetime,
     limit: int = 20,
+    alert_chat_id: str | None = None,
 ) -> tuple[int, int]:
     sent = failed = 0
     for notification in outbox.claim(now=now, limit=limit):
         try:
-            sender.send_text(chat_id, notification.body)
+            technical = notification.kind in {"monitoring", "monitoring_test", "health_failure"}
+            destination = alert_chat_id if technical and alert_chat_id else chat_id
+            sender.send_text(destination, notification.body)
         except Exception as exc:  # delivery is isolated from the trading loop
             outbox.mark_failed(notification, now=now, reason=type(exc).__name__)
             failed += 1

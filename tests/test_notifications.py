@@ -29,6 +29,18 @@ def test_outbox_deduplicates_and_delivers_once(tmp_path: Path) -> None:
     assert outbox.health(now=NOW) == {"pending_due": 0, "dead": 0}
 
 
+def test_alerts_and_trading_reports_use_separate_chats(tmp_path: Path) -> None:
+    outbox = SQLiteOutbox(tmp_path / "routing.sqlite3")
+    for index, kind in enumerate(("monitoring", "monitoring_test", "health_failure", "shadow")):
+        outbox.enqueue(kind=kind, dedupe_key=str(index), body=kind, now=NOW)
+    sender = RecordingSender()
+    assert deliver_pending(outbox, sender, chat_id="trades", alert_chat_id="alerts",
+                           now=NOW) == (4, 0)
+    assert sorted(sender.messages) == sorted([
+        ("alerts", "monitoring"), ("alerts", "monitoring_test"),
+        ("alerts", "health_failure"), ("trades", "shadow")])
+
+
 def test_delivery_failure_is_retried_without_secret_error(tmp_path: Path) -> None:
     outbox = SQLiteOutbox(tmp_path / "outbox.sqlite3")
     outbox.enqueue(kind="flow", dedupe_key="flow-1", body="body", now=NOW)

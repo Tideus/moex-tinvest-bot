@@ -173,6 +173,12 @@ def collect(app: Path, state: Path, settings: dict[str, Any], now: datetime) -> 
         services["telegram"]["api"] + f"/bot{telegram}/getChat",
         payload={"chat_id": os.environ.get("TELEGRAM_CHAT_ID", "")}, timeout=timeout,
         block="ok") if telegram else "FAIL: missing token"
+    alerts_chat = os.environ.get("TELEGRAM_ALERT_CHAT_ID", "").strip()
+    if alerts_chat:
+        checks["api:telegram_alert_chat"] = request_probe(
+            services["telegram"]["api"] + f"/bot{telegram}/getChat",
+            payload={"chat_id": alerts_chat}, timeout=timeout, block="ok"
+        ) if telegram else "FAIL: missing token"
     try:
         outbox = SQLiteOutbox(state / "data/notifications.sqlite3").health(now=now)
         checks["telegram:outbox"] = (
