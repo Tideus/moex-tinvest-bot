@@ -1,0 +1,23 @@
+[Unit]
+Description=Private Kuma Telegram relay
+After=docker.service
+Requires=docker.service
+
+[Service]
+User=moexbot
+Group=moexbot
+EnvironmentFile=/etc/moex-observer/relay.env
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
+ExecStart=/opt/moex-tinvest-bot/.venv/bin/python /opt/moex-monitoring/kuma-telegram-relay.py
+Restart=on-failure
+RestartSec=10
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/moex-observer
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

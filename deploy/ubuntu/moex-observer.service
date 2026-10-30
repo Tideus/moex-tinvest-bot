@@ -1,0 +1,21 @@
+[Unit]
+Description=Read-only metrics Push to local Uptime Kuma
+After=network-online.target docker.service
+
+[Service]
+Type=oneshot
+User=moexbot
+Group=moexbot
+WorkingDirectory=/opt/moex-tinvest-bot
+EnvironmentFile=/etc/moex-tinvest-bot/bot.env
+Environment=SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
+Environment=PYTHONDONTWRITEBYTECODE=1
+ExecStart=/opt/moex-tinvest-bot/.venv/bin/python /opt/moex-monitoring/kuma-exporter.py
+TimeoutStartSec=300
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/moex-tinvest-bot/artifacts
+# SQLite read-only WAL readers may need existing sidecar files opened read/write.
+ReadWritePaths=/var/lib/moex-tinvest-bot/data
+UMask=0077
