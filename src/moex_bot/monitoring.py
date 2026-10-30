@@ -110,8 +110,9 @@ def collect(app: Path, state: Path, settings: dict[str, Any], now: datetime) -> 
                 value not in {"", "0", "n/a", "unavailable"}
                 for value in (following, monotonic_next)) else f"FAIL: active={active}, no schedule"
         )
-        result = systemd(unit + ".service", "Result")
-        checks[f"service:{name}"] = "OK" if result == "success" else f"FAIL: result={result}"
+        if name != "health":
+            result = systemd(unit + ".service", "Result")
+            checks[f"service:{name}"] = "OK" if result == "success" else f"FAIL: result={result}"
         if name != "health" and systemd(unit + ".service", "ActiveState") == "activating":
             entered = systemd(unit + ".service", "StateChangeTimestampMonotonic")
             try:
