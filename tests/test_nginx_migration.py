@@ -42,3 +42,16 @@ def test_nginx_migration_rejects_unexpected_config(tmp_path, monkeypatch):
     monkeypatch.setattr(sys, "argv", ["migration", "--templates", str(tmp_path), "--apply"])
     with pytest.raises(ValueError, match="exactly one"):
         module.main()
+
+
+def test_public_cutover_replaces_only_requested_location():
+    script = Path(__file__).resolve().parents[1] / "scripts/ubuntu/activate-breakwood-subdomains.py"
+    spec = importlib.util.spec_from_file_location("public_cutover", script)
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    original = "before location /syncthing/ { proxy_pass x; if (x) { return 200; } } after"
+    assert module.replace_block(original, "location /syncthing/ {", "redirect") == (
+        "before redirect after")
+    with pytest.raises(ValueError):
+        module.replace_block(original, "location /missing {", "redirect")
