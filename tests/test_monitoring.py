@@ -113,3 +113,29 @@ def test_crash_after_enqueue_does_not_duplicate_incident(tmp_path, monkeypatch):
     notify({"api": "FAIL"}, tmp_path / "incident.db", outbox,
            now + timedelta(minutes=15), settings)
     assert outbox.health(now=now + timedelta(hours=1))["pending_due"] == 1
+
+
+def test_new_artifact_during_slow_probes_is_not_future(tmp_path, monkeypatch):
+    import os
+
+    from moex_bot import monitoring_probes as probes
+
+    started = datetime(2026, 10, 30, 10, tzinfo=UTC)
+
+    class Clock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return started + timedelta(seconds=60)
+
+    monkeypatch.setattr(probes, "datetime", Clock)
+    artifacts = tmp_path / "artifacts"
+    artifacts.mkdir()
+    for prefix in ("intraday-plan-", "shadow-"):
+        path = artifacts / (prefix + "test.json")
+        path.write_text('{"quality": {"passed": true}}')
+        created = (started + timedelta(seconds=30)).timestamp()
+        os.utime(path, (created, created))
+    checks = probes.collect_artifacts(ROOT, tmp_path,
+                                      load_settings(ROOT / "config/monitoring.json"), started)
+    assert checks["data:intraday"] == "OK"
+    assert checks["data:long"] == "OK"
