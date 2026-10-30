@@ -1,5 +1,28 @@
 # Поддомены breakwood.ru — состояние 30.10.2026
 
+## Обновление: DNS и HTTPS включены
+
+Все три A-записи разрешаются в 185.246.152.115. Выпущен SAN-сертификат Let's Encrypt
+breakwood-services для s3.breakwood.ru, sync.breakwood.ru, monitoring.breakwood.ru,
+действует до 28.01.2027. В sites-enabled/breakwood-services включён TLS site
+breakwood-services.tls.pending (несмотря на историческое имя, файл теперь активен).
+HTTP перенаправляет на HTTPS, ACME webroot исключён из redirect.
+
+S3 health по новому HTTPS адресу возвращает 200; анонимный корень S3 — 403,
+что не является отказом API. Syncthing/Kuma административные адреса сохраняют
+loopback-only ACL: публичный 403 намеренный. Kuma остаётся доступной через SSH tunnel.
+Для Syncthing передаётся Host 127.0.0.1:8384, чтобы сохранить backend host-check.
+Старые адреса S3/console и /syncthing/ пока сохранены.
+
+Certbot.timer включён; deploy-hook /etc/letsencrypt/renewal-hooks/deploy/20-nginx-reload
+выполняет nginx -t перед reload. Новая копия старой nginx-конфигурации:
+/var/backups/nginx-breakwood/letsencrypt.ctYA1c.
+Тест certbot renew --dry-run --cert-name breakwood-services --run-deploy-hooks
+успешен, включая выполнение deploy-hook. Локально Syncthing HTTPS и Kuma
+Socket.IO polling возвращают 200, снаружи административные адреса возвращают 403.
+
+Ниже — историческое состояние первоначального bootstrap, не текущий статус TLS.
+
 На vivek выполнено:
 
 - Удалён include mdl-static.conf, вместо него /mdl-static и /mdl-static/ возвращают 410.

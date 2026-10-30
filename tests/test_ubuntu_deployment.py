@@ -149,6 +149,7 @@ def test_all_deployment_shell_scripts_use_strict_mode() -> None:
         "disaster-backup.sh",
         "restore-new-vm.sh",
         "install-kuma-local.sh",
+        "certbot-reload-nginx.sh",
         "run-prod-long-observer.sh",
     }
     for script in scripts:
