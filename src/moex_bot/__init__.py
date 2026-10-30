@@ -1,3 +1,3 @@
 """Safety-first MOEX/T-Invest trading harness."""
 
-__version__ = "0.5.1"
+__version__ = "0.5.2"

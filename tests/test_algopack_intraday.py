@@ -2,6 +2,7 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Any
 from urllib.error import URLError
+from urllib.parse import parse_qs, urlparse
 from zoneinfo import ZoneInfo
 
 from moex_bot.integrations.algopack_intraday import AlgoPackIntradayAdapter
@@ -16,6 +17,8 @@ class FakeGetTransport:
     def get(self, url: str, *, headers: dict[str, str], timeout: float) -> object:
         self.urls.append(url)
         assert headers["Authorization"] == "Bearer token"
+        if parse_qs(urlparse(url).query).get("start") != ["0"]:
+            return {"data": {"columns": [], "data": []}}
         common = ["tradedate", "tradetime", "secid"]
         if "/tradestats.json" in url:
             return _payload(
@@ -49,13 +52,16 @@ def test_adapter_joins_three_latest_supercandle_datasets() -> None:
     assert bars[0].buy_value == 700
     assert bars[0].put_buy_value == 900
     assert bars[0].book_imbalance == Decimal("0.4")
-    assert len(transport.urls) == 3
-    assert all("start=0" in url and "limit=1000" in url for url in transport.urls)
+    assert len(transport.urls) == 6
+    assert sum("start=0" in url and "limit=1000" in url for url in transport.urls) == 3
+    assert sum("start=1" in url and "limit=1000" in url for url in transport.urls) == 3
 
 
 def test_adapter_uses_latest_common_closed_interval() -> None:
     class PublicationLagTransport(FakeGetTransport):
         def get(self, url: str, *, headers: dict[str, str], timeout: float) -> object:
+            if parse_qs(urlparse(url).query).get("start") != ["0"]:
+                return {"data": {"columns": [], "data": []}}
             common = ["tradedate", "tradetime", "secid"]
             if "/tradestats.json" in url:
                 return {

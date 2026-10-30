@@ -127,14 +127,14 @@ class AlgoPackIntradayAdapter:
             query = urlencode({"date": day, "start": start, "limit": page_size})
             payload = self._get_with_retry(f"{BASE_URL}/{dataset}.json?{query}")
             rows = _normalize(payload)
+            if not rows:
+                break
             for row in rows:
                 secid = str(row.get("secid", "")).upper()
                 if secid not in wanted:
                     continue
                 moment = _moment(row)
                 result[(secid, moment)] = row
-            if len(rows) < page_size:
-                break
             start += len(rows)
             if start > 100_000:
                 raise ValueError("ALGOPACK pagination exceeded the safety limit")
