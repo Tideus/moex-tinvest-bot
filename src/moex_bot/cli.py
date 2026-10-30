@@ -808,9 +808,13 @@ def intraday_plan(
         raw_portfolio = json.loads(portfolio_path.read_text(encoding="utf-8"))
         if not isinstance(raw_portfolio, dict):
             raise ValueError("intraday portfolio snapshot must be an object")
-        bars = AlgoPackIntradayAdapter.from_environment().latest(
-            secids=tuple(instruments), as_of=as_of
-        )
+        try:
+            bars = AlgoPackIntradayAdapter.from_environment().latest(
+                secids=tuple(instruments), as_of=as_of
+            )
+        except (OSError, RuntimeError, ValueError):
+            print("WARN: ALGOPACK unavailable; entries blocked, broker-based exits remain active")
+            bars = ()
         plan = build_intraday_plan(
             config=config,
             instruments=instruments,

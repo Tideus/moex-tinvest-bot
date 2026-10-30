@@ -1,0 +1,11 @@
+{
+  "disk_warn_pct": 15,
+  "disk_critical_pct": 8,
+  "disk_min_free_gib": 2,
+  "failures_to_alert": 2,
+  "timeout_seconds": 10,
+  "repeat_hours": 6,
+  "intraday_max_age_seconds": 1200,
+  "long_max_age_seconds": 7200,
+  "backup_max_age_hours": 192
+}

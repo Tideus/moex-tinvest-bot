@@ -42,12 +42,13 @@ def test_health_timer_and_service_contract_match() -> None:
 
 
 def test_trading_services_fail_fast_on_rejected_algopack_token() -> None:
-    for unit in ("moex-tinvest-shadow.service", "moex-tinvest-intraday.service"):
+    for unit in ("moex-tinvest-shadow.service",):
         text = _unit(unit)
         assert (
             "ExecStartPre=/opt/moex-tinvest-bot/.venv/bin/python "
             "-m moex_bot.cli algopack-health" in text
         )
+    assert "algopack-health" not in _unit("moex-tinvest-intraday.service")
 
 
 def test_daily_report_timer_and_service_send_at_moscow_eod() -> None:

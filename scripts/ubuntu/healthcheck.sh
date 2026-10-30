@@ -31,6 +31,12 @@ stage() {
 trap on_error ERR
 
 cd "${APP_DIR}"
+monitor_status=0
+"${PYTHON_BIN}" -m moex_bot.monitoring --app "${APP_DIR}" --state "${STATE_DIR}" \
+  || monitor_status=$?
+"${PYTHON_BIN}" -m moex_bot.cli telegram-send \
+  --outbox "${STATE_DIR}/data/notifications.sqlite3" --limit 20 || true
+if [[ "${monitor_status}" -ne 0 ]]; then exit "${monitor_status}"; fi
 stage "project configuration"
 "${PYTHON_BIN}" -m moex_bot.cli config-check --root "${APP_DIR}"
 stage "shadow risk configuration"
@@ -59,7 +65,7 @@ for unit in \
   moex-tinvest-maintenance.service; do
   if systemctl is-failed --quiet "${unit}"; then
     printf 'FAIL: last service result is failed: %s\n' "${unit}" >&2
-    exit 2
+    false
   fi
   printf 'PASS: %s is not failed\n' "${unit}"
 done
@@ -76,7 +82,7 @@ fi
 if [[ "${session_status}" -ne 0 ]]; then exit "${session_status}"; fi
 if [[ -z "${latest}" ]]; then
   printf 'FAIL: no shadow artifact found during market window\n' >&2
-  exit 2
+  false
 fi
 
 now="$(date +%s)"
@@ -84,6 +90,6 @@ modified="$(stat -c %Y "${latest}")"
 age="$((now - modified))"
 if (( age < 0 || age > MAX_AGE_SECONDS )); then
   printf 'FAIL: latest shadow artifact is stale: %ss\n' "${age}" >&2
-  exit 2
+  false
 fi
 printf 'PASS: latest shadow artifact age=%ss path=%s\n' "${age}" "${latest}"

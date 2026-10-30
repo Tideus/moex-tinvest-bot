@@ -399,3 +399,7 @@ credentials и systemd units согласованы. Это проверка г�
 
 Параметры `config/event_calendar.json`, команды запуска и ограничения описаны в
 [event-calendar.md](event-calendar.md). Режим только наблюдательный.
+
+## Мониторинг
+
+[Параметры config/monitoring.json, метрики и ограничения](monitoring.md).

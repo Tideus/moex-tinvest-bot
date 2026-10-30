@@ -218,7 +218,8 @@ def build_intraday_plan(
     else:
         phase = "monitor"
 
-    latest_prices = {bar.secid: bar.close for bar in bars}
+    latest_prices = {bar.secid: bar.close for bar in bars
+                     if timedelta(0) <= as_of - bar.observed_at <= timedelta(minutes=15)}
     broker_prices = _broker_position_prices(portfolio, instruments, positions)
     position_prices = {**broker_prices, **latest_prices}
     if phase in {"force_flat", "loss_limit_flat"}:

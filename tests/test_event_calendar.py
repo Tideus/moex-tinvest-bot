@@ -43,6 +43,17 @@ def test_empty_not_proof_of_no_events(tmp_path):
     assert "STALE" in store.status(NOW)
 
 
+def test_conflicting_dates_do_not_overwrite_current_event(tmp_path):
+    store = EventStore(tmp_path / "events.db")
+    first = {"reportDate": "2026-11-01T00:00:00Z", "periodYear": 2026,
+             "periodNum": 3, "periodType": "PERIOD_TYPE_QUARTER"}
+    second = {**first, "reportDate": "2026-11-20T00:00:00Z"}
+    store.record("report", "uid", "T", {"events": [first]}, NOW)
+    with pytest.raises(ValueError, match="ambiguous"):
+        store.record("report", "uid", "T", {"events": [first, second]}, NOW)
+    assert "2026-11-01" in store.status(NOW)
+
+
 def test_today_and_rescheduled_report(tmp_path):
     store = EventStore(tmp_path / "events.db")
     row = {"reportDate": "2026-10-30T00:00:00Z", "periodYear": 2026,

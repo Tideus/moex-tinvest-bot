@@ -62,6 +62,7 @@ class EventStore:
         with self.connect() as db:
             db.execute("INSERT INTO observations(source,uid,received_at,body) VALUES(?,?,?,?)",
                        (kind, uid, received, json.dumps(response, sort_keys=True)))
+            dates_by_id: dict[str, str] = {}
             for row in rows:
                 if kind == "session":
                     continue  # Preserve exact sessions, do not flatten into corporate events.
@@ -73,6 +74,9 @@ class EventStore:
                 identity = ([kind, uid, row.get("periodYear"), row.get("periodNum"),
                              row.get("periodType")] if kind == "report" else [kind, uid, at])
                 event_id = hashlib.sha256(json.dumps(identity).encode()).hexdigest()
+                if event_id in dates_by_id and dates_by_id[event_id] != at:
+                    raise ValueError("ambiguous report dates for one reporting period")
+                dates_by_id[event_id] = at
                 body = json.dumps(row, sort_keys=True)
                 previous = db.execute("SELECT body FROM events WHERE event_id=?",
                                       (event_id,)).fetchone()
@@ -89,7 +93,7 @@ class EventStore:
         with self.connect() as db:
             last = db.execute("SELECT received_at, failures FROM refreshes "
                               "ORDER BY rowid DESC LIMIT 1").fetchone()
-            rows = db.execute("SELECT secid,kind,event_at FROM events "
+            rows = db.execute("SELECT secid,kind,event_at,last_seen FROM events "
                               "WHERE event_at>=? AND event_at<=? ORDER BY event_at,secid",
                               (stamp(day_start(now)), stamp(now + timedelta(days=days)))).fetchall()
         fresh = bool(last and now - datetime.fromisoformat(last[0]) < timedelta(hours=26))
@@ -97,7 +101,9 @@ class EventStore:
         lines = [f"Календарь инвестора · {days} дней · {quality}",
                  f"Последнее обновление: {last[0] if last else 'никогда'}",
                  "Наблюдение: календарь не меняет торговые решения."]
-        lines += [f"{at[:10]} · {secid} · {kind}" for secid, kind, at in rows]
+        lines += [f"{at[:10]} · {secid} · {kind}"
+                  + (" · UNCONFIRMED" if last and seen < last[0] else "")
+                  for secid, kind, at, seen in rows]
         if not rows:
             lines.append("Нет известных событий. Это не гарантирует отсутствие событий.")
         return "\n".join(lines)

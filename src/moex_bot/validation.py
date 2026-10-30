@@ -12,6 +12,7 @@ from .config import load_config
 from .event_calendar import load_calendar_config
 from .geo_feed import load_sources
 from .intraday_config import load_intraday_config
+from .monitoring import load_settings
 from .notification_policy import load_notification_policy
 from .ownership import load_ownership_disclosures
 from .prod_long import load_prod_long_policy
@@ -23,6 +24,8 @@ from .storage_maintenance import load_storage_policy
 
 def validate_project_configs(root: Path) -> tuple[str, ...]:
     checks: list[str] = []
+    load_settings(root / "config/monitoring.json")
+    checks.append("config/monitoring.json")
     load_calendar_config(root / "config" / "event_calendar.json")
     checks.append("config/event_calendar.json")
     replay = load_config(root / "config" / "replay.json")
