@@ -1,5 +1,22 @@
 # Мониторинг 0.6.1
 
+## Рефакторинг 0.6.3 / подготовка Kuma
+
+monitoring.py — совместимый CLI; monitoring_config.py — настройки;
+monitoring_probes.py — сбор; monitoring_incidents.py — инциденты и outbox.
+Сбой одной группы probes не стирает другие группы. Изоляция внутри каждой
+группы остаётся отдельной задачей; это не полная независимость каждого probe.
+Чтение календаря/outbox выполняется SQLite mode=ro, без CREATE/PRAGMA WAL.
+`python -m moex_bot.monitoring --collect-only` собирает read-only метрики и
+пишет только атомарный snapshot schema_version=1, не создавая инциденты/уведомления.
+Это сетевые read-only probes, а не offline-режим.
+Повтор snapshot не продвигает счётчик сбоев; стабильный event key защищает от
+дублирования enqueue при сбое до commit журнала инцидентов.
+Код торговли этим рефакторингом не изменён.
+
+План и инфраструктурные шаблоны: [uptime-kuma-migration.md](uptime-kuma-migration.md).
+Kuma/relay ещё не развёрнуты; старый мониторинг продолжает работать до переключения.
+
 В 0.6.2 добавлен TELEGRAM_ALERT_CHAT_ID: monitoring, monitoring_test и health_failure
 отправляются туда; торговые сообщения остаются в TELEGRAM_CHAT_ID. Токен пока общий.
 Если отдельный адрес не задан, сохраняется прежний общий маршрут. Адрес алертов
