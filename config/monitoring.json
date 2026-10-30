@@ -1,4 +1,6 @@
 {
+  "calendar_required": true,
+  "required_tinvest_environments": ["sandbox", "prod"],
   "disk_warn_pct": 15,
   "disk_critical_pct": 8,
   "disk_min_free_gib": 2,

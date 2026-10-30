@@ -32,6 +32,11 @@ def load_settings(path: Path) -> dict[str, Any]:
             raise ValueError(f"nonpositive monitoring setting: {key}")
     if not 0 < raw["disk_critical_pct"] < raw["disk_warn_pct"] < 100:
         raise ValueError("disk thresholds must satisfy critical < warning < 100")
+    if not isinstance(raw.get("calendar_required"), bool):
+        raise ValueError("calendar_required must be boolean")
+    envs = raw.get("required_tinvest_environments")
+    if not isinstance(envs, list) or any(env not in {"sandbox", "prod"} for env in envs):
+        raise ValueError("invalid required_tinvest_environments")
     return raw
 
 
@@ -46,7 +51,7 @@ def disk_status(total: int, free: int, settings: dict[str, Any]) -> str:
 
 def request_probe(url: str, *, token: str = "", payload: dict[str, object] | None = None,
                   timeout: float = 10, block: str = "", xml: bool = False) -> str:
-    headers = {"Content-Type": "application/json"}
+    headers = {"Content-Type": "application/json", "User-Agent": "moex-tinvest-shadow/0.1"}
     if token:
         headers["Authorization"] = f"Bearer {token}"
     request = Request(url, headers=headers,
@@ -97,7 +102,7 @@ def collect(app: Path, state: Path, settings: dict[str, Any], now: datetime) -> 
         checks[f"inodes:{path}"] = "OK" if inode_pct >= 5 else f"CRITICAL: {inode_pct:.1f}% free"
     units = ["shadow", "intraday", "health", "daily-report", "maintenance",
              "prod-long-observer"]
-    if systemd("moex-tinvest-calendar.timer", "UnitFileState") == "enabled":
+    if settings["calendar_required"]:
         units.append("calendar")
     for name in units:
         unit = f"moex-tinvest-{name}"
@@ -132,8 +137,10 @@ def collect(app: Path, state: Path, settings: dict[str, Any], now: datetime) -> 
             "date": now.astimezone(ZoneInfo("Europe/Moscow")).date().isoformat(),
             "latest": 1, "limit": 1, "iss.meta": "off"})
         checks[f"api:algopack_{dataset}"] = request_probe(
-            url, token=token, timeout=timeout, block=dataset) if token else "FAIL: missing token"
+            url, token=token, timeout=timeout, block="data") if token else "FAIL: missing token"
     for env in ("sandbox", "prod"):
+        if env not in settings["required_tinvest_environments"]:
+            continue
         token = os.environ.get(f"T_INVEST_{env.upper()}_TOKEN", "")
         if not token:
             checks[f"api:tinvest_{env}"] = "FAIL: missing token"
@@ -152,9 +159,12 @@ def collect(app: Path, state: Path, settings: dict[str, Any], now: datetime) -> 
             token=token, payload={}, timeout=timeout) if token else "FAIL: missing token"
         from .event_calendar import EventStore
 
-        checks["data:calendar"] = (
-            "FAIL: stale/incomplete" if "INCOMPLETE/STALE" in EventStore(
-                state / "data/events.sqlite3").status(now) else "OK")
+        try:
+            checks["data:calendar"] = (
+                "FAIL: stale/incomplete" if "INCOMPLETE/STALE" in EventStore(
+                    state / "data/events.sqlite3").status(now) else "OK")
+        except Exception:
+            checks["data:calendar"] = "FAIL: storage/read error"
     telegram = os.environ.get("TELEGRAM_BOT_TOKEN", "")
     for feed in json.loads((app / "config/geo_sources.json").read_text()):
         checks["api:geo_" + feed["source_id"]] = request_probe(
@@ -163,9 +173,12 @@ def collect(app: Path, state: Path, settings: dict[str, Any], now: datetime) -> 
         services["telegram"]["api"] + f"/bot{telegram}/getChat",
         payload={"chat_id": os.environ.get("TELEGRAM_CHAT_ID", "")}, timeout=timeout,
         block="ok") if telegram else "FAIL: missing token"
-    outbox = SQLiteOutbox(state / "data/notifications.sqlite3").health(now=now)
-    checks["telegram:outbox"] = (
-        "OK" if outbox["dead"] == 0 and outbox["pending_due"] <= 20 else f"FAIL: {outbox}")
+    try:
+        outbox = SQLiteOutbox(state / "data/notifications.sqlite3").health(now=now)
+        checks["telegram:outbox"] = (
+            "OK" if outbox["dead"] == 0 and outbox["pending_due"] <= 20 else f"FAIL: {outbox}")
+    except Exception:
+        checks["telegram:outbox"] = "FAIL: storage/read error"
     local = now.astimezone(ZoneInfo("Europe/Moscow"))
     if local.weekday() < 5 and 625 <= local.hour * 60 + local.minute < 1140:
         limits = (("intraday", "intraday-plan-", settings["intraday_max_age_seconds"]),
@@ -174,14 +187,25 @@ def collect(app: Path, state: Path, settings: dict[str, Any], now: datetime) -> 
             files = list((state / "artifacts").glob(prefix + "*.json"))
             age = now.timestamp() - max((p.stat().st_mtime for p in files), default=0)
             checks[f"data:{kind}"] = "OK" if 0 <= age <= limit else f"FAIL: age={age:.0f}s"
+            if files:
+                try:
+                    latest_plan = max(files, key=lambda path: path.stat().st_mtime)
+                    quality = json.loads(latest_plan.read_text()).get("quality", {})
+                    checks[f"quality:{kind}"] = (
+                        "OK" if quality.get("passed") is True else "FAIL: quality gate blocked")
+                except Exception:
+                    checks[f"quality:{kind}"] = "FAIL: artifact read/schema error"
     portfolios = list((state / "artifacts").glob("intraday-portfolio-*.json"))
     if portfolios and local.hour * 60 + local.minute >= 1120:
         latest = max(portfolios, key=lambda path: path.stat().st_mtime)
-        payload = json.loads(latest.read_text())
-        positions = payload.get("positions", {})
-        checks["intraday:overnight_exposure"] = (
-            "FAIL: last broker snapshot has positions after 18:40 MSK"
-            if positions else "OK")
+        try:
+            payload = json.loads(latest.read_text())
+            positions = payload.get("positions", {})
+            checks["intraday:overnight_exposure"] = (
+                "FAIL: last broker snapshot has positions after 18:40 MSK"
+                if positions else "OK")
+        except Exception:
+            checks["intraday:overnight_exposure"] = "FAIL: broker snapshot read error"
     backups = list(Path("/var/backups/moex-tinvest-bot").glob("moex-tinvest-*.tar.gz"))
     age = now.timestamp() - max((p.stat().st_mtime for p in backups), default=0)
     checks["backup:age"] = "OK" if age <= settings["backup_max_age_hours"] * 3600 else "FAIL: stale"

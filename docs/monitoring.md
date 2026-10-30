@@ -22,6 +22,8 @@
 
 | Параметр | Смысл и значение по умолчанию |
 |---|---|
+| calendar_required | true: календарь обязателен, отключённый timer вызывает сбой |
+| required_tinvest_environments | sandbox и prod: оба используемых контура; неиспользуемый удалить из списка, его токен не проверяется |
 | disk_warn_pct | Warning ниже 15% свободного места |
 | disk_critical_pct | Critical ниже 8% |
 | disk_min_free_gib | Critical ниже 2 GiB независимо от процентов |
