@@ -40,6 +40,8 @@ printf '%s\n' "${revision}" >"${TARGET_DIR}/VERSION"
 (
   cd "${TARGET_DIR}"
   find . -type f \
+    ! -path '*/__pycache__/*' \
+    ! -path '*/.pytest_cache/*' \
     ! -path './.venv/*' \
     ! -path './artifacts/*' \
     ! -path './logs/*' \

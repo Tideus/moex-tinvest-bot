@@ -86,6 +86,8 @@ build_value() {
 
 deployment_file_count() {
   find "${APP_DIR}" -type f \
+    ! -path '*/__pycache__/*' \
+    ! -path '*/.pytest_cache/*' \
     ! -path "${APP_DIR}/.venv/*" \
     ! -path "${APP_DIR}/artifacts/*" \
     ! -path "${APP_DIR}/logs/*" \
