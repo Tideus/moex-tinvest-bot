@@ -205,7 +205,9 @@ def collect_artifacts(app: Path, state: Path, settings: dict[str, Any],
                   ("long", "shadow-", settings["long_max_age_seconds"]))
         for kind, prefix, limit in limits:
             files = list((state / "artifacts").glob(prefix + "*.json"))
-            age = now.timestamp() - max((p.stat().st_mtime for p in files), default=0)
+            # API probes may take time; a new artifact can appear after collection started.
+            observed_at = max(now.timestamp(), datetime.now(UTC).timestamp())
+            age = observed_at - max((p.stat().st_mtime for p in files), default=0)
             checks[f"data:{kind}"] = "OK" if 0 <= age <= limit else f"FAIL: age={age:.0f}s"
             if files:
                 try:
@@ -227,7 +229,8 @@ def collect_artifacts(app: Path, state: Path, settings: dict[str, Any],
         except Exception:
             checks["intraday:overnight_exposure"] = "FAIL: broker snapshot read error"
     backups = list(Path("/var/backups/moex-tinvest-bot").glob("moex-tinvest-*.tar.gz"))
-    age = now.timestamp() - max((p.stat().st_mtime for p in backups), default=0)
+    age = max(now.timestamp(), datetime.now(UTC).timestamp()) - max(
+        (p.stat().st_mtime for p in backups), default=0)
     checks["backup:age"] = "OK" if age <= settings["backup_max_age_hours"] * 3600 else "FAIL: stale"
     return checks
 
