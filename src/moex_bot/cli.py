@@ -1098,8 +1098,9 @@ def broker_portfolio_snapshot(
         output_path.parent.mkdir(parents=True, exist_ok=True)
         portfolio_payload = snapshot.as_portfolio_payload(daily_turnover=daily_turnover)
         portfolio_payload["observed_at"] = now.isoformat()
+        portfolio_payload["executed_operations"] = [asdict(item) for item in operations]
         output_path.write_text(
-            json.dumps(portfolio_payload, ensure_ascii=False, indent=2),
+            json.dumps(portfolio_payload, ensure_ascii=False, indent=2, default=str),
             encoding="utf-8",
         )
     except (RuntimeError, ValueError, OSError, json.JSONDecodeError) as exc:
@@ -1529,6 +1530,11 @@ def session_check(as_of: datetime) -> int:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="MOEX/T-Invest safety harness")
     sub = parser.add_subparsers(dest="command", required=True)
+    for command in ("calendar-refresh", "calendar-status"):
+        calendar = sub.add_parser(command)
+        calendar.add_argument("--config", type=Path, default=Path("config/event_calendar.json"))
+        calendar.add_argument("--universe", type=Path, default=Path("config/universe.json"))
+        calendar.add_argument("--database", type=Path, default=Path("data/events.sqlite3"))
     replay_parser = sub.add_parser("replay")
     replay_parser.add_argument("--config", type=Path, required=True)
     replay_parser.add_argument(
@@ -1888,6 +1894,18 @@ def build_parser() -> argparse.ArgumentParser:
 def main() -> int:
     _load_local_env()
     args = build_parser().parse_args()
+    if args.command in ("calendar-refresh", "calendar-status"):
+        from .event_calendar import EventStore, refresh
+
+        try:
+            if args.command == "calendar-refresh":
+                return refresh(args.config, args.universe, args.database, datetime.now(UTC))
+            status = EventStore(args.database).status(datetime.now(UTC))
+            print(status)
+            return 2 if "INCOMPLETE/STALE" in status else 0
+        except (ValueError, OSError, KeyError):
+            print("FAIL: calendar configuration/storage/credentials invalid")
+            return 2
     if args.command == "replay":
         return replay(args.config, args.input, args.output)
     if args.command == "preflight":

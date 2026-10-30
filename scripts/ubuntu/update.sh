@@ -31,6 +31,9 @@ if git -C "${PROJECT_DIR}" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
 fi
 
 restart_timers() {
+  if [[ "${WAS_CALENDAR_ACTIVE:-0}" -eq 1 ]]; then
+    systemctl start moex-tinvest-calendar.timer || true
+  fi
   if [[ "${WAS_SHADOW_ACTIVE}" -eq 1 ]]; then
     systemctl start moex-tinvest-shadow.timer || true
   fi
@@ -56,6 +59,8 @@ WAS_DAILY_ACTIVE=0
 WAS_INTRADAY_ACTIVE=0
 WAS_MAINTENANCE_ACTIVE=0
 WAS_PROD_OBSERVER_ACTIVE=0
+WAS_CALENDAR_ACTIVE=0
+systemctl is-active --quiet moex-tinvest-calendar.timer && WAS_CALENDAR_ACTIVE=1
 systemctl is-active --quiet moex-tinvest-shadow.timer && WAS_SHADOW_ACTIVE=1
 systemctl is-active --quiet moex-tinvest-health.timer && WAS_HEALTH_ACTIVE=1
 systemctl is-active --quiet moex-tinvest-daily-report.timer && WAS_DAILY_ACTIVE=1
@@ -74,6 +79,7 @@ stop_timer_if_installed() {
   fi
 }
 stop_timer_if_installed moex-tinvest-shadow.timer
+stop_timer_if_installed moex-tinvest-calendar.timer
 stop_timer_if_installed moex-tinvest-health.timer
 stop_timer_if_installed moex-tinvest-daily-report.timer
 stop_timer_if_installed moex-tinvest-intraday.timer

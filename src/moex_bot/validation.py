@@ -9,6 +9,7 @@ from .account_profiles import load_account_registry
 from .backtest import load_backtest_settings
 from .backtest_reporting import load_promotion_gates
 from .config import load_config
+from .event_calendar import load_calendar_config
 from .geo_feed import load_sources
 from .intraday_config import load_intraday_config
 from .notification_policy import load_notification_policy
@@ -22,6 +23,8 @@ from .storage_maintenance import load_storage_policy
 
 def validate_project_configs(root: Path) -> tuple[str, ...]:
     checks: list[str] = []
+    load_calendar_config(root / "config" / "event_calendar.json")
+    checks.append("config/event_calendar.json")
     replay = load_config(root / "config" / "replay.json")
     shadow = load_config(root / "config" / "shadow.json")
     if replay.mode.value != "replay" or shadow.mode.value != "shadow":

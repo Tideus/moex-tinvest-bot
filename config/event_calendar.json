@@ -1,0 +1,6 @@
+{
+  "mode": "observe",
+  "token_env": "T_INVEST_READONLY_TOKEN",
+  "horizon_days": 90,
+  "exchange": "MOEX"
+}

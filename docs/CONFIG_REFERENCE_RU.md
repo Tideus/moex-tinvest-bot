@@ -395,3 +395,7 @@ sudo moex-botctl prelaunch
 Статус `READY` означает, что структура, типы, диапазоны, endpoint allowlist, активный контур,
 credentials и systemd units согласованы. Это проверка готовности системы, а не гарантия
 прибыльности стратегии.
+# Календарь событий
+
+Параметры `config/event_calendar.json`, команды запуска и ограничения описаны в
+[event-calendar.md](event-calendar.md). Режим только наблюдательный.

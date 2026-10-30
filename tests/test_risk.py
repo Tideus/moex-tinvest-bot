@@ -32,6 +32,19 @@ def _config() -> BotConfig:
     )
 
 
+def test_reduce_overweight_position_in_steps() -> None:
+    instrument = Instrument("AAA", "uid", "TQBR", 1, Decimal("0.01"))
+    portfolio = PortfolioSnapshot(
+        cash=Decimal("50000"), positions={"AAA": Position(instrument, 50)}
+    )
+    intent = OrderIntent("reduce", instrument, Side.SELL, 1, Decimal("1000"),
+                         Decimal("1000"), "reduce")
+    geo = GeoRiskSnapshot(GeoRiskLevel.NORMAL, Decimal("1"), frozenset(), ())
+    decision = evaluate_intent(intent, portfolio, _config(), geo,
+                               equity=Decimal("100000"), gross_exposure=Decimal("90000"))
+    assert decision.allowed
+
+
 def test_risk_checks_resulting_position_not_just_increment() -> None:
     instrument = Instrument("AAA", "uid", "TQBR", 10, Decimal("0.01"))
     portfolio = PortfolioSnapshot(

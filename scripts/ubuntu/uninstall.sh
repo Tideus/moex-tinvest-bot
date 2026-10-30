@@ -11,9 +11,13 @@ fi
 systemctl disable --now moex-tinvest-shadow.timer moex-tinvest-health.timer \
   moex-tinvest-daily-report.timer 2>/dev/null || true
 systemctl disable --now moex-tinvest-intraday.timer 2>/dev/null || true
+systemctl disable --now moex-tinvest-calendar.timer 2>/dev/null || true
+systemctl stop moex-tinvest-calendar.service 2>/dev/null || true
 systemctl disable --now moex-tinvest-maintenance.timer 2>/dev/null || true
 systemctl disable --now moex-tinvest-prod-long-observer.timer 2>/dev/null || true
 rm -f /etc/systemd/system/moex-tinvest-shadow.service \
+  /etc/systemd/system/moex-tinvest-calendar.service \
+  /etc/systemd/system/moex-tinvest-calendar.timer \
   /etc/systemd/system/moex-tinvest-shadow.timer \
   /etc/systemd/system/moex-tinvest-health.service \
   /etc/systemd/system/moex-tinvest-health.timer \

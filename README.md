@@ -288,3 +288,7 @@ closed. Do not tune parameters against the reported OOS interval and then call t
 
 Material is for research and is not individualized investment advice.
 
+# Календарь инвестора
+
+Read-only календарь отчётов, дивидендов и сессий: [настройка и ограничения](docs/event-calendar.md).
+

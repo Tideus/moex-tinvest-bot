@@ -273,6 +273,7 @@ def build_intraday_plan(
             key=lambda item: (-item.score, item.secid),
         )
     )
+    fill_entries = executed_entries(portfolio)
     exit_orders, exit_notes = _position_exit_orders(
         config=config,
         instruments=instruments,
@@ -282,6 +283,7 @@ def build_intraday_plan(
         store=store,
         trade_day=trade_day,
         as_of=as_of,
+        fill_entries=fill_entries,
     )
     if exit_orders:
         return IntradayPlan(
@@ -355,6 +357,54 @@ def build_intraday_plan(
         quality_errors,
         dict(sorted(gate_counts.items())),
     )
+
+
+def executed_entries(
+    portfolio: Mapping[str, object],
+) -> dict[str, tuple[datetime, Side, Decimal, int]]:
+    """Reconstruct today's net cost basis from executed, deduplicated broker operations.
+
+    Missing/inconsistent history remains unmanaged and is closed, never guessed from signals.
+    Partial reductions preserve average cost and first-fill time; flips start a new lifecycle.
+    """
+    result: dict[str, tuple[datetime, Side, Decimal, int]] = {}
+    seen: set[str] = set()
+    raw = portfolio.get("executed_operations", [])
+    if not isinstance(raw, list):
+        raise ValueError("executed_operations must be a list")
+    for item in sorted(raw, key=lambda row: str(row["occurred_at"])):
+        if not isinstance(item, dict):
+            raise ValueError("invalid executed operation")
+        if item.get("side") not in {"BUY", "SELL"} or not item.get("secid"):
+            continue
+        operation_id = str(item["operation_id"])
+        if operation_id in seen:
+            continue
+        seen.add(operation_id)
+        secid = str(item["secid"])
+        quantity = int(item["quantity"])
+        price = Decimal(str(item["gross"])) / quantity if quantity > 0 else Decimal("0")
+        at = datetime.fromisoformat(str(item["occurred_at"]))
+        if quantity <= 0 or price <= 0 or at.tzinfo is None:
+            raise ValueError("invalid fill quantity/price/time")
+        side = Side.BUY if item["side"] == "BUY" else Side.SELL
+        delta = quantity if side is Side.BUY else -quantity
+        previous = result.get(secid)
+        if previous is None:
+            result[secid] = at, side, price, delta
+            continue
+        first, old_side, basis, units = previous
+        remaining = units + delta
+        if remaining == 0:
+            del result[secid]
+        elif units * delta > 0:
+            result[secid] = (first, old_side,
+                             (basis * abs(units) + price * quantity) / abs(remaining), remaining)
+        elif units * remaining > 0:
+            result[secid] = first, old_side, basis, remaining
+        else:
+            result[secid] = at, side, price, remaining
+    return result
 
 
 def _broker_position_prices(
@@ -542,6 +592,7 @@ def _position_exit_orders(
     store: IntradayStateStore,
     trade_day: str,
     as_of: datetime,
+    fill_entries: Mapping[str, tuple[datetime, Side, Decimal, int]] | None = None,
 ) -> tuple[tuple[OrderIntent, ...], tuple[str, ...]]:
     signals_by_secid = {signal.secid: signal for signal in signals}
     orders: list[OrderIntent] = []
@@ -549,7 +600,11 @@ def _position_exit_orders(
     for secid, lots in sorted(positions.items()):
         if not lots or secid not in prices or secid not in instruments:
             continue
-        entry = store.latest_signal(trade_day, secid)
+        fill = (fill_entries or {}).get(secid)
+        entry = (
+            fill[:3]
+            if fill is not None and fill[3] == lots * instruments[secid].lot_size else None
+        )
         if entry is None:
             missing_reason = "missing_entry_state"
             orders.append(

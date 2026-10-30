@@ -422,6 +422,12 @@ start_bot() {
   done
   heading "Фактическое расписание"
   systemctl list-timers 'moex-tinvest-*' --no-pager || true
+  if as_service "${PYTHON_BIN}" -c \
+    'import os,sys,json; from pathlib import Path; c=json.loads(Path(sys.argv[1]).read_text()); sys.exit(0 if os.environ.get(c["token_env"], "").strip() else 1)' \
+    "${APP_DIR}/config/event_calendar.json"; then
+    check "Calendar timer" "Check calendar service and read-only token" \
+      systemctl enable --now moex-tinvest-calendar.timer
+  fi
   if [[ "${FAILURES}" -ne 0 ]]; then
     printf '\033[1;31mPARTIAL/FAILED\033[0m: ошибок при запуске: %s.\n' "${FAILURES}"
     return 2
@@ -437,6 +443,7 @@ start_bot() {
 timers_are_stopped() {
   local unit=""
   for unit in \
+    moex-tinvest-calendar.timer \
     moex-tinvest-shadow.timer \
     moex-tinvest-health.timer \
     moex-tinvest-daily-report.timer \
@@ -459,6 +466,7 @@ stop_bot() {
   heading "Остановка расписания"
   check "Таймеры отключены" "проверьте systemctl status moex-tinvest-*.timer" \
     systemctl disable --now \
+      moex-tinvest-calendar.timer \
       moex-tinvest-shadow.timer \
       moex-tinvest-health.timer \
       moex-tinvest-daily-report.timer \
@@ -467,6 +475,7 @@ stop_bot() {
       moex-tinvest-prod-long-observer.timer
   check "Текущие циклы остановлены" "проверьте journalctl сервисов" \
     systemctl stop \
+      moex-tinvest-calendar.service \
       moex-tinvest-shadow.service \
       moex-tinvest-health.service \
       moex-tinvest-daily-report.service \
@@ -484,6 +493,13 @@ stop_bot() {
 
 diagnose_once() {
   FAILURES=0
+  if systemctl is-enabled --quiet moex-tinvest-calendar.timer; then
+    check "Calendar timer active" "Check calendar.timer" \
+      systemctl is-active --quiet moex-tinvest-calendar.timer
+    check "Calendar freshness" "Check calendar.service journal" \
+      as_service "${PYTHON_BIN}" -m moex_bot.cli calendar-status \
+        --database "${STATE_DIR}/data/events.sqlite3"
+  fi
   local requirement="tinvest_sandbox"
   requirement="$(selected_requirement 2>/dev/null)" || true
   heading "Диагностика $(date --iso-8601=seconds)"

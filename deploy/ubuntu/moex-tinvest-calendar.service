@@ -1,0 +1,18 @@
+[Unit]
+Description=Read-only investor calendar refresh
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=moexbot
+Group=moexbot
+WorkingDirectory=/opt/moex-tinvest-bot
+EnvironmentFile=/etc/moex-tinvest-bot/bot.env
+Environment=SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
+ExecStart=/opt/moex-tinvest-bot/.venv/bin/python -m moex_bot.cli calendar-refresh --database /var/lib/moex-tinvest-bot/data/events.sqlite3
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/var/lib/moex-tinvest-bot
+UMask=0077

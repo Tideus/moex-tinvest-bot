@@ -108,6 +108,10 @@ if [[ -n "${DESTDIR}" ]]; then allow_dirty=1; fi
 bash "${PROJECT_DIR}/scripts/ubuntu/write-build-metadata.sh" \
   "${PROJECT_DIR}" "$(root_path "${APP_DIR}")" "${allow_dirty}"
 
+install -m 0644 "${PROJECT_DIR}/deploy/ubuntu/moex-tinvest-calendar.service" \
+  "$(root_path /etc/systemd/system/moex-tinvest-calendar.service)"
+install -m 0644 "${PROJECT_DIR}/deploy/ubuntu/moex-tinvest-calendar.timer" \
+  "$(root_path /etc/systemd/system/moex-tinvest-calendar.timer)"
 install -m 0644 "${PROJECT_DIR}/deploy/ubuntu/moex-tinvest-shadow.service" \
   "$(root_path /etc/systemd/system/moex-tinvest-shadow.service)"
 install -m 0644 "${PROJECT_DIR}/deploy/ubuntu/moex-tinvest-shadow.timer" \

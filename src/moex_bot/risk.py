@@ -48,6 +48,8 @@ def evaluate_intent(
     current_lots = 0 if current_position is None else current_position.lots
     lot_delta = adjusted.lots if adjusted.side is Side.BUY else -adjusted.lots
     resulting_lots = current_lots + lot_delta
+    reducing = (current_lots != 0 and abs(resulting_lots) < abs(current_lots)
+                and current_lots * resulting_lots >= 0)
     if current_lots * resulting_lots < 0:
         reasons.append("position reversal must close the current side before opening another")
     opening_short = resulting_lots < min(current_lots, 0)
@@ -92,17 +94,17 @@ def evaluate_intent(
             if resulting_position < 0
             else config.max_position_weight
         )
-        if resulting_abs / equity > position_limit:
+        if not reducing and resulting_abs / equity > position_limit:
             reasons.append("resulting position exceeds position-weight limit")
         projected_gross = max(Decimal("0"), gross_exposure + exposure_delta)
-        if projected_gross / equity > config.max_gross_exposure:
+        if not reducing and projected_gross / equity > config.max_gross_exposure:
             reasons.append("projected gross exposure exceeds limit")
         current_short = current_abs if current_notional < 0 else Decimal("0")
         resulting_short = resulting_abs if resulting_position < 0 else Decimal("0")
         projected_short = max(
             Decimal("0"), short_exposure + resulting_short - current_short
         )
-        if projected_short / equity > config.max_short_gross_exposure:
+        if not reducing and projected_short / equity > config.max_short_gross_exposure:
             reasons.append("projected short exposure exceeds limit")
         sector_current = (sector_exposure or {}).get(
             adjusted.instrument.sector, Decimal("0")
@@ -110,7 +112,7 @@ def evaluate_intent(
         projected_sector = max(
             Decimal("0"), sector_current + exposure_delta
         )
-        if projected_sector / equity > config.max_sector_weight:
+        if not reducing and projected_sector / equity > config.max_sector_weight:
             reasons.append("projected sector exposure exceeds limit")
         cluster_current = (risk_cluster_exposure or {}).get(
             adjusted.instrument.risk_cluster, Decimal("0")
@@ -118,6 +120,6 @@ def evaluate_intent(
         projected_cluster = max(
             Decimal("0"), cluster_current + exposure_delta
         )
-        if projected_cluster / equity > config.max_risk_cluster_weight:
+        if not reducing and projected_cluster / equity > config.max_risk_cluster_weight:
             reasons.append("projected risk-cluster exposure exceeds limit")
     return RiskDecision(not reasons, tuple(reasons), adjusted if not reasons else None)

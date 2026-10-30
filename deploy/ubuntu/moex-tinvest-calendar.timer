@@ -1,0 +1,10 @@
+[Unit]
+Description=Daily investor calendar
+
+[Timer]
+OnCalendar=*-*-* 08:30:00 Europe/Moscow
+Persistent=true
+Unit=moex-tinvest-calendar.service
+
+[Install]
+WantedBy=timers.target

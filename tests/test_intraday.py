@@ -78,6 +78,13 @@ def _portfolio(*, positions: dict[str, object] | None = None) -> dict[str, objec
         "daily_turnover": "0",
         "open_orders": 0,
         "positions": positions or {},
+        "executed_operations": [
+            {"operation_id": "fixture-fill", "secid": "SBER", "side": "BUY",
+             "quantity": int(value["lots"]), "gross": str(Decimal("100.5") * int(value["lots"])),
+             "occurred_at": "2026-08-20T10:25:00+03:00"}
+            for secid, value in (positions or {}).items()
+            if secid == "SBER" and isinstance(value, dict) and int(value["lots"]) > 0
+        ],
     }
 
 
