@@ -62,11 +62,15 @@ if [[ "${plan_status}" -eq 0 ]]; then
     --output "${execution_path}"
 fi
 
+notification_status=0
 "${PYTHON_BIN}" -m moex_bot.cli intraday-trade-notifications \
   --accounts "${APP_DIR}/config/accounts.json" \
   --universe "${APP_DIR}/config/universe.json" \
   --notifications "${APP_DIR}/config/notifications.json" \
-  --outbox "${outbox_path}"
+  --outbox "${outbox_path}" || notification_status=$?
+if [[ "${notification_status}" -ne 0 && "${notification_status}" -ne 3 ]]; then
+  printf 'WARN: intraday trade notification read failed; the next cycle will retry\n'
+fi
 
 "${PYTHON_BIN}" -m moex_bot.cli telegram-send --outbox "${outbox_path}" || true
 exit "${plan_status}"

@@ -82,16 +82,20 @@ class AlgoPackIntradayAdapter:
             return ()
         local_day = as_of.astimezone(MOSCOW).date().isoformat()
         blocks = {
-            name: self._latest_rows(name, local_day, wanted)
+            name: self._day_rows(name, local_day, wanted)
             for name in ("tradestats", "orderstats", "obstats")
         }
         complete: list[IntradaySuperCandle] = []
-        common = (
-            set(blocks["tradestats"])
-            & set(blocks["orderstats"])
-            & set(blocks["obstats"])
-        )
-        for key in sorted(common):
+        common = set(blocks["tradestats"]) & set(blocks["orderstats"]) & set(blocks["obstats"])
+        latest_by_secid: dict[str, tuple[str, datetime]] = {}
+        for key in common:
+            secid, observed_at = key
+            if observed_at > as_of.astimezone(MOSCOW):
+                continue
+            current = latest_by_secid.get(secid)
+            if current is None or observed_at > current[1]:
+                latest_by_secid[secid] = key
+        for key in sorted(latest_by_secid.values()):
             trade = blocks["tradestats"][key]
             order = blocks["orderstats"][key]
             book = blocks["obstats"][key]
@@ -113,19 +117,27 @@ class AlgoPackIntradayAdapter:
             )
         return tuple(complete)
 
-    def _latest_rows(
+    def _day_rows(
         self, dataset: str, day: str, wanted: frozenset[str]
     ) -> dict[tuple[str, datetime], Mapping[str, object]]:
-        query = urlencode({"date": day, "latest": 1})
-        payload = self._get_with_retry(f"{BASE_URL}/{dataset}.json?{query}")
-        rows = _normalize(payload)
         result: dict[tuple[str, datetime], Mapping[str, object]] = {}
-        for row in rows:
-            secid = str(row.get("secid", "")).upper()
-            if secid not in wanted:
-                continue
-            moment = _moment(row)
-            result[(secid, moment)] = row
+        start = 0
+        page_size = 1000
+        while True:
+            query = urlencode({"date": day, "start": start, "limit": page_size})
+            payload = self._get_with_retry(f"{BASE_URL}/{dataset}.json?{query}")
+            rows = _normalize(payload)
+            for row in rows:
+                secid = str(row.get("secid", "")).upper()
+                if secid not in wanted:
+                    continue
+                moment = _moment(row)
+                result[(secid, moment)] = row
+            if len(rows) < page_size:
+                break
+            start += len(rows)
+            if start > 100_000:
+                raise ValueError("ALGOPACK pagination exceeded the safety limit")
         return result
 
     def _get_with_retry(self, url: str) -> object:

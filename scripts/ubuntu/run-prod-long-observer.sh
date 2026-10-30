@@ -60,6 +60,7 @@ if [[ "${session_status}" -ne 0 ]]; then exit "${session_status}"; fi
   --notifications "${APP_DIR}/config/notifications.json" \
   --report-environment "PROD OBSERVER" \
   --allowed-secids-policy "${APP_DIR}/config/prod_long.json" \
+  --quality-block-is-safe \
   --outbox "${outbox_path}"
 
 telegram_status=0

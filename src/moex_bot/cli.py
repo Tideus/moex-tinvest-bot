@@ -651,8 +651,13 @@ def hourly_shadow(
     notifications_path: Path = Path("config/notifications.json"),
     report_environment: str = "SANDBOX",
     allowed_secids_policy_path: Path | None = None,
+    quality_block_is_safe: bool = False,
 ) -> int:
     try:
+        if quality_block_is_safe and report_environment != "PROD OBSERVER":
+            raise ValueError(
+                "quality-block-is-safe is restricted to the read-only PROD observer"
+            )
         config = load_config(config_path)
         universe = load_universe(universe_path)
         if allowed_secids_policy_path is not None:
@@ -698,7 +703,12 @@ def hourly_shadow(
         f"targets={len(result.targets)} orders={len(result.orders)}"
     )
     print(f"result={output_path}")
-    return 0 if result.quality.passed else 2
+    if result.quality.passed:
+        return 0
+    if quality_block_is_safe:
+        print("SAFE: quality gate blocked all orders; observer completed without execution")
+        return 0
+    return 2
 
 
 def prod_long_prepare(
@@ -1737,6 +1747,11 @@ def build_parser() -> argparse.ArgumentParser:
     shadow_parser.add_argument("--require-token", action="store_true")
     shadow_parser.add_argument("--outbox", type=Path)
     shadow_parser.add_argument(
+        "--quality-block-is-safe",
+        action="store_true",
+        help="Return success for a persisted no-order quality block (observer mode only)",
+    )
+    shadow_parser.add_argument(
         "--notifications",
         type=Path,
         default=Path("config/notifications.json"),
@@ -2139,6 +2154,7 @@ def main() -> int:
             notifications_path=args.notifications,
             report_environment=args.report_environment,
             allowed_secids_policy_path=args.allowed_secids_policy,
+            quality_block_is_safe=args.quality_block_is_safe,
         )
     if args.command == "sandbox-execute":
         as_of = args.as_of or datetime.now(UTC)

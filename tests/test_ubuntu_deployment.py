@@ -82,6 +82,7 @@ def test_prod_long_observer_is_read_only_and_separately_scheduled() -> None:
     assert "prod_runtime.json" in service
     assert "broker-portfolio-snapshot" in runner
     assert "prod-long-prepare" in runner
+    assert "--quality-block-is-safe" in runner
     assert '--report-environment "PROD OBSERVER"' in runner
     assert '--allowed-secids-policy "${APP_DIR}/config/prod_long.json"' in runner
     assert "sandbox-execute" not in runner
@@ -310,6 +311,14 @@ def test_health_checks_authenticated_algopack_and_future_timer_elapses() -> None
     assert "NextElapseUSecRealtime" in control
     assert "NextElapseUSecMonotonic" in control
     assert "ALGOPACK принимает токен" in control
+
+
+def test_intraday_notification_timeout_does_not_abort_trading_cycle() -> None:
+    runner = (PROJECT_ROOT / "scripts" / "ubuntu" / "run-intraday-cycle.sh").read_text(
+        encoding="utf-8"
+    )
+    assert "notification_status=0" in runner
+    assert "the next cycle will retry" in runner
 
 
 def test_shadow_runner_uses_selected_broker_snapshot_not_empty_example() -> None:
