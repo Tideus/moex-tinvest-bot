@@ -11,6 +11,27 @@ from uuid import uuid4
 
 from dotenv import dotenv_values
 
+SCRIPT_FILES = ("kuma-exporter.py", "kuma-telegram-relay.py")
+UNIT_FILES = ("moex-observer.service", "moex-observer.timer", "moex-kuma-relay.service")
+
+
+def installation_sources(source, units_source=None):
+    """Resolve checkout or legacy bundle and validate every input before mutation."""
+    source = Path(source).resolve()
+    if units_source is None:
+        project_units = source.parent.parent / "deploy" / "ubuntu"
+        units = project_units if project_units.is_dir() else source
+    else:
+        units = Path(units_source).resolve()
+    for directory, names in ((source, SCRIPT_FILES), (units, UNIT_FILES)):
+        for name in names:
+            path = directory / name
+            if path.is_symlink() or not path.is_file():
+                raise ValueError(f"missing or non-regular installer input: {name}")
+            with path.open("rb") as stream:
+                stream.read(1)  # Verify readability before config/files/systemd mutations.
+    return source, units
+
 
 def private_config_write(path, content, group):
     """No world-readable creation window, symlink following or partial secret file."""
@@ -45,7 +66,12 @@ def main():
         raise PermissionError("root required")
     parser = argparse.ArgumentParser()
     parser.add_argument("--source", type=Path, required=True)
+    parser.add_argument(
+        "--units-source", type=Path,
+        help="Unit directory; default: project deploy/ubuntu or legacy source bundle",
+    )
     args = parser.parse_args()
+    source, units_source = installation_sources(args.source, args.units_source)
     group = grp.getgrnam("moexbot").gr_gid
     # Permit running adapters, without access to root-only Kuma .env/data.
     os.chown("/opt/moex-monitoring", 0, group)
@@ -74,12 +100,12 @@ def main():
         if not value or any(character in value for character in "\r\n\"\\"):
             raise ValueError("invalid relay setting")
     private_config_write(env, "".join(f'{key}="{value}"\n' for key, value in relay.items()), group)
-    for name in ("kuma-exporter.py", "kuma-telegram-relay.py"):
+    for name in SCRIPT_FILES:
         target = Path("/opt/moex-monitoring") / name
-        shutil.copyfile(args.source / name, target)
+        shutil.copyfile(source / name, target)
         target.chmod(0o644)
-    for name in ("moex-observer.service", "moex-observer.timer", "moex-kuma-relay.service"):
-        shutil.copyfile(args.source / name, Path("/etc/systemd/system") / name)
+    for name in UNIT_FILES:
+        shutil.copyfile(units_source / name, Path("/etc/systemd/system") / name)
     subprocess.run(["/opt/moex-tinvest-bot/.venv/bin/python",
                     "/opt/moex-monitoring/kuma-exporter.py", "--provision"], check=True)
     subprocess.run(["systemctl", "daemon-reload"], check=True)
