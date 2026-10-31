@@ -1,7 +1,16 @@
 ﻿# MOEX + ALGOPACK + T-Invest bot harness
 
 Safety-first Python 3.12 harness for research, deterministic replay, shadow operation and
-explicitly gated execution on a T-Invest sandbox account. Production order submission is absent.
+explicitly gated execution on T-Invest sandbox accounts. A separately gated manual production
+canary executor is available in 0.7.0rc2, disabled by default; autonomous PROD trading is not enabled.
+
+Verification: [0.7.0rc2 tests and monitoring](docs/VERIFICATION_2026-10-31_RU.md).
+
+Допуск к реальной торговле: **NO-GO**. Текущие исправления исполнения и оставшиеся
+блокеры описаны в [`docs/PROD_READINESS_2026-10-30_RU.md`](docs/PROD_READINESS_2026-10-30_RU.md).
+Установка этого рабочего дерева поверх старой истории требует миграции журнала заявок;
+не создавайте пустую БД для обхода этой проверки.
+Ручной canary и замена sandbox-счетов: [`docs/LIVE_CANARY_RU.md`](docs/LIVE_CANARY_RU.md).
 
 Полная инструкция оператора на русском: [`docs/USER_GUIDE_RU.md`](docs/USER_GUIDE_RU.md).
 Установка на Ubuntu Server 24.04 LTS: [`docs/UBUNTU_24_SERVER_RU.md`](docs/UBUNTU_24_SERVER_RU.md).
@@ -42,7 +51,7 @@ bash scripts/ubuntu/test-deployment.sh
 
 Two independent Sandbox account profiles are declared in `config/accounts.json`: a 300,000 RUB
 daily long-only sleeve and a separate 300,000 RUB intraday sleeve. Sandbox execution is enabled
-for both profiles, remains impossible on production endpoints, and is preceded by account-specific
+for both profiles, uses sandbox endpoints only, and is preceded by account-specific
 active-order reconciliation.
 
 - immutable domain models using `Decimal`;

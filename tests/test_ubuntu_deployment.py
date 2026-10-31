@@ -273,7 +273,7 @@ def test_control_tool_exposes_safe_operator_workflow() -> None:
         "collect-report",
     ):
         assert f"{command})" in text
-    assert "production orders remain technically unavailable" in text
+    assert "this observer never submits orders" in text
     assert "timers не включены" in text
     assert "bot_env_included=no" in text
     assert "sha256sum" in text
@@ -403,6 +403,16 @@ def test_history_reset_is_confirmed_backed_up_and_broker_safe() -> None:
     assert "moex-history-reset-" in reset
     assert "sha256sum -c" in reset
     assert "reset-history)" in control
+    assert '! -name execution' in reset
+    assert '--journal "${STATE_DIR}/execution/orders.sqlite3"' in reset
+    assert 'chown "${SERVICE_USER}:${SERVICE_USER}" "${snapshot_dir}"' in reset
+
+
+def test_execution_journal_path_is_shared_and_not_report_dependent() -> None:
+    for name in ("run-shadow-cycle.sh", "run-intraday-cycle.sh"):
+        script = (PROJECT_ROOT / "scripts" / "ubuntu" / name).read_text(encoding="utf-8")
+        assert '--journal "${STATE_DIR}/execution/orders.sqlite3"' in script
+        assert "sandbox-journal-reconcile" in script
 
 
 def test_disaster_recovery_is_portable_verified_and_keeps_secrets_separate() -> None:

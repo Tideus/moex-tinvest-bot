@@ -121,6 +121,7 @@ class PortfolioSnapshot:
     blocked_cash: Decimal = ZERO
     reported_equity: Decimal | None = None
     source: str = "file"
+    account_id: str = ""
 
     def __post_init__(self) -> None:
         if not self.cash.is_finite() or not self.blocked_cash.is_finite():

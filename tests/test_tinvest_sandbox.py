@@ -2,6 +2,8 @@ from decimal import Decimal
 from typing import Any
 from uuid import uuid4
 
+import pytest
+
 from moex_bot.domain import Instrument, OrderIntent, OrderRecord, OrderStatus, Side
 from moex_bot.integrations.tinvest_sandbox import (
     SANDBOX_BASE_URL,
@@ -40,14 +42,26 @@ def _intent() -> OrderIntent:
         Decimal("0.01"),
     )
     return OrderIntent(
-        str(uuid4()),
-        instrument,
-        Side.BUY,
-        2,
-        Decimal("312.34"),
-        Decimal("6246.80"),
-        "contract test",
+        str(uuid4()), instrument, Side.BUY, 2, Decimal("312.34"),
+        Decimal("6246.80"), "contract test",
     )
+
+
+@pytest.mark.parametrize("filled", [0, 1, 3, -1])
+def test_lookup_rejects_inconsistent_filled_quantity(filled: int) -> None:
+    transport = RecordingTransport({"executionReportStatus": "EXECUTION_REPORT_STATUS_FILL",
+                                    "lotsExecuted": str(filled)})
+    adapter = TInvestSandboxExecutionAdapter("token", "account", transport)
+    with pytest.raises(ValueError, match="lotsExecuted"):
+        adapter.lookup(OrderRecord(_intent(), OrderStatus.UNKNOWN))
+
+
+def test_lookup_timeout_keeps_unknown_and_never_sends_mutation() -> None:
+    transport = RecordingTransport(fail=True)
+    adapter = TInvestSandboxExecutionAdapter("token", "account", transport)
+    assert adapter.lookup(OrderRecord(_intent(), OrderStatus.UNKNOWN)).status is OrderStatus.UNKNOWN
+    assert transport.call and str(transport.call["url"]).endswith(
+        ".SandboxService/GetSandboxOrderState")
 
 
 def test_decimal_to_quotation_preserves_nanos() -> None:

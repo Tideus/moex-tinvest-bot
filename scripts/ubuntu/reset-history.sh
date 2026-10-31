@@ -86,18 +86,29 @@ move_contents() {
   local source="$1"
   local target="$2"
   mkdir -p "${source}" "${target}"
-  find "${source}" -mindepth 1 -maxdepth 1 -exec mv -t "${target}" -- {} +
+  if [[ "${source}" == "${STATE_DIR}" ]]; then
+    # Execution authority is not disposable history. Preserve ledger and SQLite sidecars.
+    find "${source}" -mindepth 1 -maxdepth 1 ! -name execution \
+      -exec mv -t "${target}" -- {} +
+  else
+    find "${source}" -mindepth 1 -maxdepth 1 -exec mv -t "${target}" -- {} +
+  fi
 }
 
 rollback() {
   local status="$?"
+  local rollback_failed=0
   trap - EXIT
   if [[ "${reset_complete}" -eq 0 && -n "${stage_dir}" && -d "${stage_dir}" ]]; then
-    move_contents "${stage_dir}/state" "${STATE_DIR}" || true
-    move_contents "${stage_dir}/logs" "${LOG_DIR}" || true
+    move_contents "${stage_dir}/state" "${STATE_DIR}" || rollback_failed=1
+    move_contents "${stage_dir}/logs" "${LOG_DIR}" || rollback_failed=1
   fi
   if [[ -n "${partial_archive}" ]]; then rm -f -- "${partial_archive}"; fi
-  if [[ -n "${stage_dir}" && -d "${stage_dir}" ]]; then
+  if [[ "${rollback_failed}" -eq 1 ]]; then
+    printf 'FAIL: rollback incomplete; preserved recovery directory: %s\n' "${stage_dir}" >&2
+    # Do not restart trading after an incomplete rollback.
+    active_timers=()
+  elif [[ -n "${stage_dir}" && -d "${stage_dir}" ]]; then
     find "${stage_dir}" -depth -delete 2>/dev/null || true
   fi
   if [[ -n "${snapshot_dir}" && -d "${snapshot_dir}" ]]; then
@@ -115,6 +126,11 @@ done
 systemctl stop "${timers[@]}" "${services[@]}" 2>/dev/null || true
 
 snapshot_dir="$(mktemp -d -t moex-reset-broker-state.XXXXXXXX)"
+if [[ "${ALLOW_NON_ROOT_TEST}" != "1" ]]; then
+  # mktemp creates root:root 0700; the unprivileged snapshot collector must be able to write.
+  chown "${SERVICE_USER}:${SERVICE_USER}" "${snapshot_dir}"
+  chmod 0700 "${snapshot_dir}"
+fi
 long_snapshot="${snapshot_dir}/long.json"
 intraday_snapshot="${snapshot_dir}/intraday.json"
 as_service "${PYTHON_BIN}" -m moex_bot.cli broker-portfolio-snapshot \
@@ -128,6 +144,7 @@ as_service "${PYTHON_BIN}" -m moex_bot.cli broker-portfolio-snapshot \
 
 "${PYTHON_BIN}" -m moex_bot.cli history-reset-safety \
   --runtime "${RUNTIME_FILE}" \
+  --journal "${STATE_DIR}/execution/orders.sqlite3" \
   --long-snapshot "${long_snapshot}" \
   --intraday-snapshot "${intraday_snapshot}"
 
@@ -166,5 +183,6 @@ trap - EXIT
 
 printf 'RESET COMPLETE: local databases, artifacts and logs were cleared.\n'
 printf 'Broker positions and configuration were not changed.\n'
+printf 'Durable execution ledger was preserved (not disposable history).\n'
 printf 'Backup: %s\n' "${archive}"
 printf 'Checksum: %s\n' "${archive}.sha256"

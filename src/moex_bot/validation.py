@@ -12,6 +12,7 @@ from .config import load_config
 from .event_calendar import load_calendar_config
 from .geo_feed import load_sources
 from .intraday_config import load_intraday_config
+from .live_operator import load_live_settings
 from .monitoring import load_settings
 from .notification_policy import load_notification_policy
 from .ownership import load_ownership_disclosures
@@ -39,6 +40,8 @@ def validate_project_configs(root: Path) -> tuple[str, ...]:
     checks.append("config/prod_shadow.json")
 
     load_service_config(root / "config" / "services.json")
+    load_live_settings(root / "config" / "prod_live.json")
+    checks.append("config/prod_live.json")
     checks.append("config/services.json")
     accounts = load_account_registry(root / "config" / "accounts.json")
     for profile in accounts.profiles:

@@ -156,6 +156,13 @@ if [[ ! -e "${maintenance_path}" ]]; then
   install -m 0644 "${PROJECT_DIR}/config/maintenance.json" "${maintenance_path}"
 fi
 
+for name in prod_live prod_long; do
+  target="$(root_path "${CONFIG_DIR}/${name//_/-}.json")"
+  if [[ ! -e "${target}" ]]; then
+    install -m 0640 "${PROJECT_DIR}/config/${name}.json" "${target}"
+  fi
+done
+
 find "$(root_path "${APP_DIR}")/scripts/ubuntu" -type f -name '*.sh' -exec chmod 0755 {} +
 
 if [[ -n "${DESTDIR}" ]]; then
@@ -170,6 +177,8 @@ chown root:"${SERVICE_USER}" "${CONFIG_DIR}" "${CONFIG_DIR}/bot.env" \
 chmod 0750 "${CONFIG_DIR}"
 chmod 0640 "${CONFIG_DIR}/bot.env"
 chmod 0644 "${CONFIG_DIR}/maintenance.json"
+chown root:"${SERVICE_USER}" "${CONFIG_DIR}/prod-live.json" "${CONFIG_DIR}/prod-long.json"
+chmod 0640 "${CONFIG_DIR}/prod-live.json" "${CONFIG_DIR}/prod-long.json"
 
 python3.12 -m venv "${APP_DIR}/.venv"
 "${APP_DIR}/.venv/bin/python" -m pip install --upgrade pip

@@ -1,5 +1,9 @@
 # Руководство пользователя MOEX + ALGOPACK + T-Invest bot
 
+Дополнение 0.7.0rc1: [ручной PROD canary и безопасная замена sandbox](LIVE_CANARY_RU.md).
+Реальный исполнитель теперь существует в коде, но disabled-by-default и не подключён к
+автоматическим таймерам. Старые описания read-only PROD относятся к штатному observer.
+
 Полный справочник параметров JSON: [`CONFIG_REFERENCE_RU.md`](CONFIG_REFERENCE_RU.md).
 Подробный алгоритм и разбор BUY/SELL: [`ALGORITHM_RU.md`](ALGORITHM_RU.md).
 Целевая long/short модель, derivatives и weekly review:

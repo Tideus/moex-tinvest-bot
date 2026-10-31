@@ -2,8 +2,9 @@
 
 Документ описывает текущий эксплуатационный этап: акции из проверенного `universe.json`,
 часовой long-контур, отдельный пятиминутный intraday-контур, исполняемые через API заявки на двух
-тестовых Sandbox-счетах и дневной/недельный контроль результата. Production-заявки в этой
-версии отсутствуют.
+тестовых Sandbox-счетах и дневной/недельный контроль результата. Штатные таймеры не отправляют
+production-заявки. В 0.7.0rc1 есть отдельный [ручной gated canary](LIVE_CANARY_RU.md), выключенный
+по умолчанию.
 
 ## 1. Режимы и границы
 
@@ -12,7 +13,7 @@
 | `t_invest_environment=sandbox`, `sandbox_orders_enabled=false` | Чтение Sandbox-счёта, расчёт и Telegram shadow-отчёт; заявки не отправляются. |
 | `t_invest_environment=sandbox`, `sandbox_orders_enabled=true`, long profile enabled | Прошедшие risk-gate long-планы отправляются как лимитные Sandbox-заявки. |
 | профиль `intraday`, `order_execution_enabled=true`, `execution_stage=sandbox` | Пятиминутный runner может отправлять заявки только на `T_INVEST_SANDBOX_INTRADAY_ACCOUNT_ID`. |
-| `t_invest_environment=prod` | Только чтение счёта и отчётность; production execution отсутствует. |
+| `t_invest_environment=prod` | Штатные таймеры: только чтение и отчётность. Ручное исполнение имеет отдельные gates. |
 
 Часовая стратегия может открыть long и уменьшить существующую long-позицию. Intraday может
 открыть long или подтверждённый Sandbox short, если T-Invest повторно сообщает доступность short
@@ -179,4 +180,5 @@ Sandbox проверяет API, состояния и эксплуатацион
 без моделирования spread, slippage, комиссий, налогов и задержек.
 
 Заполнение market-заявки при обязательном закрытии в Sandbox не доказывает, что такая же заявка
-исполнится по близкой цене в production. Production execution по-прежнему отсутствует.
+исполнится по близкой цене в production. Ручной canary требует отдельного допуска и подтверждения;
+автоматическое production-исполнение не включено.

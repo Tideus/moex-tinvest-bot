@@ -159,17 +159,19 @@ def _next_rebalance_window(now: datetime, hours: tuple[int, ...]) -> str | None:
     if not hours:
         return None
     local = now.astimezone(MOSCOW)
-    for day_offset in range(2):
-        candidate_date = (local + timedelta(days=day_offset)).date()
-        for hour in sorted(hours):
-            candidate = datetime.combine(
-                candidate_date,
-                datetime.min.time().replace(hour=hour),
-                tzinfo=MOSCOW,
-            )
-            if candidate > local:
-                return candidate.strftime("%d.%m.%Y · %H:00–%H:59 МСК")
-    return None
+    ordered_hours = sorted(hours)
+    for hour in ordered_hours:
+        candidate = datetime.combine(
+            local.date(), datetime.min.time().replace(hour=hour), tzinfo=MOSCOW,
+        )
+        if candidate > local:
+            return candidate.strftime("%d.%m.%Y · %H:00–%H:59 МСК")
+    # A nonempty schedule always has a next window: tomorrow's earliest hour.
+    candidate = datetime.combine(
+        (local + timedelta(days=1)).date(),
+        datetime.min.time().replace(hour=ordered_hours[0]), tzinfo=MOSCOW,
+    )
+    return candidate.strftime("%d.%m.%Y · %H:00–%H:59 МСК")
 
 
 def render_shadow_report(

@@ -25,10 +25,13 @@ GET_INSTRUMENT_PATH = (
 SANDBOX_SERVICE_PATH = "/tinkoff.public.invest.api.contract.v1.SandboxService"
 GET_SANDBOX_ACCOUNTS_PATH = f"{SANDBOX_SERVICE_PATH}/GetSandboxAccounts"
 OPEN_SANDBOX_ACCOUNT_PATH = f"{SANDBOX_SERVICE_PATH}/OpenSandboxAccount"
+CLOSE_SANDBOX_ACCOUNT_PATH = f"{SANDBOX_SERVICE_PATH}/CloseSandboxAccount"
+GET_SANDBOX_STOP_ORDERS_PATH = f"{SANDBOX_SERVICE_PATH}/GetSandboxStopOrders"
 GET_SANDBOX_WITHDRAW_LIMITS_PATH = f"{SANDBOX_SERVICE_PATH}/GetSandboxWithdrawLimits"
 GET_SANDBOX_PORTFOLIO_PATH = f"{SANDBOX_SERVICE_PATH}/GetSandboxPortfolio"
 GET_SANDBOX_POSITIONS_PATH = f"{SANDBOX_SERVICE_PATH}/GetSandboxPositions"
 GET_SANDBOX_ORDERS_PATH = f"{SANDBOX_SERVICE_PATH}/GetSandboxOrders"
+GET_SANDBOX_ORDER_STATE_PATH = f"{SANDBOX_SERVICE_PATH}/GetSandboxOrderState"
 CANCEL_SANDBOX_ORDER_PATH = f"{SANDBOX_SERVICE_PATH}/CancelSandboxOrder"
 GET_SANDBOX_OPERATIONS_BY_CURSOR_PATH = (
     f"{SANDBOX_SERVICE_PATH}/GetSandboxOperationsByCursor"
@@ -225,6 +228,25 @@ class TInvestSandboxAccountService:
         if not account_id:
             raise ValueError("OpenSandboxAccount response has no account id")
         return account_id
+
+    def account_state(self, account_id: str) -> dict[str, object]:
+        """Read-only raw state for an explicit sandbox account lifecycle preview."""
+        if not account_id.strip():
+            raise ValueError("sandbox account id required")
+        return {
+            "portfolio": dict(self._post(GET_SANDBOX_PORTFOLIO_PATH,
+                                         {"accountId": account_id, "currency": "RUB"})),
+            "positions": dict(self._post(GET_SANDBOX_POSITIONS_PATH, {"accountId": account_id})),
+            "orders": dict(self._post(GET_SANDBOX_ORDERS_PATH, {"accountId": account_id})),
+            "stop_orders": dict(self._post(GET_SANDBOX_STOP_ORDERS_PATH,
+                                           {"accountId": account_id})),
+        }
+
+    def close_account(self, account_id: str) -> None:
+        """Destructive sandbox-only primitive; callers must preview, confirm and verify."""
+        if not account_id.strip():
+            raise ValueError("sandbox account id required")
+        self._post(CLOSE_SANDBOX_ACCOUNT_PATH, {"accountId": account_id})
 
     def ensure_account(
         self, configured_account_id: str | None, *, account_name: str
@@ -622,8 +644,8 @@ class TInvestSandboxExecutionAdapter:
             )
         status = _status(response.get("executionReportStatus"))
         filled = int(response.get("lotsExecuted", 0))
-        if status is OrderStatus.FILLED and filled == 0:
-            filled = intent.lots
+        if status is OrderStatus.FILLED and filled != intent.lots:
+            raise ValueError("filled order state has inconsistent lotsExecuted")
         if not 0 <= filled <= intent.lots:
             raise ValueError("sandbox response has invalid lotsExecuted")
         return OrderRecord(
@@ -636,6 +658,39 @@ class TInvestSandboxExecutionAdapter:
                 else intent.order_request_id
             ),
         )
+
+    def lookup(self, record: OrderRecord) -> OrderRecord:
+        """Read-only crash recovery by request UUID. Missing state remains unresolved."""
+        try:
+            state = self.transport.post(
+                SANDBOX_BASE_URL + GET_SANDBOX_ORDER_STATE_PATH,
+                headers=self._headers(),
+                payload={"accountId": self.account_id,
+                         "orderId": record.intent.order_request_id,
+                         "orderIdType": "ORDER_ID_TYPE_REQUEST",
+                         "priceType": "PRICE_TYPE_CURRENCY"},
+                timeout_seconds=self.timeout_seconds,
+            )
+        except (TimeoutError, HTTPError, URLError) as exc:
+            return OrderRecord(record.intent, OrderStatus.UNKNOWN, record.filled_lots,
+                               record.broker_order_id, self._error_detail(exc))
+        filled = int(state.get("lotsExecuted", 0))
+        status = _status(state.get("executionReportStatus"))
+        if not 0 <= filled <= record.intent.lots:
+            raise ValueError("sandbox order state has invalid lotsExecuted")
+        if status is OrderStatus.FILLED and filled != record.intent.lots:
+            raise ValueError("filled order state has inconsistent lotsExecuted")
+        for field, expected in (
+            ("instrumentUid", record.intent.instrument.uid),
+            ("orderRequestId", record.intent.order_request_id),
+        ):
+            if field in state and state[field] != expected:
+                raise ValueError(f"sandbox order state has mismatched {field}")
+        if "lotsRequested" in state and int(state["lotsRequested"]) != record.intent.lots:
+            raise ValueError("sandbox order state has mismatched lotsRequested")
+        return OrderRecord(record.intent, status, filled,
+                           str(state.get("orderId") or record.broker_order_id or
+                               record.intent.order_request_id))
 
     def settle(
         self, records: tuple[OrderRecord, ...], *, ttl_seconds: int
@@ -678,8 +733,8 @@ class TInvestSandboxExecutionAdapter:
                     continue
                 status = _status(state.get("executionReportStatus"))
                 filled = int(state.get("lotsExecuted", record.filled_lots))
-                if status is OrderStatus.FILLED and filled == 0:
-                    filled = record.intent.lots
+                if status is OrderStatus.FILLED and filled != record.intent.lots:
+                    raise ValueError("filled order state has inconsistent lotsExecuted")
                 if not 0 <= filled <= record.intent.lots:
                     raise ValueError("sandbox order state has invalid lotsExecuted")
                 settled[index] = OrderRecord(
@@ -745,8 +800,10 @@ class TInvestSandboxExecutionAdapter:
                 else:
                     final_status = _status(final_state.get("executionReportStatus"))
                     final_filled = int(final_state.get("lotsExecuted", record.filled_lots))
-                    if final_status is OrderStatus.FILLED and final_filled == 0:
-                        final_filled = record.intent.lots
+                    if not 0 <= final_filled <= record.intent.lots:
+                        raise ValueError("sandbox order state has invalid lotsExecuted")
+                    if final_status is OrderStatus.FILLED and final_filled != record.intent.lots:
+                        raise ValueError("filled order state has inconsistent lotsExecuted")
                     terminal = final_status in {
                         OrderStatus.FILLED,
                         OrderStatus.REJECTED,

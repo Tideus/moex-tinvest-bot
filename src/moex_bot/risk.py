@@ -32,7 +32,13 @@ def evaluate_intent(
     short_exposure: Decimal = Decimal("0"),
 ) -> RiskDecision:
     reasons: list[str] = []
-    adjusted = apply_geo_multiplier(intent, geo)
+    current_position = portfolio.positions.get(intent.instrument.secid)
+    current_lots = 0 if current_position is None else current_position.lots
+    delta = intent.lots if intent.side is Side.BUY else -intent.lots
+    remaining = current_lots + delta
+    reduce_only = (current_lots != 0 and abs(remaining) < abs(current_lots)
+                   and current_lots * remaining >= 0)
+    adjusted = intent if reduce_only else apply_geo_multiplier(intent, geo)
     if adjusted is None:
         reasons.append("blocked by geopolitical risk policy")
         return RiskDecision(False, tuple(reasons), None)

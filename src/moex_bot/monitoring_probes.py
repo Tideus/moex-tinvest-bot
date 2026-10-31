@@ -97,7 +97,10 @@ def collect_resources(app: Path, state: Path, settings: dict[str, Any],
     for path in ("/", "/var/lib/moex-tinvest-bot", "/var/log/moex-tinvest-bot"):
         usage = shutil.disk_usage(path)
         checks[f"disk:{path}"] = disk_status(usage.total, usage.free, settings)
-        stats = os.statvfs(path)  # type: ignore[attr-defined]  # Ubuntu-only collector
+        statvfs = getattr(os, "statvfs", None)
+        if not callable(statvfs):
+            raise RuntimeError("inode monitoring requires POSIX statvfs")
+        stats = statvfs(path)
         inode_pct = 100 * stats.f_favail / stats.f_files if stats.f_files else 100
         checks[f"inodes:{path}"] = "OK" if inode_pct >= 5 else f"CRITICAL: {inode_pct:.1f}% free"
     return checks

@@ -33,7 +33,7 @@ Sandbox intraday. `prod_runtime.json` выбирает официальный pr
 
 | Поле | Значение | Влияние |
 | --- | --- | --- |
-| `execution_stage` | `observer` | Любое другое значение отклоняется загрузчиком; реального adapter нет. |
+| `execution_stage` | `observer` по умолчанию | `canary` допускается только отдельным ручным live-исполнителем с admission и точным подтверждением; observer остаётся read-only. |
 | `account_id_env` | `T_INVEST_PROD_ACCOUNT_ID` | ID читается только из защищённого `bot.env`. |
 | `account_type` | `ACCOUNT_TYPE_TINKOFF_IIS` | Контур привязан к проверенному типу счёта. |
 | `manual_position_policy` | `protect` | Ручные позиции не входят в управляемый субпортфель. |
@@ -43,8 +43,8 @@ Sandbox intraday. `prod_runtime.json` выбирает официальный pr
 | `canary.capital_limit_rub` | `40000` | Выделенный капитал production-пилота; остальной ИИС не является бюджетом бота. |
 | `canary.max_order_notional_rub` | `10000` | Максимальный размер одной будущей canary-заявки. |
 | `canary.max_daily_turnover_rub` | `20000` | Дневной лимит оборота, чтобы не развернуть весь пилот за одно утро. |
-| `canary.max_orders_per_day` | `2` | Не более двух будущих заявок за день; код допускает настройку от 1 до 4. |
-| `canary.max_account_daily_loss_weight` | `0.015` | Проектируемый account-level kill switch; observer только отображает план. |
+| `canary.max_orders_per_day` | `2` | Live canary разрешает не более 2 попыток в день; счётчик сохраняется в ledger, включая отмены и отклонения. |
+| `canary.max_account_daily_loss_weight` | `0.015` | Live BUY блокируется при убытке счёта ≥ min(equity, canary capital) × вес; при 40 000 ₽ порог 600 ₽. Observer только отображает план. |
 | `canary.allow_margin` | `false` | Маржа и short запрещены. |
 | `canary.allowed_asset_classes` | `["share"]` | Фьючерсы и опционы исключены. |
 
@@ -187,8 +187,25 @@ sudo moex-botctl sandbox-enable --confirm-sandbox
 sudo moex-botctl sandbox-disable
 ```
 
-Первая команда проверяет активный sandbox-контур и credentials. Production-исполнение в этой
-версии отсутствует независимо от значения runtime.
+Первая команда проверяет активный sandbox-контур и credentials. Этот переключатель не разрешает
+production. В 0.7.0rc1 ручной canary имеет отдельные gates; см. [`LIVE_CANARY_RU.md`](LIVE_CANARY_RU.md).
+
+## `prod_live.json`
+
+Новый шаблон disabled-by-default для ручного canary, не для автоматических таймеров.
+Installer/update создают root-owned `/etc/moex-tinvest-bot/prod-live.json` и `prod-long.json`
+только при отсутствии; существующие операторские значения сохраняются.
+
+| Ключ | По умолчанию | Влияние |
+| --- | --- | --- |
+| `version` | `1` | Версия схемы |
+| `enabled` | `false` | Запрещает live enroll/execute; preview/reconcile остаются read-only |
+| `account_id_env` | `T_INVEST_PROD_ACCOUNT_ID` | Только production account; без sandbox fallback |
+| `journal` | `/var/lib/moex-tinvest-bot/execution/prod-orders.sqlite3` | Постоянный зарегистрированный PROD ledger, отдельный от sandbox и не зависящий от output |
+| `admission` | `/etc/moex-tinvest-bot/prod-admission.json` | Независимый root-owned допуск с проверенными данными; автоматически не создаётся |
+
+Одного `enabled=true` недостаточно: проверяются canary policy, root admission, production runtime,
+привязка exact order/plan/release/ledger и срок подтверждения ≤ 5 минут.
 
 ## `shadow.json` и `replay.json`
 

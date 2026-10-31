@@ -4,10 +4,17 @@ set -Eeuo pipefail
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 STAGE_DIR="${MOEX_BOT_TEST_STAGE:-work/ubuntu-deployment-test}"
 
-rm -rf "${STAGE_DIR}"
+STAGE_DIR="$(realpath -m -- "${STAGE_DIR}")"
+if [[ "${STAGE_DIR}" != "${PROJECT_DIR}/work/"* ]]; then
+  printf 'FAIL: deployment test stage must resolve below %s/work/\n' "${PROJECT_DIR}" >&2
+  exit 2
+fi
+rm -rf -- "${STAGE_DIR}"
 mkdir -p "${STAGE_DIR}"
 
-bash -n "${PROJECT_DIR}"/scripts/ubuntu/*.sh
+for script in "${PROJECT_DIR}"/scripts/ubuntu/*.sh; do
+  bash -n "${script}"
+done
 DESTDIR="${STAGE_DIR}" bash "${PROJECT_DIR}/scripts/ubuntu/install.sh" \
   --no-packages
 
@@ -18,6 +25,7 @@ required=(
   "opt/moex-tinvest-bot/config/intraday.json"
   "opt/moex-tinvest-bot/config/maintenance.json"
   "opt/moex-tinvest-bot/config/prod_long.json"
+  "opt/moex-tinvest-bot/config/prod_live.json"
   "opt/moex-tinvest-bot/config/prod_runtime.json"
   "opt/moex-tinvest-bot/config/prod_shadow.json"
   "opt/moex-tinvest-bot/config/ownership_disclosures.json"
@@ -36,6 +44,8 @@ required=(
   "etc/moex-tinvest-bot/bot.env"
   "etc/moex-tinvest-bot/runtime.json"
   "etc/moex-tinvest-bot/maintenance.json"
+  "etc/moex-tinvest-bot/prod-live.json"
+  "etc/moex-tinvest-bot/prod-long.json"
   "etc/systemd/system/moex-tinvest-shadow.service"
   "etc/systemd/system/moex-tinvest-shadow.timer"
   "etc/systemd/system/moex-tinvest-health.service"

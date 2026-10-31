@@ -3,6 +3,8 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import sqlite3
+import subprocess
 from dataclasses import asdict
 from datetime import UTC, date, datetime, time, timedelta
 from decimal import Decimal
@@ -24,6 +26,8 @@ from .config import load_config
 from .daily_report import render_daily_shadow_report, summarize_shadow_artifacts
 from .domain import GeoEvent, Instrument, MarketObservation, PortfolioSnapshot, Position
 from .env_file import upsert_env_value
+from .execution_journal import ExecutionJournal
+from .execution_migration import inventory_report, scan_legacy, stage_inventory, verify_inventory
 from .geo_feed import refresh_geo_feed
 from .harness import TradingHarness
 from .integration_health import probe_algopack
@@ -46,6 +50,7 @@ from .intraday_performance import (
     render_intraday_performance_report,
     summarize_intraday_performance,
 )
+from .live_operator import live_operator
 from .notification_policy import load_notification_policy, should_send_long_morning
 from .notifications import SQLiteOutbox, TelegramBotApiSender, deliver_pending
 from .ownership import load_ownership_disclosures, render_ownership_report
@@ -65,7 +70,12 @@ from .runtime_config import (
     set_runtime_environment,
     set_sandbox_orders_enabled,
 )
-from .sandbox_execution import execute_shadow_plan, render_sandbox_execution_report
+from .sandbox_execution import (
+    execute_shadow_plan,
+    reconcile_execution_journal,
+    render_sandbox_execution_report,
+)
+from .sandbox_lifecycle import masked_preview, replace_sandbox_accounts, replacement_preview
 from .scheduler import is_conservative_stock_window
 from .service_config import (
     TInvestEnvironment,
@@ -276,12 +286,16 @@ def algopack_health(
 
 
 def history_reset_safety(
-    *, runtime_path: Path, long_snapshot: Path, intraday_snapshot: Path
+    *, runtime_path: Path, long_snapshot: Path, intraday_snapshot: Path,
+    journal_path: Path | None = None,
 ) -> int:
     try:
         runtime = load_runtime_config(runtime_path)
         if runtime.environment is not TInvestEnvironment.SANDBOX:
             raise ValueError("history reset is allowed only in the sandbox contour")
+        if (journal_path is not None and journal_path.exists()
+                and ExecutionJournal(journal_path).unresolved_count()):
+            raise ValueError("durable unresolved orders forbid history reset")
         long_state = json.loads(long_snapshot.read_text(encoding="utf-8"))
         intraday_state = json.loads(intraday_snapshot.read_text(encoding="utf-8"))
         if not isinstance(long_state, dict) or not isinstance(intraday_state, dict):
@@ -295,7 +309,7 @@ def history_reset_safety(
             raise ValueError("intraday positions must be an object")
         if positions:
             raise ValueError("intraday account is not flat; history was not reset")
-    except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError) as exc:
+    except (OSError, ValueError, KeyError, TypeError, sqlite3.Error, json.JSONDecodeError) as exc:
         print(f"FAIL: {exc}")
         return 2
     print("PASS: broker safety gate: no active orders and intraday account is flat")
@@ -488,7 +502,7 @@ def environment_status(*, runtime_path: Path, services_path: Path) -> int:
         f"account source: {runtime.account_id_env} "
         f"({'present' if runtime.account_id else 'missing'})"
     )
-    print("production orders: DISABLED")
+    print("automatic production orders: DISABLED; manual canary requires separate admission")
     print(
         "sandbox orders: "
         f"{'ENABLED' if config.sandbox_orders_enabled else 'DISABLED'} "
@@ -522,7 +536,8 @@ def sandbox_orders_set(*, runtime_path: Path, enabled: bool) -> int:
         print(f"FAIL: sandbox execution switch: {exc}")
         return 2
     print(f"PASS: sandbox order submission {'ENABLED' if enabled else 'DISABLED'}")
-    print("Production order submission remains impossible in this build.")
+    print("Sandbox switch does not authorize production; "
+          "manual canary uses separate prod-live gates.")
     return 0
 
 
@@ -533,6 +548,7 @@ def sandbox_execute(
     portfolio_path: Path,
     runtime_path: Path,
     output_path: Path,
+    journal_path: Path,
     outbox_path: Path | None,
     as_of: datetime,
 ) -> int:
@@ -554,6 +570,7 @@ def sandbox_execute(
             portfolio_path=portfolio_path,
             output_path=output_path,
             runtime=runtime,
+            journal_path=journal_path,
             adapter=adapter,
             as_of=as_of,
         )
@@ -564,7 +581,7 @@ def sandbox_execute(
                 body=render_sandbox_execution_report(result),
                 now=as_of,
             )
-    except (OSError, ValueError, RuntimeError, json.JSONDecodeError) as exc:
+    except (OSError, ValueError, RuntimeError, sqlite3.Error, json.JSONDecodeError) as exc:
         print(f"FAIL: sandbox execution: {exc}")
         return 2
     print(
@@ -744,6 +761,134 @@ def prod_long_prepare(
     return 0
 
 
+def sandbox_replace(
+    *, accounts_path: Path, preview_path: Path, confirmation_hash: str,
+    env_path: Path, state_path: Path,
+) -> int:
+    try:
+        units = [f"moex-tinvest-{name}.{kind}" for name in (
+            "shadow", "intraday", "prod-long-observer") for kind in ("timer", "service")]
+        for unit in units:
+            result = subprocess.run(["systemctl", "is-active", unit], capture_output=True,
+                                    text=True, check=False)
+            if result.stdout.strip() != "inactive":
+                raise ValueError(f"account replacement requires {unit} to be inactive")
+        registry = load_account_registry(accounts_path)
+        profiles = {p: registry.by_id(p) for p in ("long", "intraday")}
+        if any(p.environment is not TInvestEnvironment.SANDBOX for p in profiles.values()):
+            raise ValueError("account replacement is sandbox-only")
+        preview = json.loads(preview_path.read_text(encoding="utf-8"))
+        outcome = replace_sandbox_accounts(
+            TInvestSandboxAccountService.from_environment(), preview=preview,
+            confirmation_hash=confirmation_hash,
+            configured={p: os.getenv(v.account_id_env, "").strip() for p, v in profiles.items()},
+            env_keys={p: v.account_id_env for p, v in profiles.items()}, env_path=env_path,
+            state_path=state_path, as_of=datetime.now(UTC))
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        print(f"PARTIAL_OR_FAILED: sandbox account replacement: {exc}; do not retry blindly")
+        return 2
+    print(json.dumps(outcome, ensure_ascii=False, indent=2))
+    return 0
+
+
+def sandbox_replace_preview(*, accounts_path: Path, output_path: Path) -> int:
+    try:
+        registry = load_account_registry(accounts_path)
+        configured = {}
+        for profile_id in ("long", "intraday"):
+            profile = registry.by_id(profile_id)
+            if profile.environment is not TInvestEnvironment.SANDBOX:
+                raise ValueError("account replacement is sandbox-only")
+            configured[profile_id] = os.getenv(profile.account_id_env, "").strip()
+        result = replacement_preview(TInvestSandboxAccountService.from_environment(), configured,
+                                     as_of=datetime.now(UTC))
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_text(json.dumps(result, default=str, indent=2) + "\n", encoding="utf-8")
+        if os.name != "nt":
+            output_path.chmod(0o600)
+    except (OSError, ValueError, KeyError) as exc:
+        print(f"FAIL: sandbox account replacement preview: {exc}")
+        return 2
+    print(masked_preview(result))
+    return 0
+
+
+def sandbox_journal_prepare(
+    *, accounts_path: Path, artifacts_path: Path, report_path: Path,
+    candidate_path: Path | None, verify_broker: bool,
+) -> int:
+    """Candidate only. The installed journal and broker orders are never changed."""
+    try:
+        if report_path.resolve().is_relative_to(artifacts_path.resolve().parent):
+            raise ValueError("migration report must be outside installed STATE_DIR")
+        if candidate_path is not None and report_path.resolve() == candidate_path.resolve():
+            raise ValueError("migration report and candidate journal paths must differ")
+        registry = load_account_registry(accounts_path)
+        accounts = {}
+        for profile_id in ("long", "intraday"):
+            profile = registry.by_id(profile_id)
+            if profile.environment is not TInvestEnvironment.SANDBOX:
+                raise ValueError("legacy migration is sandbox-only")
+            accounts[profile_id] = os.getenv(profile.account_id_env, "").strip()
+        inventory = scan_legacy(artifacts_path, accounts)
+        report = inventory_report(inventory)
+        journal = None
+        if candidate_path is not None and not inventory.issues:
+            if candidate_path.resolve().is_relative_to(artifacts_path.resolve().parent):
+                raise ValueError("candidate must be outside installed STATE_DIR")
+            journal = stage_inventory(inventory, candidate_path)
+        if verify_broker:
+            token = os.getenv("T_INVEST_SANDBOX_TOKEN", "").strip()
+            if not token:
+                raise ValueError("sandbox token required for read-only verification")
+            broker_results = verify_inventory(
+                inventory, lambda account: TInvestSandboxExecutionAdapter(
+                    token, account, UrlLibJsonTransport()), as_of=datetime.now(UTC),
+                candidate=journal)
+            report["broker_verification"] = broker_results
+            confirmed = sum(
+                item.get("verification") == "broker_response"
+                and item.get("broker_status") in {"filled", "cancelled", "rejected"}
+                for item in broker_results
+            )
+            report["broker_confirmed_orders"] = confirmed
+            report["unverified_orders"] = len(inventory.entries) - confirmed
+        if journal is not None:
+            report["unresolved_orders"] = journal.unresolved_count()
+        report_path.parent.mkdir(parents=True, exist_ok=True)
+        report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n",
+                               encoding="utf-8")
+    except (OSError, ValueError, KeyError, TypeError, sqlite3.Error) as exc:
+        print(f"FAIL: legacy journal preparation: {exc}")
+        return 2
+    print(f"{'BLOCKED' if inventory.issues else 'REVIEW_REQUIRED'}: "
+          f"files={inventory.files} unique_requests={len(inventory.entries)} "
+          f"duplicates={inventory.duplicates} issues={len(inventory.issues)}; "
+          "trading permission NOT granted")
+    print(f"report={report_path}")
+    return 2 if (inventory.issues or report.get("unresolved_orders", 0)
+                 or report.get("unverified_orders", 0)) else 0
+
+
+def sandbox_journal_reconcile(*, accounts_path: Path, profile_id: str, journal_path: Path) -> int:
+    try:
+        profile = load_account_registry(accounts_path).by_id(profile_id)
+        if profile.environment is not TInvestEnvironment.SANDBOX:
+            raise ValueError("journal reconciliation is sandbox-only")
+        if not journal_path.is_file():
+            raise ValueError("journal missing; restore it instead of creating an empty replacement")
+        adapter = TInvestSandboxExecutionAdapter.from_environment(
+            account_id_env=profile.account_id_env
+        )
+        unresolved = reconcile_execution_journal(journal_path, adapter)
+    except (OSError, ValueError, KeyError, sqlite3.Error) as exc:
+        print(f"FAIL: sandbox journal reconciliation: {exc}")
+        return 2
+    print(f"{'BLOCKED' if unresolved else 'PASS'}: durable unresolved orders={unresolved}; "
+          "broker requests were read-only")
+    return 2 if unresolved else 0
+
+
 def sandbox_reconcile(
     *,
     accounts_path: Path,
@@ -866,6 +1011,7 @@ def intraday_sandbox_execute(
     plan_path: Path,
     portfolio_path: Path,
     output_path: Path,
+    journal_path: Path,
     outbox_path: Path | None,
     as_of: datetime,
 ) -> int:
@@ -890,6 +1036,7 @@ def intraday_sandbox_execute(
             portfolio_path=portfolio_path,
             output_path=output_path,
             runtime=runtime,
+            journal_path=journal_path,
             adapter=adapter,
             as_of=as_of,
             order_ttl_seconds=config.order_ttl_seconds,
@@ -903,11 +1050,12 @@ def intraday_sandbox_execute(
                 ),
                 now=as_of,
             )
-    except (OSError, RuntimeError, ValueError, KeyError, json.JSONDecodeError) as exc:
+    except (OSError, RuntimeError, ValueError, KeyError, sqlite3.Error,
+            json.JSONDecodeError) as exc:
         print(f"FAIL: intraday sandbox execution: {exc}")
         return 2
     print(f"PASS: intraday sandbox submitted={len(result.submitted)}")
-    return 0
+    return 2 if result.stopped_reason else 0
 
 
 def intraday_trade_notifications(
@@ -1072,6 +1220,7 @@ def broker_portfolio_snapshot(
                 "orders_path": GET_ORDERS_PATH,
             }
         )
+        snapshot_started_at = datetime.now(UTC)
         snapshot = service.broker_snapshot(
             broker.account_id,
             instruments,
@@ -1102,6 +1251,7 @@ def broker_portfolio_snapshot(
         output_path.parent.mkdir(parents=True, exist_ok=True)
         portfolio_payload = snapshot.as_portfolio_payload(daily_turnover=daily_turnover)
         portfolio_payload["observed_at"] = now.isoformat()
+        portfolio_payload["snapshot_started_at"] = snapshot_started_at.isoformat()
         portfolio_payload["executed_operations"] = [asdict(item) for item in operations]
         output_path.write_text(
             json.dumps(portfolio_payload, ensure_ascii=False, indent=2, default=str),
@@ -1578,6 +1728,7 @@ def build_parser() -> argparse.ArgumentParser:
     reset_safety_parser.add_argument("--runtime", type=Path, required=True)
     reset_safety_parser.add_argument("--long-snapshot", type=Path, required=True)
     reset_safety_parser.add_argument("--intraday-snapshot", type=Path, required=True)
+    reset_safety_parser.add_argument("--journal", type=Path, required=True)
     storage_parser = sub.add_parser(
         "storage-maintenance", help="Report disk usage and optionally prune expired bot files"
     )
@@ -1656,6 +1807,36 @@ def build_parser() -> argparse.ArgumentParser:
         "--profile", choices=("long", "intraday"), required=True
     )
     sandbox_reconcile_parser.add_argument("--outbox", type=Path)
+    journal_parser = sub.add_parser("sandbox-journal-reconcile")
+    journal_parser.add_argument("--accounts", type=Path, default=Path("config/accounts.json"))
+    journal_parser.add_argument("--profile", choices=("long", "intraday"), required=True)
+    journal_parser.add_argument("--journal", type=Path, required=True)
+    migration_parser = sub.add_parser("sandbox-journal-prepare")
+    migration_parser.add_argument("--accounts", type=Path, default=Path("config/accounts.json"))
+    migration_parser.add_argument("--artifacts", type=Path, required=True)
+    migration_parser.add_argument("--report", type=Path, required=True)
+    migration_parser.add_argument("--candidate-journal", type=Path)
+    migration_parser.add_argument("--verify-broker", action="store_true")
+    replacement_parser = sub.add_parser("sandbox-replace-preview")
+    replacement_parser.add_argument("--accounts", type=Path, default=Path("config/accounts.json"))
+    replacement_parser.add_argument("--output", type=Path, required=True)
+    replacement_apply = sub.add_parser("sandbox-replace")
+    replacement_apply.add_argument("--accounts", type=Path, default=Path("config/accounts.json"))
+    replacement_apply.add_argument("--preview", type=Path, required=True)
+    replacement_apply.add_argument("--confirm-hash", required=True)
+    replacement_apply.add_argument("--env-file", type=Path, required=True)
+    replacement_apply.add_argument("--state", type=Path, required=True)
+    for action in ("preview", "enroll", "execute", "reconcile", "probe"):
+        live_parser = sub.add_parser(f"prod-live-{action}")
+        live_parser.add_argument("--settings", type=Path, default=Path("config/prod_live.json"))
+        live_parser.add_argument("--policy", type=Path, default=Path("config/prod_long.json"))
+        live_parser.add_argument("--universe", type=Path, default=Path("config/universe.json"))
+        live_parser.add_argument("--runtime", type=Path, default=Path("config/prod_runtime.json"))
+        live_parser.add_argument("--plan", type=Path, required=action not in {"reconcile", "probe"})
+        live_parser.add_argument("--order-index", type=int, default=0)
+        live_parser.add_argument("--output", type=Path, required=action == "preview")
+        live_parser.add_argument("--confirmation", type=Path, required=action == "execute")
+        live_parser.add_argument("--confirm-intent-sha256", required=action == "execute")
     intraday_plan_parser = sub.add_parser("intraday-plan")
     intraday_plan_parser.add_argument(
         "--config", type=Path, default=Path("config/intraday.json")
@@ -1669,6 +1850,7 @@ def build_parser() -> argparse.ArgumentParser:
     intraday_plan_parser.add_argument("--outbox", type=Path)
     intraday_plan_parser.add_argument("--as-of", type=datetime.fromisoformat)
     intraday_execute_parser = sub.add_parser("intraday-sandbox-execute")
+    intraday_execute_parser.add_argument("--journal", type=Path, required=True)
     intraday_execute_parser.add_argument(
         "--accounts", type=Path, default=Path("config/accounts.json")
     )
@@ -1780,6 +1962,7 @@ def build_parser() -> argparse.ArgumentParser:
     prod_prepare_parser.add_argument("--broker-snapshot", type=Path, required=True)
     prod_prepare_parser.add_argument("--output", type=Path, required=True)
     sandbox_execute_parser = sub.add_parser("sandbox-execute")
+    sandbox_execute_parser.add_argument("--journal", type=Path, required=True)
     sandbox_execute_parser.add_argument(
         "--accounts", type=Path, default=Path("config/accounts.json")
     )
@@ -1927,6 +2110,7 @@ def main() -> int:
         )
     if args.command == "history-reset-safety":
         return history_reset_safety(
+            journal_path=args.journal,
             runtime_path=args.runtime,
             long_snapshot=args.long_snapshot,
             intraday_snapshot=args.intraday_snapshot,
@@ -1968,6 +2152,25 @@ def main() -> int:
         )
     if args.command == "intraday-reconcile":
         return intraday_reconcile(accounts_path=args.accounts, outbox_path=args.outbox)
+    if args.command.startswith("prod-live-"):
+        return live_operator(
+            args.command.removeprefix("prod-live-"), settings_path=args.settings,
+            policy_path=args.policy, universe_path=args.universe, runtime_path=args.runtime,
+            plan_path=args.plan, order_index=args.order_index, output_path=args.output,
+            confirmation_path=args.confirmation, confirm_digest=args.confirm_intent_sha256)
+    if args.command == "sandbox-replace":
+        return sandbox_replace(accounts_path=args.accounts, preview_path=args.preview,
+                               confirmation_hash=args.confirm_hash, env_path=args.env_file,
+                               state_path=args.state)
+    if args.command == "sandbox-replace-preview":
+        return sandbox_replace_preview(accounts_path=args.accounts, output_path=args.output)
+    if args.command == "sandbox-journal-prepare":
+        return sandbox_journal_prepare(
+            accounts_path=args.accounts, artifacts_path=args.artifacts, report_path=args.report,
+            candidate_path=args.candidate_journal, verify_broker=args.verify_broker)
+    if args.command == "sandbox-journal-reconcile":
+        return sandbox_journal_reconcile(accounts_path=args.accounts, profile_id=args.profile,
+                                         journal_path=args.journal)
     if args.command == "sandbox-reconcile":
         return sandbox_reconcile(
             accounts_path=args.accounts,
@@ -1994,6 +2197,7 @@ def main() -> int:
             print("FAIL: --as-of must include a timezone offset")
             return 2
         return intraday_sandbox_execute(
+            journal_path=args.journal,
             accounts_path=args.accounts,
             config_path=args.config,
             plan_path=args.plan,
@@ -2185,6 +2389,7 @@ def main() -> int:
             print("FAIL: --as-of must include a timezone offset")
             return 2
         return sandbox_execute(
+            journal_path=args.journal,
             accounts_path=args.accounts,
             shadow_path=args.shadow,
             portfolio_path=args.portfolio,

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass, replace
@@ -178,6 +179,7 @@ def load_portfolio(
             None if raw.get("reported_equity") is None else _decimal(raw["reported_equity"])
         ),
         source=str(raw.get("source", "file")),
+        account_id=str(raw.get("account_id", "")),
     )
 
 
@@ -245,6 +247,8 @@ def run_hourly_shadow(
     persisted = asdict(result)
     persisted["market"] = [asdict(market[secid]) for secid in sorted(market)]
     persisted["portfolio_input"] = asdict(portfolio)
+    persisted["portfolio_input_sha256"] = hashlib.sha256(portfolio_path.read_bytes()).hexdigest()
+    persisted["portfolio_input_path"] = str(portfolio_path.resolve())
     persisted["config_snapshot"] = asdict(config)
     persisted["long_flow_input"] = [asdict(item) for item in long_flow]
     output_path.parent.mkdir(parents=True, exist_ok=True)

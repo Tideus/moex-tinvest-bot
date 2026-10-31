@@ -1,6 +1,8 @@
 from dataclasses import replace
 from decimal import Decimal
 
+import pytest
+
 from moex_bot.config import BotConfig, StrategyConfig
 from moex_bot.domain import (
     ExecutionMode,
@@ -13,6 +15,41 @@ from moex_bot.domain import (
     Side,
 )
 from moex_bot.risk import evaluate_intent
+
+
+@pytest.mark.parametrize("lots,side", [(10, Side.SELL), (-10, Side.BUY)])
+def test_geo_block_does_not_prevent_reduction(lots: int, side: Side) -> None:
+    instrument = Instrument("AAA", "uid", "TQBR", 1, Decimal(".01"))
+    portfolio = PortfolioSnapshot(Decimal("50000"), {"AAA": Position(instrument, lots)})
+    intent = OrderIntent("exit", instrument, side, 5, Decimal("100"), Decimal("500"), "exit")
+    geo = GeoRiskSnapshot(GeoRiskLevel.CRITICAL, Decimal("0"), frozenset({"AAA"}), ())
+    decision = evaluate_intent(intent, portfolio, _config(), geo,
+                               equity=Decimal("100000"), gross_exposure=Decimal("1000"))
+    assert decision.allowed
+    assert decision.intent == intent
+
+
+@pytest.mark.parametrize("side,lots", [(Side.BUY, 1), (Side.SELL, 11)])
+def test_geo_block_still_blocks_increase_and_reversal(side: Side, lots: int) -> None:
+    instrument = Instrument("AAA", "uid", "TQBR", 1, Decimal(".01"))
+    portfolio = PortfolioSnapshot(Decimal("50000"), {"AAA": Position(instrument, 10)})
+    intent = OrderIntent("entry", instrument, side, lots, Decimal("100"),
+                         Decimal(lots * 100), "entry")
+    geo = GeoRiskSnapshot(GeoRiskLevel.CRITICAL, Decimal("0"), frozenset({"AAA"}), ())
+    assert not evaluate_intent(intent, portfolio, _config(), geo,
+                              equity=Decimal("100000"), gross_exposure=Decimal("1000")).allowed
+
+
+def test_geo_reduction_still_respects_broker_blocked_lots() -> None:
+    instrument = Instrument("AAA", "uid", "TQBR", 1, Decimal(".01"))
+    portfolio = PortfolioSnapshot(
+        Decimal("50000"), {"AAA": Position(instrument, 10, blocked_lots=8)})
+    intent = OrderIntent("exit", instrument, Side.SELL, 5, Decimal("100"), Decimal("500"), "exit")
+    geo = GeoRiskSnapshot(GeoRiskLevel.CRITICAL, Decimal("0"), frozenset({"AAA"}), ())
+    decision = evaluate_intent(intent, portfolio, _config(), geo,
+                               equity=Decimal("100000"), gross_exposure=Decimal("1000"))
+    assert not decision.allowed
+    assert "unblocked" in " ".join(decision.reasons)
 
 
 def _config() -> BotConfig:

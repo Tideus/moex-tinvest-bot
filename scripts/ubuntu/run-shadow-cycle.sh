@@ -47,6 +47,12 @@ fi
   --accounts "${APP_DIR}/config/accounts.json" \
   --profile long
 
+if [[ -f "${STATE_DIR}/execution/orders.sqlite3" ]]; then
+  "${PYTHON_BIN}" -m moex_bot.cli sandbox-journal-reconcile \
+    --accounts "${APP_DIR}/config/accounts.json" --profile long \
+    --journal "${STATE_DIR}/execution/orders.sqlite3"
+fi
+
 "${PYTHON_BIN}" -m moex_bot.cli broker-portfolio-snapshot \
   --universe "${APP_DIR}/config/universe.json" \
   --runtime "/etc/moex-tinvest-bot/runtime.json" \
@@ -67,6 +73,7 @@ shadow_status=0
 execution_status=0
 if [[ "${shadow_status}" -eq 0 ]]; then
   "${PYTHON_BIN}" -m moex_bot.cli sandbox-execute \
+    --journal "${STATE_DIR}/execution/orders.sqlite3" \
     --accounts "${APP_DIR}/config/accounts.json" \
     --shadow "${shadow_path}" \
     --portfolio "${portfolio_path}" \

@@ -1,0 +1,7 @@
+{
+  "version": 1,
+  "enabled": false,
+  "account_id_env": "T_INVEST_PROD_ACCOUNT_ID",
+  "journal": "/var/lib/moex-tinvest-bot/execution/prod-orders.sqlite3",
+  "admission": "/etc/moex-tinvest-bot/prod-admission.json"
+}

@@ -110,6 +110,14 @@ if [[ ! -e "${CONFIG_DIR}/maintenance.json" ]]; then
 fi
 chown root:"${SERVICE_USER}" "${CONFIG_DIR}/maintenance.json"
 chmod 0644 "${CONFIG_DIR}/maintenance.json"
+for name in prod_live prod_long; do
+  target="${CONFIG_DIR}/${name//_/-}.json"
+  if [[ ! -e "${target}" ]]; then
+    install -m 0640 -o root -g "${SERVICE_USER}" "${APP_DIR}/config/${name}.json" "${target}"
+  fi
+  chown root:"${SERVICE_USER}" "${target}"
+  chmod 0640 "${target}"
+done
 "${APP_DIR}/.venv/bin/python" -m moex_bot.cli config-check --root "${APP_DIR}"
 (cd "${APP_DIR}" && sha256sum --quiet -c BUILD_MANIFEST.sha256)
 installed_version="$("${APP_DIR}/.venv/bin/python" -c \

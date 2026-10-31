@@ -96,7 +96,7 @@ class MoexAlgoReadOnlyAdapter:
         try:
             dotenv_module = import_module("dotenv")
             moexalgo_module = import_module("moexalgo")
-        except ImportError as exc:  # pragma: no cover - exercised by preflight in minimal installs
+        except ImportError as exc:
             message = 'install optional integrations: pip install -e ".[integrations]"'
             raise RuntimeError(message) from exc
 

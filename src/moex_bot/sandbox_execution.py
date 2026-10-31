@@ -2,13 +2,14 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from datetime import datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 from typing import Protocol
 
 from .domain import Instrument, OrderIntent, OrderRecord, OrderStatus, Side
+from .execution_journal import ExecutionJournal
 from .runtime_config import RuntimeConfig
 from .service_config import TInvestEnvironment
 
@@ -35,6 +36,7 @@ def execute_shadow_plan(
     adapter: SandboxOrderPort,
     as_of: datetime,
     order_ttl_seconds: int = 120,
+    journal_path: Path,
 ) -> SandboxExecutionResult:
     if as_of.tzinfo is None:
         raise ValueError("as_of must be timezone-aware")
@@ -53,13 +55,21 @@ def execute_shadow_plan(
         raise ValueError("portfolio snapshot has invalid open_orders")
     if int(open_orders) != 0:
         raise ValueError("active sandbox orders require reconciliation before execution")
+    snapshot_at = datetime.fromisoformat(str(portfolio.get("observed_at", "")))
+    snapshot_started = datetime.fromisoformat(str(portfolio.get("snapshot_started_at", "")))
+    if snapshot_started.tzinfo is None or snapshot_at.tzinfo is None or not (
+        timedelta(0) <= snapshot_at - snapshot_started <= timedelta(minutes=5)
+    ):
+        raise ValueError("broker snapshot must have bounded timezone-aware read interval")
+    if snapshot_at.tzinfo is None or not (
+        timedelta(0) <= as_of - snapshot_at <= timedelta(minutes=5)
+    ):
+        raise ValueError("fresh broker snapshot with timezone is required")
     quality = raw.get("quality")
     if not isinstance(quality, Mapping) or quality.get("passed") is not True:
         raise ValueError("only a quality-passed shadow plan can be executed")
     run_id = str(raw.get("run_id", ""))
-    prefix = next(
-        (item for item in ("shadow-", "intraday-") if run_id.startswith(item)), None
-    )
+    prefix = next((item for item in ("shadow-", "intraday-") if run_id.startswith(item)), None)
     if prefix is None:
         raise ValueError("shadow artifact has an invalid run id")
     run_at = datetime.fromisoformat(run_id.removeprefix(prefix))
@@ -79,45 +89,54 @@ def execute_shadow_plan(
         str(secid): int(value.get("lots", 0) if isinstance(value, Mapping) else value)
         for secid, value in raw_positions.items()
     }
-    for item in records_raw[: runtime.sandbox_max_orders_per_cycle]:
-        intent = _intent(item)
-        current_lots = projected_lots.get(intent.instrument.secid, 0)
-        resulting_lots = current_lots + (
-            intent.lots if intent.side is Side.BUY else -intent.lots
+    history = journal_path.parent.parent / "artifacts"
+    if not ExecutionJournal.is_initialized(journal_path) and (
+        any(history.glob("sandbox-execution-*.json"))
+        or any(history.glob("intraday-execution-*.json"))
+    ):
+        raise ValueError(
+            "historical executions require journal migration and broker reconciliation"
         )
+    journal = ExecutionJournal(journal_path)
+    for item in records_raw[: runtime.sandbox_max_orders_per_cycle]:
+        intent = decode_validated_intent(item)
+        current_lots = projected_lots.get(intent.instrument.secid, 0)
+        resulting_lots = current_lots + (intent.lots if intent.side is Side.BUY else -intent.lots)
         opens_short = resulting_lots < min(current_lots, 0)
         if opens_short != intent.confirm_margin_trade:
             raise ValueError("margin confirmation does not match projected short exposure")
         if opens_short and not intent.instrument.short_enabled:
             raise ValueError("short order instrument is not verified as short-enabled")
+        mandatory_flat = intent.rationale == "intraday mandatory flat"
+        reducing = (
+            current_lots != 0
+            and abs(resulting_lots) < abs(current_lots)
+            and (current_lots * resulting_lots >= 0)
+        )
+        if mandatory_flat and not reducing:
+            raise ValueError("mandatory flat must strictly reduce the observed position")
+        request_id = journal.reserve(
+            adapter.account_id, intent, run_id, snapshot_started, residual_exit=mandatory_flat
+        )
+        if request_id is None:
+            continue
+        intent = replace(intent, order_request_id=request_id)
         record = adapter.submit(intent)
+        journal.record(adapter.account_id, record)
+        settle_one = getattr(adapter, "settle", None)
+        if callable(settle_one):
+            settled_one = tuple(settle_one((record,), ttl_seconds=order_ttl_seconds))
+            if len(settled_one) != 1:
+                raise ValueError("settlement must return exactly one reserved order")
+            record = settled_one[0]
+            journal.record(adapter.account_id, record)
         submitted.append(record)
-        projected_lots[intent.instrument.secid] = resulting_lots
-        if record.status in {OrderStatus.UNKNOWN, OrderStatus.REJECTED}:
+        projected_lots[intent.instrument.secid] = current_lots + (
+            record.filled_lots if intent.side is Side.BUY else -record.filled_lots
+        )
+        if record.status is not OrderStatus.FILLED:
             stopped_reason = f"submission stopped after {record.status.value} order"
             break
-    settle = getattr(adapter, "settle", None)
-    if callable(settle) and submitted:
-        submitted = list(settle(tuple(submitted), ttl_seconds=order_ttl_seconds))
-        unresolved = next(
-            (
-                record
-                for record in submitted
-                if record.status
-                in {
-                    OrderStatus.UNKNOWN,
-                    OrderStatus.REJECTED,
-                    OrderStatus.ACCEPTED,
-                    OrderStatus.PARTIALLY_FILLED,
-                }
-            ),
-            None,
-        )
-        stopped_reason = (
-            f"order lifecycle ended as {unresolved.status.value}"
-            if unresolved is not None
-            else None
-        )
     result = SandboxExecutionResult(run_id, tuple(submitted), stopped_reason)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(
@@ -156,7 +175,28 @@ def _object(path: Path) -> dict[str, object]:
     return raw
 
 
-def _intent(record: object) -> OrderIntent:
+def reconcile_execution_journal(
+    journal_path: Path,
+    adapter: SandboxOrderPort,
+) -> int:
+    """Read broker state, never resubmit/cancel or infer finality from absence."""
+    journal = ExecutionJournal(journal_path)
+    lookup = getattr(adapter, "lookup", None)
+    if not callable(lookup):
+        raise ValueError("adapter does not support read-only reconciliation")
+    for raw in journal.unresolved(adapter.account_id):
+        intent = decode_validated_intent({"status": "validated", "intent": raw["intent"]})
+        record = OrderRecord(
+            intent,
+            OrderStatus(str(raw["status"])),
+            int(str(raw["filled_lots"])),
+            str(raw["broker_order_id"]) if raw["broker_order_id"] else None,
+        )
+        journal.record(adapter.account_id, lookup(record))
+    return len(journal.unresolved(adapter.account_id))
+
+
+def decode_validated_intent(record: object) -> OrderIntent:
     if not isinstance(record, Mapping) or not isinstance(record.get("intent"), Mapping):
         raise ValueError("invalid shadow order record")
     if record.get("status") != "validated":

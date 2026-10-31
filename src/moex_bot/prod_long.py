@@ -74,7 +74,7 @@ def load_prod_long_policy(path: Path) -> ProdLongPolicy:
             ),
         ),
     )
-    _validate(policy)
+    validate_prod_long_policy(policy)
     return policy
 
 
@@ -159,10 +159,10 @@ def write_prod_long_sleeve(
     return result
 
 
-def _validate(policy: ProdLongPolicy) -> None:
+def validate_prod_long_policy(policy: ProdLongPolicy) -> None:
     if policy.version != 1:
         raise ValueError("prod long policy version must be 1")
-    if policy.execution_stage != "observer":
+    if policy.execution_stage not in {"observer", "canary"}:
         raise ValueError("production execution is not enabled in this release")
     if not _ENV_NAME.fullmatch(policy.account_id_env):
         raise ValueError("account_id_env must be a valid environment variable")
@@ -181,6 +181,13 @@ def _validate(policy: ProdLongPolicy) -> None:
     if len(policy.allowed_secids) != 20:
         raise ValueError("production allowlist must contain exactly 20 SECIDs")
     canary = policy.canary
+    if policy.execution_stage == "canary" and (
+        canary.capital_limit_rub > Decimal("40000")
+        or canary.max_order_notional_rub > Decimal("10000")
+        or canary.max_daily_turnover_rub > Decimal("20000")
+        or canary.max_orders_per_day > 2
+    ):
+        raise ValueError("initial live canary hard limits are 40000/10000/20000 RUB and 2 attempts")
     for label, value in (
         ("capital_limit_rub", canary.capital_limit_rub),
         ("max_order_notional_rub", canary.max_order_notional_rub),

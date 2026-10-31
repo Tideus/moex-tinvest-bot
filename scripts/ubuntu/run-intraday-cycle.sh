@@ -38,6 +38,12 @@ exec >>"${log_path}" 2>&1
   --accounts "${APP_DIR}/config/accounts.json" \
   --profile intraday
 
+if [[ -f "${STATE_DIR}/execution/orders.sqlite3" ]]; then
+  "${PYTHON_BIN}" -m moex_bot.cli sandbox-journal-reconcile \
+    --accounts "${APP_DIR}/config/accounts.json" --profile intraday \
+    --journal "${STATE_DIR}/execution/orders.sqlite3"
+fi
+
 "${PYTHON_BIN}" -m moex_bot.cli broker-portfolio-snapshot \
   --universe "${APP_DIR}/config/universe.json" \
   --runtime "/etc/moex-tinvest-bot/runtime.json" \
@@ -55,6 +61,7 @@ plan_status=0
 
 if [[ "${plan_status}" -eq 0 ]]; then
   "${PYTHON_BIN}" -m moex_bot.cli intraday-sandbox-execute \
+    --journal "${STATE_DIR}/execution/orders.sqlite3" \
     --accounts "${APP_DIR}/config/accounts.json" \
     --config "${APP_DIR}/config/intraday.json" \
     --plan "${plan_path}" \

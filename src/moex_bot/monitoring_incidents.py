@@ -8,6 +8,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from .monitoring_labels import check_action, check_description
 from .notifications import SQLiteOutbox
 
 
@@ -34,7 +35,9 @@ def notify(checks: dict[str, str], database: Path, outbox: SQLiteOutbox,
             if ((failed and failures >= settings["failures_to_alert"] and
                  (not alerted or now.timestamp() - sent >= settings["repeat_hours"] * 3600))
                     or (not failed and alerted)):
-                body = f"{'🚨 СБОЙ' if failed else '✅ ВОССТАНОВЛЕНО'} · MOEX BOT\n{key}\n{value}"
+                body = (f"{'🚨 СБОЙ' if failed else '✅ ВОССТАНОВЛЕНО'}\n"
+                        f"{check_description(key)}\nКод: {key}\nСостояние: {value}\n"
+                        f"Действие: {check_action(key)}")
                 # Last committed transition identifies the next event across a retry/crash.
                 event_key = f"monitor:{key}:{'down' if failed else 'up'}:{sent}"
                 outbox.enqueue(kind="monitoring", dedupe_key=event_key,

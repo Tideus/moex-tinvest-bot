@@ -438,7 +438,7 @@ start_bot() {
   sandbox_state="$("${PYTHON_BIN}" -c \
     'import sys; from pathlib import Path; from moex_bot.runtime_config import load_runtime_config; print("ENABLED" if load_runtime_config(Path(sys.argv[1])).sandbox_orders_enabled else "DISABLED")' \
     "${RUNTIME_FILE}")"
-  printf '\033[1;32mSTARTED\033[0m: timers активны; prod observer READ-ONLY; production orders DISABLED; sandbox orders %s.\n' \
+  printf '\033[1;32mSTARTED\033[0m: timers активны; prod observer READ-ONLY; automatic production orders DISABLED; sandbox orders %s.\n' \
     "${sandbox_state}"
 }
 
@@ -718,7 +718,7 @@ prod_observe() {
   }
   heading "Prod IIS long observer · READ-ONLY"
   as_service /usr/bin/bash "${APP_DIR}/scripts/ubuntu/run-prod-long-observer.sh"
-  printf 'READ-ONLY COMPLETE: production orders remain technically unavailable.\n'
+  printf 'READ-ONLY COMPLETE: this observer never submits orders; manual PROD canary is separately gated.\n'
 }
 
 collect_report() (
