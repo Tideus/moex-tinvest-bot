@@ -68,7 +68,7 @@ def release_digest(policy_path: Path, universe_path: Path, settings_path: Path) 
     ):
         digest.update(label.encode() + b"\0" + path.read_bytes())
     for path in sorted(policy_path.parent.glob("*.json")):
-        if path.name != "prod-admission.json":
+        if path.name not in {"prod-admission.json", "prod-experiment-admission.json"}:
             digest.update(path.name.encode() + b"\0" + path.read_bytes())
     return digest.hexdigest()
 

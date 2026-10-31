@@ -745,6 +745,31 @@ collect_report() (
     printf 'FAIL: --from must not be after --to.\n' >&2
     return 2
   fi
+  # Exclude the whole production entry -> stop session while taking coordinated evidence.
+  # Open only the existing root-owned stable inode; never create a replacement lock.
+  local control_lock=/var/lib/moex-tinvest-control/prod-session.lock
+  local parent mode
+  for parent in / /var /var/lib /var/lib/moex-tinvest-control; do
+    if [[ -L "${parent}" || ! -d "${parent}" || "$(stat -c %u "${parent}")" != 0 ]]; then
+      printf 'FAIL: untrusted production control parent; report not created.\n' >&2; return 2
+    fi
+    mode="$(stat -c %a "${parent}")"
+    if (( (8#${mode} & 0022) != 0 )); then
+      printf 'FAIL: writable production control parent; report not created.\n' >&2; return 2
+    fi
+  done
+  if [[ -L "${control_lock}" || ! -f "${control_lock}" || \
+    "$(stat -c %u "${control_lock}")" != 0 || "$(stat -c %h "${control_lock}")" != 1 ]]; then
+    printf 'FAIL: trusted production lock missing; run updated installer.\n' >&2; return 2
+  fi
+  mode="$(stat -c %a "${control_lock}")"
+  if (( (8#${mode} & 0007) != 0 )); then
+    printf 'FAIL: insecure production control lock.\n' >&2; return 2
+  fi
+  exec 8<>"${control_lock}"
+  if ! flock -n 8; then
+    printf 'FAIL: production session/deployment active; report not created.\n' >&2; return 2
+  fi
   mkdir -p "${output_dir}"
   local work_dir=""
   work_dir="$(mktemp -d -t moex-strategy-report.XXXXXXXX)"
@@ -755,6 +780,42 @@ collect_report() (
     "${work_dir}/state/data" \
     "${work_dir}/logs" \
     "${work_dir}/diagnostics"
+
+  REPORT_EXECUTION_SOURCE="${STATE_DIR}/execution" REPORT_EXECUTION_TARGET="${work_dir}/state/execution" \
+    "${PYTHON_BIN}" -c '
+import os
+import shutil
+import sqlite3
+from contextlib import closing
+from pathlib import Path
+
+source = Path(os.environ["REPORT_EXECUTION_SOURCE"])
+target = Path(os.environ["REPORT_EXECUTION_TARGET"])
+if source.is_symlink():
+    raise ValueError("execution evidence directory must not be a symlink")
+if source.exists():
+    target.mkdir(mode=0o700, parents=True, exist_ok=True)
+    for path in source.glob("*.sqlite3"):
+        if path.is_symlink() or not path.is_file():
+            raise ValueError("execution journal must be a regular file")
+        destination = target / path.name
+        with closing(sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True)) as db:
+            with closing(sqlite3.connect(destination)) as backup:
+                db.backup(backup)
+                if backup.execute("PRAGMA integrity_check").fetchone() != ("ok",):
+                    raise ValueError("execution journal backup failed integrity check")
+        destination.chmod(0o600)
+    audit = source / "audit"
+    if audit.is_symlink():
+        raise ValueError("execution audit directory must not be a symlink")
+    for path in audit.rglob("*.jsonl"):
+        if path.is_symlink() or not path.is_file() or any(p.is_symlink() for p in path.parents):
+            raise ValueError("audit evidence must not contain symlinks")
+        destination = target / path.relative_to(source)
+        destination.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        shutil.copyfile(path, destination)
+        destination.chmod(0o600)
+'
 
   cp -a "${APP_DIR}/config/." "${work_dir}/config/"
   cp -a "${RUNTIME_FILE}" "${work_dir}/runtime.json"

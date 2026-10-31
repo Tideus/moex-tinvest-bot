@@ -62,10 +62,43 @@ if [[ -r /etc/os-release ]]; then
   fi
 fi
 
+# Existing installations must exclude PROD BEFORE apt/useradd or any app mutation.
+# A fresh install without a control inode cannot have an active production_session.
+if [[ -z "${DESTDIR}" ]]; then
+  early_control_dir=/var/lib/moex-tinvest-control
+  early_control_lock="${early_control_dir}/prod-session.lock"
+  for parent in / /var /var/lib "${early_control_dir}"; do
+    if [[ -e "${parent}" || -L "${parent}" ]]; then
+      if [[ -L "${parent}" || ! -d "${parent}" || "$(stat -c %u "${parent}")" != 0 ]]; then
+        printf 'FAIL: untrusted production control parent before installation.\n' >&2; exit 2
+      fi
+      mode="$(stat -c %a "${parent}")"
+      if (( (8#${mode} & 0022) != 0 )); then
+        printf 'FAIL: writable production control parent before installation.\n' >&2; exit 2
+      fi
+    fi
+  done
+  if [[ -e "${early_control_lock}" || -L "${early_control_lock}" ]]; then
+    if [[ -L "${early_control_lock}" || ! -f "${early_control_lock}" || \
+      "$(stat -c %u "${early_control_lock}")" != 0 || \
+      "$(stat -c %h "${early_control_lock}")" != 1 ]]; then
+      printf 'FAIL: untrusted production lock before installation.\n' >&2; exit 2
+    fi
+    mode="$(stat -c %a "${early_control_lock}")"
+    if (( (8#${mode} & 0007) != 0 )); then
+      printf 'FAIL: insecure production lock before installation.\n' >&2; exit 2
+    fi
+    exec 9<>"${early_control_lock}"
+    if ! flock -n 9; then
+      printf 'FAIL: production session active; installation made no changes.\n' >&2; exit 2
+    fi
+  fi
+fi
+
 if [[ -z "${DESTDIR}" && "${INSTALL_PACKAGES}" -eq 1 ]]; then
   apt-get update
   DEBIAN_FRONTEND=noninteractive apt-get install -y \
-    python3.12 python3.12-venv ca-certificates openssl curl logrotate rsync
+    python3.12 python3.12-venv ca-certificates openssl curl logrotate rsync util-linux
 fi
 
 if [[ -z "${DESTDIR}" ]] && ! id "${SERVICE_USER}" >/dev/null 2>&1; then
@@ -85,6 +118,57 @@ else
     "$(root_path "${BACKUP_DIR}")"
   install -d -m 0755 "$(root_path /etc/systemd/system)" "$(root_path /etc/logrotate.d)"
   install -d -m 0755 "$(root_path /usr/local/sbin)"
+fi
+
+# Keep the control inode outside all bot-writable state directories.
+control_dir="$(root_path /var/lib/moex-tinvest-control)"
+control_lock="${control_dir}/prod-session.lock"
+if [[ -L "${control_dir}" || -L "${control_lock}" ]]; then
+  printf 'FAIL: symlinked production control path.\n' >&2; exit 2
+fi
+if [[ -n "${DESTDIR}" ]]; then
+  mkdir -p "${control_dir}"
+  chmod 0750 "${control_dir}"
+else
+  for parent in / /var /var/lib; do
+    mode="$(stat -c %a "${parent}")"
+    if [[ -L "${parent}" || ! -d "${parent}" || "$(stat -c %u "${parent}")" != 0 ]] \
+      || (( (8#${mode} & 0022) != 0 )); then
+      printf 'FAIL: untrusted production control parent.\n' >&2; exit 2
+    fi
+  done
+  if [[ -e "${control_dir}" && ( ! -d "${control_dir}" || \
+    "$(stat -c %u "${control_dir}")" != 0 ) ]]; then
+    printf 'FAIL: untrusted production control directory.\n' >&2; exit 2
+  fi
+  if [[ -d "${control_dir}" ]]; then
+    mode="$(stat -c %a "${control_dir}")"
+    if (( (8#${mode} & 0022) != 0 )); then
+      printf 'FAIL: writable production control directory.\n' >&2; exit 2
+    fi
+  fi
+  install -d -o root -g "${SERVICE_USER}" -m 0750 "${control_dir}"
+fi
+if [[ -e "${control_lock}" && ( ! -f "${control_lock}" || \
+  "$(stat -c %h "${control_lock}")" != 1 ) ]]; then
+  printf 'FAIL: production control lock is not a single regular file.\n' >&2; exit 2
+fi
+if [[ -z "${DESTDIR}" && -e "${control_lock}" && \
+  "$(stat -c %u "${control_lock}")" != 0 ]]; then
+  printf 'FAIL: production control lock is not root-owned.\n' >&2; exit 2
+fi
+if [[ ! -e "${control_lock}" ]]; then
+  (umask 007; set -o noclobber; : >"${control_lock}")
+fi
+chmod 0660 "${control_lock}"
+if [[ -z "${DESTDIR}" ]]; then
+  chown root:"${SERVICE_USER}" "${control_lock}"
+  if [[ ! -e /proc/self/fd/9 || ! "${control_lock}" -ef /proc/self/fd/9 ]]; then
+    exec 9<>"${control_lock}"
+  fi
+  if ! flock -n 9; then
+    printf 'FAIL: production session is active; installation blocked.\n' >&2; exit 2
+  fi
 fi
 
 if command -v rsync >/dev/null 2>&1; then
@@ -156,7 +240,7 @@ if [[ ! -e "${maintenance_path}" ]]; then
   install -m 0644 "${PROJECT_DIR}/config/maintenance.json" "${maintenance_path}"
 fi
 
-for name in prod_live prod_long; do
+for name in prod_live prod_long prod_experiment; do
   target="$(root_path "${CONFIG_DIR}/${name//_/-}.json")"
   if [[ ! -e "${target}" ]]; then
     install -m 0640 "${PROJECT_DIR}/config/${name}.json" "${target}"
@@ -177,8 +261,10 @@ chown root:"${SERVICE_USER}" "${CONFIG_DIR}" "${CONFIG_DIR}/bot.env" \
 chmod 0750 "${CONFIG_DIR}"
 chmod 0640 "${CONFIG_DIR}/bot.env"
 chmod 0644 "${CONFIG_DIR}/maintenance.json"
-chown root:"${SERVICE_USER}" "${CONFIG_DIR}/prod-live.json" "${CONFIG_DIR}/prod-long.json"
-chmod 0640 "${CONFIG_DIR}/prod-live.json" "${CONFIG_DIR}/prod-long.json"
+chown root:"${SERVICE_USER}" "${CONFIG_DIR}/prod-live.json" "${CONFIG_DIR}/prod-long.json" \
+  "${CONFIG_DIR}/prod-experiment.json"
+chmod 0640 "${CONFIG_DIR}/prod-live.json" "${CONFIG_DIR}/prod-long.json" \
+  "${CONFIG_DIR}/prod-experiment.json"
 
 python3.12 -m venv "${APP_DIR}/.venv"
 "${APP_DIR}/.venv/bin/python" -m pip install --upgrade pip

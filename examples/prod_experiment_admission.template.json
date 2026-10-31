@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "decision": "APPROVED_SUPERVISED_EXPERIMENT",
+  "scope": "ONE_LOT_TECHNICAL_TEST",
+  "strategy_profitability": "NOT_ESTABLISHED",
+  "account_id": "SET_FROM_VERIFIED_IIS_BINDING",
+  "release_sha256": "SET_FROM_CURRENT_EXPERIMENT_PREVIEW",
+  "policy_sha256": "SET_FROM_CURRENT_EXPERIMENT_PREVIEW",
+  "reviewed_at": "",
+  "expires_at": "",
+  "checks": {
+    "experimental_risk_acknowledged": false,
+    "broker_readonly_preflight_passed": false,
+    "protection_contract_tests_passed": false,
+    "restore_drill_passed": false,
+    "independent_code_review_passed": false,
+    "supervised_session_active": false
+  }
+}

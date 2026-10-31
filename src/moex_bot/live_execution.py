@@ -46,14 +46,14 @@ class LivePermission:
     release_sha256: str
     confirmed_at: datetime
     expires_at: datetime
-    strategy_admission_passed: bool
+    execution_admission_passed: bool
     journal_uuid: str = ""
 
     def validate(
         self, account: str, intent: OrderIntent, policy: ProdLongPolicy, release: str, now: datetime
     ) -> None:
-        if self.strategy_admission_passed is not True:
-            raise ValueError("strategy admission has not passed")
+        if self.execution_admission_passed is not True:
+            raise ValueError("execution admission has not passed")
         if self.account_id != account or self.intent_sha256 != intent_digest(intent):
             raise ValueError("exact account/order confirmation does not match")
         if self.policy_sha256 != policy_digest(policy) or self.release_sha256 != release:

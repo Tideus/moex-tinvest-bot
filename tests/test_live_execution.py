@@ -135,7 +135,7 @@ def test_confirmed_live_order_has_durable_distinct_uuid_and_replay_is_skipped(
     "field,value",
     [
         ("account_id", "another-iis"),
-        ("strategy_admission_passed", False),
+        ("execution_admission_passed", False),
         ("intent_sha256", "wrong"),
         ("policy_sha256", "wrong"),
         ("release_sha256", "wrong"),

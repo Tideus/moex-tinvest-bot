@@ -6,7 +6,12 @@ canary executor is available in 0.7.0rc2, disabled by default; autonomous PROD t
 
 Verification: [0.7.0rc2 tests and monitoring](docs/VERIFICATION_2026-10-31_RU.md).
 
-Допуск к реальной торговле: **NO-GO**. Текущие исправления исполнения и оставшиеся
+0.7.0rc3 adds a separate, disabled-by-default
+[supervised one-lot PROD experiment](docs/PROD_EXPERIMENT_RU.md): paired confirmation,
+native stop verification, durable broker evidence and session/update exclusion.
+Verification: [0.7.0rc3 checks and limitations](docs/VERIFICATION_PROD_EXPERIMENT_2026-10-31_RU.md).
+
+Допуск к автономной реальной торговле: **NO-GO**. Текущие исправления исполнения и оставшиеся
 блокеры описаны в [`docs/PROD_READINESS_2026-10-30_RU.md`](docs/PROD_READINESS_2026-10-30_RU.md).
 Установка этого рабочего дерева поверх старой истории требует миграции журнала заявок;
 не создавайте пустую БД для обхода этой проверки.

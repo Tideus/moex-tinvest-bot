@@ -1,0 +1,22 @@
+{
+  "version": 1,
+  "mode": "supervised_experiment",
+  "stage": "preparation_only",
+  "enabled": false,
+  "account_id_env": "T_INVEST_PROD_ACCOUNT_ID",
+  "admission": "/etc/moex-tinvest-bot/prod-experiment-admission.json",
+  "automatic_entries": false,
+  "protection_required": true,
+  "protect_manual_positions": true,
+  "allow_margin": false,
+  "allow_short": false,
+  "allowed_asset_classes": ["share"],
+  "capital_limit_rub": "40000",
+  "max_order_notional_rub": "10000",
+  "max_daily_turnover_rub": "20000",
+  "max_attempts_per_day": 2,
+  "maximum_first_entry_lots": 1,
+  "max_daily_loss_rub": "600",
+  "journal": "/var/lib/moex-tinvest-bot/execution/prod-orders.sqlite3",
+  "protection_journal": "/var/lib/moex-tinvest-bot/execution/prod-protection.sqlite3"
+}

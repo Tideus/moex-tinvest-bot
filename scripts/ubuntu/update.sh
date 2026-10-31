@@ -18,6 +18,44 @@ if [[ ! -x "${APP_DIR}/.venv/bin/python" ]]; then
   exit 2
 fi
 
+# Stable root-owned inode shared with the whole BUY -> native-stop session.
+# Acquire BEFORE backup/pull/rsync; never truncate or replace an existing lock.
+CONTROL_DIR=/var/lib/moex-tinvest-control
+CONTROL_LOCK="${CONTROL_DIR}/prod-session.lock"
+for parent in / /var /var/lib; do
+  mode="$(stat -c %a "${parent}")"
+  if [[ -L "${parent}" || ! -d "${parent}" || "$(stat -c %u "${parent}")" != 0 ]] \
+    || (( (8#${mode} & 0022) != 0 )); then
+    printf 'FAIL: untrusted production control parent.\n' >&2; exit 2
+  fi
+done
+if [[ -L "${CONTROL_DIR}" || ( -e "${CONTROL_DIR}" && \
+  ( ! -d "${CONTROL_DIR}" || "$(stat -c %u "${CONTROL_DIR}")" != 0 ) ) ]]; then
+  printf 'FAIL: untrusted production control directory.\n' >&2; exit 2
+fi
+if [[ -d "${CONTROL_DIR}" ]]; then
+  mode="$(stat -c %a "${CONTROL_DIR}")"
+  if (( (8#${mode} & 0022) != 0 )); then
+    printf 'FAIL: writable production control directory.\n' >&2; exit 2
+  fi
+fi
+install -d -o root -g "${SERVICE_USER}" -m 0750 "${CONTROL_DIR}"
+if [[ -L "${CONTROL_LOCK}" || ( -e "${CONTROL_LOCK}" && \
+  ( ! -f "${CONTROL_LOCK}" || "$(stat -c %u "${CONTROL_LOCK}")" != 0 || \
+    "$(stat -c %h "${CONTROL_LOCK}")" != 1 ) ) ]]; then
+  printf 'FAIL: untrusted production control lock.\n' >&2; exit 2
+fi
+if [[ ! -e "${CONTROL_LOCK}" ]]; then
+  (umask 007; set -o noclobber; : >"${CONTROL_LOCK}")
+fi
+chown root:"${SERVICE_USER}" "${CONTROL_LOCK}"
+chmod 0660 "${CONTROL_LOCK}"
+exec 9<>"${CONTROL_LOCK}"
+if ! flock -n 9; then
+  printf 'FAIL: production session is active; deployment made no app changes.\n' >&2
+  exit 2
+fi
+
 if [[ -x "${APP_DIR}/scripts/ubuntu/backup.sh" ]]; then
   "${APP_DIR}/scripts/ubuntu/backup.sh"
 fi
@@ -110,7 +148,7 @@ if [[ ! -e "${CONFIG_DIR}/maintenance.json" ]]; then
 fi
 chown root:"${SERVICE_USER}" "${CONFIG_DIR}/maintenance.json"
 chmod 0644 "${CONFIG_DIR}/maintenance.json"
-for name in prod_live prod_long; do
+for name in prod_live prod_long prod_experiment; do
   target="${CONFIG_DIR}/${name//_/-}.json"
   if [[ ! -e "${target}" ]]; then
     install -m 0640 -o root -g "${SERVICE_USER}" "${APP_DIR}/config/${name}.json" "${target}"
