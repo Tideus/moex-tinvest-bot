@@ -77,6 +77,17 @@ def preview(setup):
     return raw
 
 
+def test_take_profit_is_bound_to_entry_preview(setup):
+    args, settings, _ = setup
+    args.take_profit = "102"
+    raw = preview(setup)
+    _, plan = module.decode_preview(raw, "real-iis", "release",
+                                     module.experiment_policy(args.policy, settings),
+                                     datetime.now(UTC))
+    assert str(plan.take_profit) == "102"
+    assert raw["protection"]["take_profit"] == "102"
+
+
 @pytest.mark.parametrize("platform,kind", [("nt", "stop_loss_market"), ("posix", "stop_limit")])
 def test_preview_is_private_read_only_and_exact_paired_content(setup, monkeypatch, platform, kind):
     args, _, broker = setup

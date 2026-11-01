@@ -37,6 +37,7 @@ class ProtectionPlan:
     stop_trigger: Decimal
     stop_limit: Decimal | None = None
     kind: str = "stop_loss_market"
+    take_profit: Decimal | None = None
 
     def validate(self) -> None:
         UUID(self.entry_logical_id)
@@ -50,6 +51,10 @@ class ProtectionPlan:
         prices = [self.entry_price, self.stop_trigger]
         if self.stop_limit is not None:
             prices.append(self.stop_limit)
+        if self.take_profit is not None:
+            prices.append(self.take_profit)
+            if not self.take_profit.is_finite() or self.take_profit <= self.entry_price:
+                raise ValueError("take-profit must exceed entry price")
         if any(not p.is_finite() or p <= 0 or p % self.instrument.tick_size for p in prices):
             raise ValueError("positive finite tick-aligned protection prices required")
         if any(money_value_to_decimal(decimal_to_quotation(p)) != p for p in prices):

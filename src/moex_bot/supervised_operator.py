@@ -27,7 +27,7 @@ from .live_execution import (
     registered_live_journal,
 )
 from .live_operator import _object, assert_root_review_path, release_digest
-from .live_protection import NativeProtectionBroker, ProtectionPlan
+from .live_protection import NativeProtectionBroker, ProtectionJournal, ProtectionPlan
 from .prod_experiment import load_experiment_settings
 from .prod_long import ProdLongPolicy, load_prod_long_policy, validate_prod_long_policy
 from .prod_session import production_session
@@ -35,6 +35,17 @@ from .sandbox_execution import decode_validated_intent
 from .shadow import load_universe
 from .supervised_execution import SupervisedTInvestBroker, run_supervised_entry
 from .supervised_notifications import notify_experiment
+from .take_profit import (
+    NativeExitBroker,
+    active_stop,
+    exit_intent,
+    exit_permission,
+    load_plan,
+    precheck,
+    preview_report,
+    run_exit,
+    write_preview,
+)
 
 
 def experiment_policy(path: Path, settings: dict[str, Any]) -> ProdLongPolicy:
@@ -139,6 +150,7 @@ def decode_preview(
         Decimal(str(item["stop_trigger"])),
         None if item["stop_limit"] is None else Decimal(str(item["stop_limit"])),
         str(item["kind"]),
+        None if item.get("take_profit") is None else Decimal(str(item["take_profit"])),
     )
     protection.validate()
     if (
@@ -193,6 +205,8 @@ def operate(args: argparse.Namespace) -> int:
     broker = SupervisedTInvestBroker(token, account, UrlLibJsonTransport(), instruments)
     journal = Path(settings["journal"])
     now = datetime.now(UTC)
+    if args.action in {"exit-preview", "exit-execute"}:
+        return operate_exit(args, settings, policy, release, account, token, broker, instruments)
     if args.action == "preview":
         instrument = next((x for x in instruments.values() if x.secid == args.ticker), None)
         if instrument is None or instrument.secid not in policy.allowed_secids:
@@ -228,6 +242,7 @@ def operate(args: argparse.Namespace) -> int:
             Decimal(args.stop_trigger),
             Decimal(args.stop_limit) if args.stop_limit is not None else None,
             args.kind,
+            Decimal(args.take_profit) if getattr(args, "take_profit", None) is not None else None,
         )
         protection.validate()
         require_planned_risk(intent, protection, settings)
@@ -276,7 +291,8 @@ def operate(args: argparse.Namespace) -> int:
             f"PREVIEW_ONLY: IIS …{account[-4:]}; BUY {instrument.secid} 1 lot "
             f"({instrument.lot_size} shares), LIMIT {price}; amount {intent.notional} RUB; "
             f"then SELL protection {protection.kind}, trigger {protection.stop_trigger}, "
-            f"limit {protection.stop_limit}; cancel unfilled new entry after 30s"
+            f"limit {protection.stop_limit}; synthetic take-profit {protection.take_profit}; "
+            "cancel unfilled new entry after 30s"
         )
         print("preview_sha256=" + hashlib.sha256(args.output.read_bytes()).hexdigest())
         return 0
@@ -368,9 +384,83 @@ def operate(args: argparse.Namespace) -> int:
     return 0 if result["state"] == "FILLED_PROTECTED" else 2
 
 
+def operate_exit(
+    args: argparse.Namespace, settings: dict[str, Any], policy: ProdLongPolicy,
+    release: str, account: str, token: str, broker: SupervisedTInvestBroker,
+    instruments: dict[str, Instrument],
+) -> int:
+    entry_path = Path(settings["journal"])
+    protection_path = Path(settings["protection_journal"])
+    plan = load_plan(protection_path, account, entry_path)
+    canonical = instruments.get(plan.instrument.uid)
+    if canonical is None or replace(canonical, tick_size=plan.instrument.tick_size) != (
+        plan.instrument
+    ):
+        raise ValueError("stored protection instrument differs from trusted universe")
+    instruments[plan.instrument.uid] = plan.instrument
+    journal = ProtectionJournal(protection_path)
+    transport = AuditJsonTransport(
+        UrlLibJsonTransport(), entry_path.parent / "audit" / (plan.entry_request_id + ".jsonl")
+    )
+    broker.transport = transport
+    stops = NativeExitBroker(token, account, transport)
+    stop_id = active_stop(plan, journal, stops)
+    identity = registered_live_journal(entry_path, account)
+    if args.action == "exit-preview":
+        precheck(plan, exit_intent(plan), policy, broker, entry_path, lambda: datetime.now(UTC))
+        if args.output is None or args.output.resolve() in {
+            p.resolve() for p in (entry_path, protection_path, args.settings, args.policy,
+                                  args.universe, Path(settings["admission"]))
+        }:
+            raise ValueError("separate new exit preview output required")
+        digest = write_preview(args.output, preview_report(
+            plan, stop_id, release, policy, identity, datetime.now(UTC)
+        ))
+        print(
+            f"PREVIEW_ONLY: IIS …{account[-4:]}; cancel known stop {stop_id}; "
+            f"then SELL {plan.instrument.secid} 1 lot LIMIT {plan.take_profit} RUB. "
+            "Protection gap: unfilled/failed sale requires operator intervention."
+        )
+        print("preview_sha256=" + digest)
+        return 0
+    content = args.preview.read_bytes() if args.preview is not None else b""
+    if args.confirm_preview_sha256 != hashlib.sha256(content).hexdigest():
+        raise ValueError("exact fresh exit preview confirmation required")
+    permission = exit_permission(
+        json.loads(content), plan, stop_id, release, policy, identity, datetime.now(UTC)
+    )
+
+    def gate() -> None:
+        permission.validate(account, exit_intent(plan), policy, release, datetime.now(UTC))
+        if (load_experiment_settings(args.settings) != settings or settings["enabled"] is not True
+                or settings["stage"] != "supervised_canary"
+                or release_digest(args.policy, args.universe, args.settings) != release
+                or hashlib.sha256(args.preview.read_bytes()).hexdigest()
+                != args.confirm_preview_sha256):
+            raise ValueError("exit config/confirmation changed or disabled")
+        require_experiment_review(
+            Path(settings["admission"]), account, policy, release, datetime.now(UTC),
+            min_remaining_seconds=120,
+        )
+
+    result = run_exit(
+        plan=plan, journal=journal, entry_path=entry_path, policy=policy, broker=broker,
+        stops=stops, permission=permission, release=release, gate=gate,
+        clock=lambda: datetime.now(UTC),
+    )
+    print(json.dumps(result))
+    notify_experiment(
+        f"PROD · IIS …{account[-4:]} · {plan.instrument.secid} · CLOSED_TAKE_PROFIT; "
+        "native stop cancellation verified", dedupe_key=plan.request_id + ":closed",
+        critical=False, now=datetime.now(UTC),
+    )
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("action", choices=("preview", "enroll", "execute"))
+    parser.add_argument("action", choices=("preview", "enroll", "execute", "exit-preview",
+                                          "exit-execute"))
     parser.add_argument("--settings", type=Path, required=True)
     parser.add_argument("--policy", type=Path, required=True)
     parser.add_argument("--universe", type=Path, required=True)
@@ -380,6 +470,7 @@ def main() -> int:
     parser.add_argument("--limit-price")
     parser.add_argument("--stop-trigger")
     parser.add_argument("--stop-limit")
+    parser.add_argument("--take-profit", help="Synthetic target; no second broker sell is placed")
     parser.add_argument(
         "--kind", choices=("stop_loss_market", "stop_limit"), default="stop_loss_market"
     )
@@ -396,15 +487,15 @@ def main() -> int:
             "BLOCKED_OR_FAILED: supervised PROD experiment; inspect private journals; "
             "do not retry unknown orders"
         )
-        if args.action == "execute":
+        if args.action in {"execute", "exit-execute"}:
             print(
-                "CRITICAL_CHECK_ACCOUNT: a BUY may have filled without verified protection; "
-                "check the parent order and stop at the broker immediately"
+                "CRITICAL_CHECK_ACCOUNT: entry/exit may be unverified or protection cancelled; "
+                "check orders, stops and holdings at the broker immediately"
             )
             notify_experiment(
                 "CRITICAL · PROD supervised test needs operator review. "
-                "A BUY may have filled without verified protection. "
-                "Check the exact parent order and broker stop; never retry blindly.",
+                "Entry/exit may be unverified or native protection cancelled. "
+                "Check orders, stops and holdings; never retry blindly.",
                 dedupe_key="supervised-failure:" + str(uuid4()),
                 critical=True,
                 now=datetime.now(UTC),

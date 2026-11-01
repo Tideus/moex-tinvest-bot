@@ -11,6 +11,10 @@ Verification: [0.7.0rc2 tests and monitoring](docs/VERIFICATION_2026-10-31_RU.md
 native stop verification, durable broker evidence and session/update exclusion.
 Verification: [0.7.0rc3 checks and limitations](docs/VERIFICATION_PROD_EXPERIMENT_2026-10-31_RU.md).
 
+0.7.0rc4: [supervised synthetic take-profit](docs/TAKE_PROFIT_RU.md),
+with confirmed native-stop cancellation before a single limit exit, not atomic OCO.
+[Verification and limits](docs/VERIFICATION_TAKE_PROFIT_2026-11-01_RU.md).
+
 Допуск к автономной реальной торговле: **NO-GO**. Текущие исправления исполнения и оставшиеся
 блокеры описаны в [`docs/PROD_READINESS_2026-10-30_RU.md`](docs/PROD_READINESS_2026-10-30_RU.md).
 Установка этого рабочего дерева поверх старой истории требует миграции журнала заявок;
