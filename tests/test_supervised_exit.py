@@ -107,5 +107,3 @@ def test_exit_routes_through_operator_setup_and_lock(operator, monkeypatch):
     monkeypatch.setattr(m, "operate_exit", dispatch)
     assert m.operate(args) == 0
     dispatch.assert_called_once()
-
-
