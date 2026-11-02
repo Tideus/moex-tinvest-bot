@@ -270,8 +270,11 @@ docs/GIT_WORKFLOW_RU.md      Git setup, commit, push and server update guide
 
 Ubuntu installation, disaster backup and clean-VM recovery are documented in
 `docs/UBUNTU_24_SERVER_RU.md`. The portable recovery workflow uses
-`moex-botctl disaster-backup` and `scripts/ubuntu/restore-new-vm.sh`; secrets remain outside
-the archive and must be supplied separately as `bot.env`.
+`moex-botctl disaster-backup --checkout /trusted/checkout` and
+`scripts/ubuntu/restore-new-vm.sh --rehearse` to recover into a **new quarantine only**.
+Supply the independently witnessed journal head and archive digest; never use the
+archive's own head as proof of freshness. The restore tool does not accept credentials,
+replace a live journal, install a bot or start timers.
 
 ## Next integrations
 

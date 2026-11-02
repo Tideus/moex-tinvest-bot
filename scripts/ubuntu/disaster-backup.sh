@@ -3,6 +3,7 @@ set -Eeuo pipefail
 umask 077
 
 APP_DIR="${MOEX_BOT_APP_DIR:-/opt/moex-tinvest-bot}"
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CONFIG_DIR="${MOEX_BOT_CONFIG_DIR:-/etc/moex-tinvest-bot}"
 STATE_DIR="${MOEX_BOT_STATE_DIR:-/var/lib/moex-tinvest-bot}"
 LOG_DIR="${MOEX_BOT_LOG_DIR:-/var/log/moex-tinvest-bot}"
@@ -14,12 +15,18 @@ if [[ "${EUID}" -ne 0 ]]; then
 fi
 
 output_dir="${BACKUP_DIR}"
-if [[ $# -gt 0 ]]; then
-  if [[ "${1:-}" != "--output-dir" || $# -ne 2 ]]; then
-    printf 'Usage: sudo moex-botctl disaster-backup [--output-dir DIR]\n' >&2
-    exit 2
-  fi
-  output_dir="$2"
+checkout=""
+while [[ $# -gt 1 ]]; do
+  case "$1" in
+    --checkout) checkout="$2" ;;
+    --output-dir) output_dir="$2" ;;
+    *) break ;;
+  esac
+  shift 2
+done
+if [[ $# -ne 0 || -z "${checkout}" ]]; then
+  printf 'Usage: sudo moex-botctl disaster-backup --checkout TRUSTED_GIT_DIR [--output-dir DIR]\n' >&2
+  exit 2
 fi
 
 for required in "${STATE_DIR}" "${LOG_DIR}" "${CONFIG_DIR}/runtime.json" \
@@ -48,6 +55,17 @@ services=(
 )
 active_timers=()
 stage_dir=""
+for unit in moex-tinvest-calendar moex-observer; do
+  for suffix in timer service; do
+    load="$(systemctl show "${unit}.${suffix}" --property=LoadState --value)"
+    case "${load}" in
+      not-found) continue ;;
+      loaded|masked) ;;
+      *) printf 'FAIL: cannot establish unit state: %s.%s\n' "${unit}" "${suffix}" >&2; exit 2 ;;
+    esac
+    if [[ "${suffix}" == timer ]]; then timers+=("${unit}.timer"); else services+=("${unit}.service"); fi
+  done
+done
 
 restore_timers() {
   local timer
@@ -70,25 +88,19 @@ trap cleanup EXIT
 for timer in "${timers[@]}"; do
   if systemctl is-active --quiet "${timer}"; then active_timers+=("${timer}"); fi
 done
-systemctl stop "${timers[@]}" "${services[@]}" 2>/dev/null || true
+systemctl stop "${timers[@]}" "${services[@]}"
 
 mkdir -p "${output_dir}"
 stage_dir="$(mktemp -d -t moex-disaster-backup.XXXXXXXX)"
 mkdir -p "${stage_dir}/state" "${stage_dir}/logs" \
   "${stage_dir}/config" "${stage_dir}/metadata"
-cp -a "${STATE_DIR}/." "${stage_dir}/state/"
+# All state databases (also calendar/observer) use the SQLite backup API.
 cp -a "${LOG_DIR}/." "${stage_dir}/logs/"
-install -m 0644 "${CONFIG_DIR}/runtime.json" "${stage_dir}/config/runtime.json"
-install -m 0644 "${CONFIG_DIR}/maintenance.json" \
-  "${stage_dir}/config/maintenance.json"
-
-for name in BUILD_INFO BUILD_MANIFEST.sha256 VERSION; do
-  if [[ -r "${APP_DIR}/${name}" ]]; then
-    cp -a "${APP_DIR}/${name}" "${stage_dir}/metadata/${name}"
-  fi
-done
+python3 -I -B "${script_dir}/dr_journals.py" snapshot \
+  --app "${APP_DIR}" --config "${CONFIG_DIR}" --state "${STATE_DIR}" --stage "${stage_dir}" \
+  --checkout "${checkout}"
 {
-  printf 'format_version=1\n'
+  printf 'format_version=2\n'
   printf 'created_at=%s\n' "$(date --iso-8601=seconds)"
   printf 'hostname=%s\n' "$(hostname)"
   printf 'secrets_included=no\n'
@@ -96,7 +108,7 @@ done
 } >"${stage_dir}/RECOVERY_MANIFEST.txt"
 
 stamp="$(date -u +%Y%m%dT%H%M%SZ)"
-archive="${output_dir}/moex-disaster-${stamp}.tar.gz"
+archive="$(mktemp --suffix=.tar.gz "${output_dir}/moex-disaster-${stamp}.XXXXXXXX")"
 tar --create --gzip --file "${archive}" --directory "${stage_dir}" .
 (cd "${output_dir}" && sha256sum "$(basename "${archive}")") \
   >"${archive}.sha256"

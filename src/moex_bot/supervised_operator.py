@@ -9,7 +9,8 @@ import argparse
 import hashlib
 import json
 import os
-from dataclasses import asdict, replace
+import re
+from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
@@ -31,6 +32,13 @@ from .live_protection import NativeProtectionBroker, ProtectionJournal, Protecti
 from .prod_experiment import load_experiment_settings
 from .prod_long import ProdLongPolicy, load_prod_long_policy, validate_prod_long_policy
 from .prod_session import production_session
+from .protection_recovery import (
+    NativeRecoveryParentBroker,
+    apply_recovery,
+    load_recovery_plan,
+    preview_recovery,
+    recovery_digest,
+)
 from .sandbox_execution import decode_validated_intent
 from .shadow import load_universe
 from .supervised_execution import SupervisedTInvestBroker, run_supervised_entry
@@ -76,24 +84,64 @@ def experiment_policy(path: Path, settings: dict[str, Any]) -> ProdLongPolicy:
     return policy
 
 
+@dataclass(frozen=True)
+class ReviewBinding:
+    """Account/release/policy live outside this exact, action-specific binding."""
+
+    action: str
+    instrument_uid: str
+    lots: int
+    entry_request_id: str
+    journal_uuid: str
+    protection_sha256: str
+    preview_sha256: str
+
+    @classmethod
+    def for_plan(
+        cls, action: str, plan: ProtectionPlan, journal_uuid: str, preview_sha256: str
+    ) -> ReviewBinding:
+        plan.validate()
+        if (
+            action not in {"BUY_WITH_STOP", "PROTECT_ONLY", "EXIT_WITH_STOP_CANCEL"}
+            or not journal_uuid
+            or not re.fullmatch("[0-9a-f]{64}", preview_sha256)
+        ):
+            raise ValueError("invalid experiment action, journal or preview digest")
+        return cls(
+            action,
+            plan.instrument.uid,
+            plan.lots,
+            plan.entry_request_id,
+            journal_uuid,
+            plan.digest,
+            preview_sha256,
+        )
+
+
 def require_experiment_review(
     path: Path,
     account: str,
     policy: ProdLongPolicy,
     release: str,
     now: datetime,
+    *,
+    binding: ReviewBinding,
     min_remaining_seconds: int = 0,
 ) -> None:
     assert_root_review_path(path)
     raw = _object(path)
     if (
-        raw.get("version") != 1
+        type(raw.get("version")) is not int
+        or raw["version"] != 2
         or raw.get("decision") != "APPROVED_SUPERVISED_EXPERIMENT"
         or raw.get("scope") != "ONE_LOT_TECHNICAL_TEST"
         or raw.get("strategy_profitability") != "NOT_ESTABLISHED"
         or raw.get("account_id") != account
         or raw.get("release_sha256") != release
         or raw.get("policy_sha256") != policy_digest(policy)
+        # Dict equality alone would accept JSON true/1.0 instead of integer 1.
+        or json.dumps(raw.get("binding"), sort_keys=True)
+        != json.dumps(asdict(binding), sort_keys=True)
     ):
         raise ValueError("supervised experiment review identity/scope does not match")
     reviewed = datetime.fromisoformat(str(raw.get("reviewed_at", "")))
@@ -205,6 +253,10 @@ def operate(args: argparse.Namespace) -> int:
     broker = SupervisedTInvestBroker(token, account, UrlLibJsonTransport(), instruments)
     journal = Path(settings["journal"])
     now = datetime.now(UTC)
+    if args.action in {"protection-preview", "protection-apply"}:
+        return operate_recovery(
+            args, settings, policy, release, account, token, broker, instruments
+        )
     if args.action in {"exit-preview", "exit-execute"}:
         return operate_exit(args, settings, policy, release, account, token, broker, instruments)
     if args.action == "preview":
@@ -323,6 +375,9 @@ def operate(args: argparse.Namespace) -> int:
         raise ValueError("supervised experiment is disabled; no order submitted")
     if raw["journal_uuid"] != registered_live_journal(journal, account):
         raise ValueError("paired preview belongs to another/missing production ledger")
+    binding = ReviewBinding.for_plan(
+        "BUY_WITH_STOP", protection, raw["journal_uuid"], args.confirm_preview_sha256
+    )
     permission = LivePermission(
         account,
         intent_digest(intent),
@@ -343,7 +398,12 @@ def operate(args: argparse.Namespace) -> int:
         if hashlib.sha256(args.preview.read_bytes()).hexdigest() != args.confirm_preview_sha256:
             raise ValueError("complete paired preview changed")
         require_experiment_review(
-            Path(settings["admission"]), account, policy, release, datetime.now(UTC)
+            Path(settings["admission"]),
+            account,
+            policy,
+            release,
+            datetime.now(UTC),
+            binding=binding,
         )
 
     gate()
@@ -369,6 +429,7 @@ def operate(args: argparse.Namespace) -> int:
             policy,
             release,
             datetime.now(UTC),
+            binding=binding,
             min_remaining_seconds=180,
         ),
     )
@@ -384,9 +445,114 @@ def operate(args: argparse.Namespace) -> int:
     return 0 if result["state"] == "FILLED_PROTECTED" else 2
 
 
+def operate_recovery(
+    args: argparse.Namespace,
+    settings: dict[str, Any],
+    policy: ProdLongPolicy,
+    release: str,
+    account: str,
+    token: str,
+    broker: SupervisedTInvestBroker,
+    instruments: dict[str, Instrument],
+) -> int:
+    entry = Path(settings["journal"])
+    protection = Path(settings["protection_journal"])
+    plan = load_recovery_plan(protection, account, entry)
+    canonical = instruments.get(plan.instrument.uid)
+    if (
+        canonical is None
+        or replace(canonical, tick_size=plan.instrument.tick_size) != plan.instrument
+        or plan.instrument.secid not in policy.allowed_secids
+        or plan.instrument.secid in policy.protected_secids
+    ):
+        raise ValueError("recovery must match a permitted, non-manual durable instrument")
+    instruments[plan.instrument.uid] = plan.instrument
+    transport = AuditJsonTransport(
+        UrlLibJsonTransport(), entry.parent / "audit" / (plan.entry_request_id + ".jsonl")
+    )
+    broker.transport = transport
+    parent = NativeRecoveryParentBroker(broker)
+    stops = NativeProtectionBroker(token, account, transport)
+    if args.action == "protection-preview":
+        if args.output is None or args.output.resolve() in {
+            p.resolve()
+            for p in (
+                entry,
+                protection,
+                args.settings,
+                args.policy,
+                args.universe,
+                Path(settings["admission"]),
+            )
+        }:
+            raise ValueError("new private protection-only preview output required")
+        raw = preview_recovery(
+            plan=plan,
+            entry_path=entry,
+            protection_path=protection,
+            parent_broker=parent,
+            stop_broker=stops,
+            release=release,
+            now=datetime.now(UTC),
+        )
+        digest = write_preview(args.output, raw)
+        print(
+            f"PREVIEW_ONLY: IIS …{account[-4:]}; no BUY or cancellation; protect existing "
+            f"{plan.instrument.secid} 1 lot: {plan.kind} SELL trigger={plan.stop_trigger} "
+            f"limit={plan.stop_limit}, GTC; preview_sha256={digest}"
+        )
+        return 0
+    content = args.preview.read_bytes() if args.preview is not None else b""
+    if not content or hashlib.sha256(content).hexdigest() != args.confirm_preview_sha256:
+        raise ValueError("exact protection-only preview bytes must be confirmed")
+    raw = json.loads(content)
+    binding = ReviewBinding.for_plan(
+        "PROTECT_ONLY", plan, registered_live_journal(entry, account), args.confirm_preview_sha256
+    )
+
+    def gate() -> None:
+        if (
+            load_experiment_settings(args.settings) != settings
+            or settings["enabled"] is not True
+            or settings["stage"] != "supervised_canary"
+            or release_digest(args.policy, args.universe, args.settings) != release
+            or hashlib.sha256(args.preview.read_bytes()).hexdigest() != args.confirm_preview_sha256
+        ):
+            raise ValueError("protection-only settings or confirmation changed/disabled")
+        require_experiment_review(
+            Path(settings["admission"]),
+            account,
+            policy,
+            release,
+            datetime.now(UTC),
+            binding=binding,
+        )
+
+    gate()
+    status = apply_recovery(
+        preview=raw,
+        confirmed_sha256=recovery_digest(raw),
+        plan=plan,
+        entry_path=entry,
+        protection_path=protection,
+        parent_broker=parent,
+        stop_broker=stops,
+        release=release,
+        approval_gate=gate,
+        clock=lambda: datetime.now(UTC),
+    )
+    print(f"PROTECTION_ONLY: {status}; no entry or cancel sent")
+    return 0 if status == "ACTIVE" else 2
+
+
 def operate_exit(
-    args: argparse.Namespace, settings: dict[str, Any], policy: ProdLongPolicy,
-    release: str, account: str, token: str, broker: SupervisedTInvestBroker,
+    args: argparse.Namespace,
+    settings: dict[str, Any],
+    policy: ProdLongPolicy,
+    release: str,
+    account: str,
+    token: str,
+    broker: SupervisedTInvestBroker,
     instruments: dict[str, Instrument],
 ) -> int:
     entry_path = Path(settings["journal"])
@@ -409,13 +575,20 @@ def operate_exit(
     if args.action == "exit-preview":
         precheck(plan, exit_intent(plan), policy, broker, entry_path, lambda: datetime.now(UTC))
         if args.output is None or args.output.resolve() in {
-            p.resolve() for p in (entry_path, protection_path, args.settings, args.policy,
-                                  args.universe, Path(settings["admission"]))
+            p.resolve()
+            for p in (
+                entry_path,
+                protection_path,
+                args.settings,
+                args.policy,
+                args.universe,
+                Path(settings["admission"]),
+            )
         }:
             raise ValueError("separate new exit preview output required")
-        digest = write_preview(args.output, preview_report(
-            plan, stop_id, release, policy, identity, datetime.now(UTC)
-        ))
+        digest = write_preview(
+            args.output, preview_report(plan, stop_id, release, policy, identity, datetime.now(UTC))
+        )
         print(
             f"PREVIEW_ONLY: IIS …{account[-4:]}; cancel known stop {stop_id}; "
             f"then SELL {plan.instrument.secid} 1 lot LIMIT {plan.take_profit} RUB. "
@@ -429,38 +602,67 @@ def operate_exit(
     permission = exit_permission(
         json.loads(content), plan, stop_id, release, policy, identity, datetime.now(UTC)
     )
+    binding = ReviewBinding.for_plan(
+        "EXIT_WITH_STOP_CANCEL", plan, identity, args.confirm_preview_sha256
+    )
 
     def gate() -> None:
         permission.validate(account, exit_intent(plan), policy, release, datetime.now(UTC))
-        if (load_experiment_settings(args.settings) != settings or settings["enabled"] is not True
-                or settings["stage"] != "supervised_canary"
-                or release_digest(args.policy, args.universe, args.settings) != release
-                or hashlib.sha256(args.preview.read_bytes()).hexdigest()
-                != args.confirm_preview_sha256):
+        if (
+            load_experiment_settings(args.settings) != settings
+            or settings["enabled"] is not True
+            or settings["stage"] != "supervised_canary"
+            or release_digest(args.policy, args.universe, args.settings) != release
+            or hashlib.sha256(args.preview.read_bytes()).hexdigest() != args.confirm_preview_sha256
+        ):
             raise ValueError("exit config/confirmation changed or disabled")
         require_experiment_review(
-            Path(settings["admission"]), account, policy, release, datetime.now(UTC),
+            Path(settings["admission"]),
+            account,
+            policy,
+            release,
+            datetime.now(UTC),
+            binding=binding,
             min_remaining_seconds=120,
         )
 
     result = run_exit(
-        plan=plan, journal=journal, entry_path=entry_path, policy=policy, broker=broker,
-        stops=stops, permission=permission, release=release, gate=gate,
+        plan=plan,
+        journal=journal,
+        entry_path=entry_path,
+        policy=policy,
+        broker=broker,
+        stops=stops,
+        permission=permission,
+        release=release,
+        gate=gate,
         clock=lambda: datetime.now(UTC),
     )
     print(json.dumps(result))
     notify_experiment(
         f"PROD · IIS …{account[-4:]} · {plan.instrument.secid} · CLOSED_TAKE_PROFIT; "
-        "native stop cancellation verified", dedupe_key=plan.request_id + ":closed",
-        critical=False, now=datetime.now(UTC),
+        "native stop cancellation verified",
+        dedupe_key=plan.request_id + ":closed",
+        critical=False,
+        now=datetime.now(UTC),
     )
     return 0
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("action", choices=("preview", "enroll", "execute", "exit-preview",
-                                          "exit-execute"))
+    parser.add_argument(
+        "action",
+        choices=(
+            "preview",
+            "enroll",
+            "execute",
+            "exit-preview",
+            "exit-execute",
+            "protection-preview",
+            "protection-apply",
+        ),
+    )
     parser.add_argument("--settings", type=Path, required=True)
     parser.add_argument("--policy", type=Path, required=True)
     parser.add_argument("--universe", type=Path, required=True)
@@ -487,7 +689,7 @@ def main() -> int:
             "BLOCKED_OR_FAILED: supervised PROD experiment; inspect private journals; "
             "do not retry unknown orders"
         )
-        if args.action in {"execute", "exit-execute"}:
+        if args.action in {"execute", "exit-execute", "protection-apply"}:
             print(
                 "CRITICAL_CHECK_ACCOUNT: entry/exit may be unverified or protection cancelled; "
                 "check orders, stops and holdings at the broker immediately"

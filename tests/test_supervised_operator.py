@@ -7,7 +7,7 @@ import os
 import runpy
 import sys
 from contextlib import contextmanager
-from dataclasses import replace
+from dataclasses import asdict, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
@@ -75,6 +75,18 @@ def preview(setup):
     args.preview = args.output
     args.confirm_preview_sha256 = hashlib.sha256(args.preview.read_bytes()).hexdigest()
     return raw
+
+
+@pytest.mark.parametrize("action", ["protection-preview", "protection-apply"])
+def test_recovery_routes_only_to_protection_handler(setup, monkeypatch, action):
+    args, _, broker = setup
+    args.action = action
+    recovery = Mock(return_value=2)
+    monkeypatch.setattr(module, "operate_recovery", recovery)
+    assert module.operate(args) == 2
+    recovery.assert_called_once()
+    broker.capture.assert_not_called()
+    broker.submit.assert_not_called()
 
 
 def test_take_profit_is_bound_to_entry_preview(setup):
@@ -364,9 +376,14 @@ def test_preview_rejects_stop_distance_that_exceeds_budget_before_capture(setup)
 def test_root_review_is_scoped_to_experiment_not_profitability(setup, monkeypatch, fault):
     args, settings, _ = setup
     policy = module.experiment_policy(args.policy, settings)
+    paired = preview(setup)
     now = datetime.now(UTC)
+    _, plan = module.decode_preview(paired, "real-iis", "release", policy, now)
+    binding = module.ReviewBinding.for_plan("BUY_WITH_STOP", plan, paired["journal_uuid"],
+                                           args.confirm_preview_sha256)
     raw = {
-        "version": 1,
+        "version": 2,
+        "binding": asdict(binding),
         "decision": "APPROVED_SUPERVISED_EXPERIMENT",
         "scope": "ONE_LOT_TECHNICAL_TEST",
         "strategy_profitability": "NOT_ESTABLISHED",
@@ -418,7 +435,7 @@ def test_root_review_is_scoped_to_experiment_not_profitability(setup, monkeypatc
     path.write_text(json.dumps(raw))
     monkeypatch.setattr(module, "assert_root_review_path", lambda path: None)
     if fault == "none":
-        module.require_experiment_review(path, "real-iis", policy, "release", now)
+        module.require_experiment_review(path, "real-iis", policy, "release", now, binding=binding)
     else:
         with pytest.raises(ValueError):
             module.require_experiment_review(
@@ -427,6 +444,7 @@ def test_root_review_is_scoped_to_experiment_not_profitability(setup, monkeypatc
                 policy,
                 "release",
                 now,
+                binding=binding,
                 min_remaining_seconds=180 if fault == "headroom" else 0,
             )
 

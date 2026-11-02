@@ -263,7 +263,7 @@ def test_corrupt_existing_journal_is_not_reinitialized(tmp_path):
 def test_fixed_production_transport_fields_and_read_only_positions(tmp_path, kind):
     plan, _, _, _ = _case(tmp_path, kind=kind)
     transport = RecordingTransport(
-        {"securities": [{"instrumentUid": plan.instrument.uid, "balance": "20", "blocked": "10"}]}
+        {"securities": [{"instrumentUid": plan.instrument.uid, "balance": "10", "blocked": "0"}]}
     )
     broker = NativeProtectionBroker("fake", plan.account_id, transport)
     assert broker.available_units(plan.instrument) == 10

@@ -155,7 +155,13 @@ def test_read_parent_requires_existing_durable_entry(case):
 
 
 @pytest.mark.parametrize("outcome", ["fill", "cancel", "reject", "ambiguous"])
-def test_pending_order_is_polled_then_only_that_entry_may_be_cancelled(case, outcome):
+@pytest.mark.parametrize("native_path", [False, True])
+def test_pending_order_is_polled_then_only_that_entry_may_be_cancelled(
+    case, outcome, native_path, monkeypatch,
+):
+    if native_path:
+        monkeypatch.setattr(module, "SupervisedTInvestBroker", type(case["broker"]))
+        case["broker"].cancel_pending.side_effect = lambda record, before_cancel: before_cancel()
     case["broker"].status = OrderStatus.ACCEPTED
     statuses = (
         [OrderStatus.FILLED]
@@ -288,10 +294,77 @@ def test_production_cancel_only_accepts_verified_pending_exchange_id(case, fault
     )
     if fault == "terminal":
         record = replace(record, status=OrderStatus.CANCELLED)
+    transport.post.side_effect = [
+        {"instrumentUid": record.intent.instrument.uid,
+         "orderRequestId": record.intent.order_request_id, "direction": "ORDER_DIRECTION_BUY",
+         "lotsRequested": "1", "lotsExecuted": "0", "orderId": "exchange-id",
+         "executionReportStatus": "EXECUTION_REPORT_STATUS_NEW"},
+        transport.post.return_value,
+    ]
     if fault == "none":
         broker.cancel_pending(record)
         assert transport.post.call_args.kwargs["payload"]["orderId"] == "exchange-id"
     else:
         with pytest.raises(ValueError):
             broker.cancel_pending(record)
-    assert transport.post.call_count == int(fault in {"none", "naive"})
+    assert transport.post.call_count == 2 * int(fault in {"none", "naive"})
+
+
+@pytest.mark.parametrize("fault", [None, "uid", "exchange", "late_fill"])
+def test_native_supervised_correlated_lookup_and_late_fill(case, fault):
+    intent = case["intent"]
+    raw = {"instrumentUid": intent.instrument.uid, "orderRequestId": intent.order_request_id,
+           "direction": "ORDER_DIRECTION_BUY", "lotsRequested": "1", "lotsExecuted": "1",
+           "orderId": "exchange-id", "executionReportStatus": "EXECUTION_REPORT_STATUS_FILL"}
+    if fault == "uid":
+        raw["instrumentUid"] = "other"
+    elif fault == "exchange":
+        raw["orderId"] = "other-exchange"
+    transport = Mock()
+    transport.post.return_value = raw
+    broker = module.SupervisedTInvestBroker("fake", "real-iis", transport, {})
+    record = OrderRecord(intent, OrderStatus.ACCEPTED, 0, "exchange-id")
+    if fault in {"uid", "exchange"}:
+        with pytest.raises(ValueError):
+            broker.lookup(record)
+    elif fault == "late_fill":
+        broker.cancel_pending(record)
+        assert transport.post.call_count == 1  # GET only, late fill is never cancelled.
+    else:
+        assert broker.submit(intent).status is OrderStatus.FILLED
+        assert transport.post.call_count == 2
+
+
+@pytest.mark.parametrize("side", [Side.BUY, Side.SELL])
+def test_native_lookup_respects_side_and_cancel_gate_after_network(case, side):
+    intent = replace(case["intent"], side=side)
+    raw = {"instrumentUid": intent.instrument.uid, "orderRequestId": intent.order_request_id,
+           "direction": "ORDER_DIRECTION_BUY" if side is Side.BUY else "ORDER_DIRECTION_SELL",
+           "lotsRequested": "1", "lotsExecuted": "0", "orderId": "exchange-id",
+           "executionReportStatus": "EXECUTION_REPORT_STATUS_NEW"}
+    transport = Mock()
+    transport.post.return_value = raw
+    broker = module.SupervisedTInvestBroker("fake", "real-iis", transport, {})
+    record = OrderRecord(intent, OrderStatus.ACCEPTED, 0, "exchange-id")
+    assert broker.lookup(record).status is OrderStatus.ACCEPTED
+    def expired():
+        assert transport.post.call_count == 2  # Revocation checked after the fresh GET.
+        raise ValueError("expired/revoked")
+    with pytest.raises(ValueError, match="expired/revoked"):
+        broker.cancel_pending(record, before_cancel=expired)
+    assert transport.post.call_count == 2  # No cancel POST.
+
+
+@pytest.mark.parametrize("field,value", [("lotsExecuted", True), ("lotsExecuted", "1.0"),
+                                        ("executionReportStatus", "UNKNOWN")])
+def test_native_lookup_refuses_ambiguous_counts_and_status(case, field, value):
+    intent = case["intent"]
+    raw = {"instrumentUid": intent.instrument.uid, "orderRequestId": intent.order_request_id,
+           "direction": "ORDER_DIRECTION_BUY", "lotsRequested": "1", "lotsExecuted": "0",
+           "orderId": "exchange-id", "executionReportStatus": "EXECUTION_REPORT_STATUS_NEW"}
+    raw[field] = value
+    transport = Mock()
+    transport.post.return_value = raw
+    broker = module.SupervisedTInvestBroker("fake", "real-iis", transport, {})
+    with pytest.raises(ValueError):
+        broker.lookup(OrderRecord(intent, OrderStatus.ACCEPTED, 0, "exchange-id"))

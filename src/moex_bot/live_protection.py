@@ -26,6 +26,10 @@ from .service_config import PROD_REST
 PREFIX = "/tinkoff.public.invest.api.contract.v1."
 
 
+class StopNotDispatched(ValueError):
+    """The local guard failed before delegation; no stop transport was entered."""
+
+
 @dataclass(frozen=True)
 class ProtectionPlan:
     account_id: str
@@ -208,9 +212,10 @@ class ProtectionJournal:
                     * int(value["intent"]["instrument"]["lot_size"])
                 )
         units = plan.lots * plan.instrument.lot_size
-        if owned < units or broker.available_units(plan.instrument) < units:
+        if owned != units or broker.available_units(plan.instrument) != units:
             raise ValueError("protection exceeds bot-owned or free broker units")
-        if any(s.get("instrumentUid") == plan.instrument.uid for s in broker.list_stops()):
+        if any(not s.get("instrumentUid") or s.get("instrumentUid") == plan.instrument.uid
+               for s in broker.list_stops()):
             raise ValueError("existing/manual stop requires reconciliation, never adoption")
         # Compare-and-swap is the account-independent single plan submission lock.
         with closing(sqlite3.connect(self.path)) as db, db:
@@ -222,6 +227,20 @@ class ProtectionJournal:
                 raise ValueError("protection submission already reserved")
         try:
             response = broker.post_stop(plan, plan.request_id)
+        except StopNotDispatched:
+            # Only the guarded local pre-POST boundary raises this exception.
+            # Do not use a generic ValueError/transport exception as proof of non-delivery.
+            with closing(sqlite3.connect(self.path)) as db, db:
+                cursor = db.execute(
+                    "UPDATE protection SET state='PLANNED' WHERE request_id=? "
+                    "AND plan_hash=? AND state='POST_PENDING' AND stop_id IS NULL",
+                    (plan.request_id, plan.digest),
+                )
+                if cursor.rowcount != 1:
+                    raise ValueError(
+                        "local stop reservation changed; inspect protection journal"
+                    ) from None
+            raise
         except Exception:
             self._state(plan, "UNKNOWN")
             raise
@@ -231,9 +250,7 @@ class ProtectionJournal:
             or not returned
             or response.get("orderRequestId") != plan.request_id
         ):
-            self._state(
-                plan, "UNKNOWN", returned if isinstance(returned, str) and returned else None
-            )
+            self._state(plan, "UNKNOWN")
             raise ValueError("stop POST response identity is incomplete")
         self._state(plan, "UNKNOWN", returned)
         return self.reconcile(plan, broker)
@@ -245,7 +262,12 @@ class ProtectionJournal:
         if stop_id is None:
             return status  # UNKNOWN/PENDING never adopts a matching manual order or resubmits.
         self._state(plan, "UNKNOWN", stop_id)
-        matches = [s for s in broker.list_stops() if s.get("stopOrderId") == stop_id]
+        observed = broker.list_stops()
+        if any(not s.get("instrumentUid") or (
+            s.get("instrumentUid") == plan.instrument.uid and s.get("stopOrderId") != stop_id
+        ) for s in observed):
+            raise ValueError("conflicting or ambiguous protection readback")
+        matches = [s for s in observed if s.get("stopOrderId") == stop_id]
         if len(matches) != 1 or not _verified_stop(plan, matches[0]):
             raise ValueError("known stop is absent or mismatched; protection is unverified")
         self._state(plan, "ACTIVE", stop_id)
@@ -253,6 +275,14 @@ class ProtectionJournal:
 
 
 def _verified_stop(plan: ProtectionPlan, stop: Mapping[str, Any]) -> bool:
+    if any(stop.get(key) for key in ("exchangeOrderId", "activationDateTime")):
+        return False  # An allegedly ACTIVE stop with an activated child is contradictory.
+    if any(stop.get(key) for key in ("expirationTime", "expireDate", "expiresAt")):
+        return False  # This plan approves GTC, never a timed or already expired child.
+    if stop.get("expirationType") not in (
+        None, "STOP_ORDER_EXPIRATION_TYPE_GOOD_TILL_CANCEL",
+    ):
+        return False
     expected = {
         "instrumentUid": plan.instrument.uid,
         "direction": "STOP_ORDER_DIRECTION_SELL",
@@ -323,16 +353,17 @@ class NativeProtectionBroker:
         matches = [s for s in securities if s.get("instrumentUid") == instrument.uid]
         if len(matches) != 1:
             raise ValueError("broker share position identity missing or duplicated")
-        values = [matches[0].get("balance", 0), matches[0].get("blocked", 0)]
+        values = [matches[0].get("balance"), matches[0].get("blocked")]
         if any(
             type(v) is not int
             and not (isinstance(v, str) and re.fullmatch(r"-?(0|[1-9][0-9]*)", v))
             for v in values
         ):
             raise ValueError("broker share quantities must be integers, not booleans/floats")
-        units = int(values[0]) - int(values[1])
-        if units < 0:
-            raise ValueError("free broker units are negative")
+        if (int(values[0]) != instrument.lot_size or int(values[1]) != 0
+                or matches[0].get("exchangeBlocked") is True):
+            raise ValueError("exact unblocked one-lot broker holding required")
+        units = int(values[0])
         return units
 
     def list_stops(self) -> tuple[Mapping[str, Any], ...]:

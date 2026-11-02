@@ -426,11 +426,9 @@ def test_disaster_recovery_is_portable_verified_and_keeps_secrets_separate() -> 
         encoding="utf-8"
     )
     assert "secrets_included=no" in backup
-    assert "runtime.json" in backup and "maintenance.json" in backup
+    assert "dr_journals.py" in backup and "snapshot" in backup
     assert '"${LOG_DIR}/." "${stage_dir}/logs/"' in backup
-    assert '"${stage_dir}/logs/" "${LOG_DIR}/"' in restore
-    assert "sha256sum -c" in backup and "sha256sum -c" in restore
-    assert "unsafe archive path" in restore
-    assert "--env-file" in restore
-    assert "moex-botctl prelaunch" in restore
+    assert "sha256sum -c" in backup
+    assert "dr_journals.py" in restore and "rehearse" in restore
+    assert not any(cmd in restore for cmd in ("install.sh", "--env-file", "moex-botctl", "rsync"))
     assert "disaster-backup)" in control

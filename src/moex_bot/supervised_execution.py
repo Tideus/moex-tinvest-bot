@@ -21,7 +21,7 @@ from .domain import OrderIntent, OrderRecord, OrderStatus, Side
 from .execution_journal import ExecutionJournal
 from .integrations.tinvest_live import TInvestLiveBroker
 from .live_execution import LivePermission, execute_live_intent, registered_live_journal
-from .live_protection import ProtectionBroker, ProtectionJournal, ProtectionPlan
+from .live_protection import ProtectionBroker, ProtectionJournal, ProtectionPlan, StopNotDispatched
 from .prod_long import ProdLongPolicy
 from .sandbox_execution import decode_validated_intent
 
@@ -38,13 +38,48 @@ class SupervisedBroker(Protocol):
 
 
 class SupervisedTInvestBroker(TInvestLiveBroker):
-    def cancel_pending(self, record: OrderRecord) -> None:
+    def lookup(self, record: OrderRecord) -> OrderRecord:
+        raw = self._post("OrdersService/GetOrderState", {
+            "accountId": self.account_id, "orderId": record.intent.order_request_id,
+            "orderIdType": "ORDER_ID_TYPE_REQUEST", "priceType": "PRICE_TYPE_CURRENCY",
+        })
+        if (raw.get("instrumentUid") != record.intent.instrument.uid
+                or raw.get("orderRequestId") != record.intent.order_request_id
+                or raw.get("direction") != (
+                    "ORDER_DIRECTION_BUY" if record.intent.side is Side.BUY
+                    else "ORDER_DIRECTION_SELL")
+                or str(raw.get("lotsRequested")) != "1"
+                or str(raw.get("lotsExecuted")) not in {"0", "1"}
+                or raw.get("executionReportStatus") not in {
+                    "EXECUTION_REPORT_STATUS_NEW", "EXECUTION_REPORT_STATUS_PARTIALLYFILL",
+                    "EXECUTION_REPORT_STATUS_FILL", "EXECUTION_REPORT_STATUS_CANCELLED",
+                    "EXECUTION_REPORT_STATUS_REJECTED"}
+                or not isinstance(raw.get("orderId"), str) or not raw["orderId"]
+                or raw["orderId"] == record.intent.order_request_id):
+            raise ValueError("strict supervised parent correlation failed")
+        if (record.broker_order_id and record.broker_order_id != record.intent.order_request_id
+                and record.broker_order_id != raw["orderId"]):
+            raise ValueError("supervised parent exchange identity changed")
+        return self._decode(record.intent, raw)
+
+    def submit(self, intent: OrderIntent) -> OrderRecord:
+        result = super().submit(intent)
+        # POST acknowledgement alone never authorizes cancelling/protecting a parent.
+        return self.lookup(result)
+
+    def cancel_pending(self, record: OrderRecord,
+                       before_cancel: Callable[[], None] | None = None) -> None:
         if (
             not record.broker_order_id
             or record.broker_order_id == record.intent.order_request_id
             or record.status in {OrderStatus.FILLED, OrderStatus.CANCELLED, OrderStatus.REJECTED}
         ):
             raise ValueError("no verified pending exchange order to cancel; inspect broker state")
+        fresh = self.lookup(record)
+        if fresh.status in {OrderStatus.FILLED, OrderStatus.CANCELLED, OrderStatus.REJECTED}:
+            return  # Caller re-reads final state; never cancel a terminal/late filled parent.
+        if before_cancel is not None:
+            before_cancel()
         response = self._post(
             "OrdersService/CancelOrder",
             {
@@ -77,8 +112,15 @@ class GuardedProtectionBroker:
         return self.delegate.list_stops()
 
     def post_stop(self, plan: ProtectionPlan, request_id: str) -> Mapping[str, Any]:
-        self.before_post()  # Revocation/expiry is rechecked at the actual stop POST boundary.
-        return self.delegate.post_stop(plan, request_id)
+        try:
+            self.before_post()  # Only this local boundary proves transport was not entered.
+        except Exception as exc:
+            raise StopNotDispatched(f"local stop approval failed before dispatch: {exc}") from exc
+        try:
+            return self.delegate.post_stop(plan, request_id)
+        except StopNotDispatched as exc:
+            # A delegate may not claim that our own dispatch boundary was never entered.
+            raise RuntimeError("ambiguous delegated stop failure") from exc
 
 
 def read_parent(path: Path, plan: ProtectionPlan) -> OrderRecord:
@@ -178,7 +220,13 @@ def run_supervised_entry(
         # The complete preview must explicitly approve this cancellation of the new entry only.
         permission.validate(broker.account_id, intent, policy, release, clock())
         approval_gate()
-        broker.cancel_pending(parent)
+        if isinstance(broker, SupervisedTInvestBroker):
+            def cancel_gate() -> None:
+                permission.validate(broker.account_id, intent, policy, release, clock())
+                approval_gate()
+            broker.cancel_pending(parent, before_cancel=cancel_gate)
+        else:
+            broker.cancel_pending(parent)
         parent = broker.lookup(parent)
         journal.record("prod:" + broker.account_id, parent)
     if parent.status in {OrderStatus.CANCELLED, OrderStatus.REJECTED} and parent.filled_lots == 0:
