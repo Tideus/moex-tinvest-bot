@@ -96,7 +96,7 @@ def test_resources(tmp_path, monkeypatch, settings, variant):
 
 
 @pytest.mark.parametrize("variant", ['healthy', 'failed', 'stuck', 'recent', 'bad_time'])
-def test_service_probes(tmp_path, monkeypatch, settings, variant):
+def test_service_probes(tmp_path, monkeypatch, settings, variant, legacy_monitor_layout):
     def unit(name, prop):
         if prop == 'ActiveState':
             if name.endswith('.service'):
@@ -151,7 +151,7 @@ def test_integrations(tmp_path, monkeypatch, settings, variant):
 
 
 @pytest.mark.parametrize("variant", ['quality', 'bad_schema', 'blocked', 'empty', 'positions'])
-def test_artifact_probes(tmp_path, monkeypatch, settings, variant):
+def test_artifact_probes(tmp_path, monkeypatch, settings, variant, legacy_monitor_layout):
     artifacts = tmp_path/'artifacts'
     artifacts.mkdir()
     class Clock(datetime):

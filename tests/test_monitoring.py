@@ -115,7 +115,9 @@ def test_crash_after_enqueue_does_not_duplicate_incident(tmp_path, monkeypatch):
     assert outbox.health(now=now + timedelta(hours=1))["pending_due"] == 1
 
 
-def test_new_artifact_during_slow_probes_is_not_future(tmp_path, monkeypatch):
+def test_new_artifact_during_slow_probes_is_not_future(
+    tmp_path, monkeypatch, legacy_monitor_layout
+):
     import os
 
     from moex_bot import monitoring_probes as probes
