@@ -147,6 +147,8 @@ rsync -a --delete \
 bash "${PROJECT_DIR}/scripts/ubuntu/write-build-metadata.sh" \
   "${PROJECT_DIR}" "${APP_DIR}"
 find "${APP_DIR}/scripts/ubuntu" -type f -name '*.sh' -exec chmod 0755 {} +
+install -m 0644 "${PROJECT_DIR}/scripts/ubuntu/long_once_context.py" \
+  "${APP_DIR}/scripts/ubuntu/long_once_context.py"
 chown -R root:root "${APP_DIR}"
 install -d -o root -g "${SERVICE_USER}" -m 0750 "${CONFIG_DIR}"
 install -d -o "${SERVICE_USER}" -g "${SERVICE_USER}" -m 0750 \

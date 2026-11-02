@@ -264,6 +264,9 @@ for name in prod_live prod_long prod_experiment; do
 done
 
 find "$(root_path "${APP_DIR}")/scripts/ubuntu" -type f -name '*.sh' -exec chmod 0755 {} +
+# A root checkout with umask 077 can give this public Python entrypoint mode 0600.
+install -m 0644 "${PROJECT_DIR}/scripts/ubuntu/long_once_context.py" \
+  "$(root_path "${APP_DIR}")/scripts/ubuntu/long_once_context.py"
 
 if [[ -n "${DESTDIR}" ]]; then
   printf 'Staged installation at %s\n' "${DESTDIR}"

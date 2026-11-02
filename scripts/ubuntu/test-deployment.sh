@@ -85,6 +85,7 @@ for script in "${STAGE_DIR}"/opt/moex-tinvest-bot/scripts/ubuntu/*.sh; do
     exit 2
   }
 done
+[[ "$(stat -c %a "${STAGE_DIR}/opt/moex-tinvest-bot/scripts/ubuntu/long_once_context.py")" == 644 ]]
 [[ -x "${STAGE_DIR}/usr/local/sbin/moex-botctl" ]] || {
   printf 'FAIL: staged moex-botctl is not executable\n' >&2
   exit 2

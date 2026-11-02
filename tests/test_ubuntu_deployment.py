@@ -203,6 +203,7 @@ def test_install_and_update_restore_script_execute_permissions() -> None:
     for name in ("install.sh", "update.sh"):
         text = (PROJECT_ROOT / "scripts" / "ubuntu" / name).read_text(encoding="utf-8")
         assert "-exec chmod 0755 {} +" in text
+        assert 'install -m 0644 "${PROJECT_DIR}/scripts/ubuntu/long_once_context.py"' in text
 
 
 def test_update_reasserts_runtime_owners_and_modes() -> None:
