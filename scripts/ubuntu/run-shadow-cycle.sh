@@ -9,6 +9,17 @@ PYTHON_BIN="${MOEX_BOT_PYTHON:-${APP_DIR}/.venv/bin/python}"
 export SSL_CERT_FILE="${SSL_CERT_FILE:-/etc/ssl/certs/ca-certificates.crt}"
 export REQUESTS_CA_BUNDLE="${REQUESTS_CA_BUNDLE:-${SSL_CERT_FILE}}"
 
+# Locked handoff before *any* legacy reconcile/cancel, acquisition or execution.
+source "${APP_DIR}/scripts/ubuntu/lock-long-writer.sh"
+lock_long_writer
+for ownership in /etc/moex-tinvest-bot/sandbox-long-once.owner "${STATE_DIR}/long-once/sandbox.sqlite3" \
+  /var/lib/moex-tinvest-control/long-once-sandbox/entry.claim; do
+  if [[ -e "${ownership}" || -L "${ownership}" ]]; then
+    printf 'SKIP: LONG account reserved for isolated one-shot; legacy writer disabled\n'
+    exit 0
+  fi
+done
+
 mkdir -p "${STATE_DIR}/artifacts" "${STATE_DIR}/data" "${LOG_DIR}"
 cd "${APP_DIR}"
 

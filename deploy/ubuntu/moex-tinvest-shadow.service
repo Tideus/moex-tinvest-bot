@@ -4,6 +4,7 @@ Documentation=file:///opt/moex-tinvest-bot/docs/UBUNTU_24_SERVER_RU.md
 Wants=network-online.target
 After=network-online.target
 ConditionPathExists=/etc/moex-tinvest-bot/bot.env
+ConditionPathExists=!/etc/moex-tinvest-bot/sandbox-long-once.owner
 
 [Service]
 Type=oneshot

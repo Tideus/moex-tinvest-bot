@@ -1,0 +1,11 @@
+[Unit]
+Description=Check the scheduled LONG rebalance without missed-run catch-up
+
+[Timer]
+OnCalendar=Mon..Fri *-*-* 10:05:00 Europe/Moscow
+Persistent=false
+AccuracySec=1s
+Unit=moex-tinvest-long-once-sandbox.service
+
+[Install]
+WantedBy=timers.target

@@ -29,6 +29,7 @@ from .live_execution import (
 )
 from .live_operator import _object, assert_root_review_path, release_digest
 from .live_protection import NativeProtectionBroker, ProtectionJournal, ProtectionPlan
+from .long_auto_signal import Candidate
 from .prod_experiment import load_experiment_settings
 from .prod_long import ProdLongPolicy, load_prod_long_policy, validate_prod_long_policy
 from .prod_session import production_session
@@ -260,6 +261,7 @@ def operate(args: argparse.Namespace) -> int:
     if args.action in {"exit-preview", "exit-execute"}:
         return operate_exit(args, settings, policy, release, account, token, broker, instruments)
     if args.action == "preview":
+        signal: Candidate | None = getattr(args, "signal", None)
         instrument = next((x for x in instruments.values() if x.secid == args.ticker), None)
         if instrument is None or instrument.secid not in policy.allowed_secids:
             raise ValueError("preview instrument must belong to the production allowlist")
@@ -276,13 +278,14 @@ def operate(args: argparse.Namespace) -> int:
         instruments[instrument.uid] = instrument
         price = Decimal(args.limit_price)
         intent = OrderIntent(
-            str(uuid4()),
+            signal.order_request_id if signal is not None else str(uuid4()),
             instrument,
             Side.BUY,
             1,
             price,
             price * instrument.lot_size,
-            "supervised technical experiment",
+            ("long strategy decision " + signal.decision_sha256
+             if signal is not None else "supervised technical experiment"),
         )
         protection = ProtectionPlan(
             account,
@@ -306,13 +309,29 @@ def operate(args: argparse.Namespace) -> int:
         state = broker.capture(intent)
         if state.account_id != account or state.account_type != policy.account_type:
             raise ValueError("preview account is not the configured IIS")
+        expiry = now + timedelta(minutes=5)
+        if signal is not None:
+            if (signal.account_id != account or signal.instrument != instrument
+                    or signal.limit_price != price or signal.stop_trigger != protection.stop_trigger
+                    or signal.lots != 1 or not state.trading_allowed or state.active_orders
+                    or instrument.uid in state.stop_uids
+                    or any(h.instrument.uid == instrument.uid and h.units != 0
+                           for h in state.positions.values())
+                    or not intent.notional <= state.estimated_total <= min(
+                        Decimal("10000"), state.cash_available,
+                        policy.canary.max_order_notional_rub)
+                    or state.bid <= signal.stop_trigger):
+                raise ValueError("signal, manual holdings or current broker state blocks preview")
+            expiry = min(expiry, signal.valid_until)
+            if datetime.now(UTC) >= expiry:
+                raise ValueError("long signal expired during broker readback")
         report = {
             "format": 1,
             "account_id": account,
             "intent": asdict(intent),
             "protection": asdict(protection),
             "created_at": now.isoformat(),
-            "expires_at": (now + timedelta(minutes=5)).isoformat(),
+            "expires_at": expiry.isoformat(),
             "release_sha256": release,
             "policy_sha256": policy_digest(policy),
             "cancel_unfilled_after_seconds": 30,
@@ -320,6 +339,8 @@ def operate(args: argparse.Namespace) -> int:
             "broker_state": asdict(state),
             "order_submitted": False,
         }
+        if signal is not None:
+            report["long_decision_sha256"] = signal.decision_sha256
         if args.output is None or args.output.suffix != ".json":
             raise ValueError("new private JSON preview output required")
         if args.output.resolve() in {

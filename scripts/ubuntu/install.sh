@@ -78,6 +78,10 @@ if [[ -z "${DESTDIR}" ]]; then
       fi
     fi
   done
+  if [[ -d "${early_control_dir}" ]]; then
+    source "${PROJECT_DIR}/scripts/ubuntu/lock-long-writer.sh"
+    lock_long_writer
+  fi
   if [[ -e "${early_control_lock}" || -L "${early_control_lock}" ]]; then
     if [[ -L "${early_control_lock}" || ! -f "${early_control_lock}" || \
       "$(stat -c %u "${early_control_lock}")" != 0 || \
@@ -171,6 +175,14 @@ if [[ -z "${DESTDIR}" ]]; then
   fi
 fi
 
+if [[ -n "${DESTDIR}" ]]; then
+  install -d -m 0700 "${control_dir}/long-once-sandbox"
+else
+  source "${PROJECT_DIR}/scripts/ubuntu/lock-long-writer.sh"
+  ensure_long_anchor_dir "${control_dir}" "${SERVICE_USER}" \
+    "${CONFIG_DIR}/sandbox-long-once.owner" "${STATE_DIR}/long-once/sandbox.sqlite3"
+fi
+
 if command -v rsync >/dev/null 2>&1; then
   rsync -a --delete \
     --exclude '.git' --exclude '.venv' --exclude '.env' --exclude 'artifacts/*' \
@@ -200,6 +212,10 @@ install -m 0644 "${PROJECT_DIR}/deploy/ubuntu/moex-tinvest-shadow.service" \
   "$(root_path /etc/systemd/system/moex-tinvest-shadow.service)"
 install -m 0644 "${PROJECT_DIR}/deploy/ubuntu/moex-tinvest-shadow.timer" \
   "$(root_path /etc/systemd/system/moex-tinvest-shadow.timer)"
+for suffix in service timer; do
+  unit="moex-tinvest-long-once-sandbox.${suffix}"
+  install -m 0644 "${PROJECT_DIR}/deploy/ubuntu/${unit}" "$(root_path /etc/systemd/system/${unit})"
+done
 install -m 0644 "${PROJECT_DIR}/deploy/ubuntu/moex-tinvest-prod-long-observer.service" \
   "$(root_path /etc/systemd/system/moex-tinvest-prod-long-observer.service)"
 install -m 0644 "${PROJECT_DIR}/deploy/ubuntu/moex-tinvest-prod-long-observer.timer" \

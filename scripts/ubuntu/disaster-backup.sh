@@ -13,6 +13,8 @@ if [[ "${EUID}" -ne 0 ]]; then
   printf 'Run as root (sudo).\n' >&2
   exit 2
 fi
+source "${script_dir}/lock-long-writer.sh"
+lock_long_writer
 
 output_dir="${BACKUP_DIR}"
 checkout=""

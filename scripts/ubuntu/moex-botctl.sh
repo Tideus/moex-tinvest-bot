@@ -446,6 +446,7 @@ start_bot() {
 timers_are_stopped() {
   local unit=""
   for unit in \
+    moex-tinvest-long-once-sandbox.timer \
     moex-tinvest-calendar.timer \
     moex-tinvest-shadow.timer \
     moex-tinvest-health.timer \
@@ -467,6 +468,15 @@ timers_are_stopped() {
 stop_bot() {
   FAILURES=0
   heading "Остановка расписания"
+  if systemctl cat moex-tinvest-long-once-sandbox.timer >/dev/null 2>&1; then
+    systemctl disable --now moex-tinvest-long-once-sandbox.timer || return 2
+    local long_phase
+    long_phase="$(systemctl show moex-tinvest-long-once-sandbox.service -p ActiveState --value)"
+    if [[ "${long_phase}" != inactive && "${long_phase}" != failed ]]; then
+      printf 'WARNING: sandbox LONG attempt in flight; do not interrupt protective handling.\n' >&2
+      FAILURES=$((FAILURES + 1))
+    fi
+  fi
   check "Таймеры отключены" "проверьте systemctl status moex-tinvest-*.timer" \
     systemctl disable --now \
       moex-tinvest-calendar.timer \

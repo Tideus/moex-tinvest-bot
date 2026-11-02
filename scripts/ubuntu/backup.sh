@@ -37,6 +37,19 @@ if [[ -e "${control_lock}" || -L "${control_lock}" ]]; then
       printf 'FAIL: production session active; backup not created.\n' >&2; exit 2
     fi
   fi
+  # The independently root-owned directory inode excludes ALL LONG mutations,
+  # including a manual stop recovery. Reuse an updater's open file description.
+  long_dir="${control_lock%/*}"
+  if [[ ! -e /proc/self/fd/7 || ! "${long_dir}" -ef /proc/self/fd/7 ]]; then
+    exec 7<"${long_dir}"
+  fi
+  if ! flock -xn 7; then
+    printf 'FAIL: sandbox long writer active; backup not created.\n' >&2; exit 2
+  fi
+elif [[ -e "${STATE_DIR}/long-once" || -L "${STATE_DIR}/long-once" || \
+        -e /etc/moex-tinvest-bot/sandbox-long-once.owner || -L /etc/moex-tinvest-bot/sandbox-long-once.owner || \
+        -e "${control_lock%/*}" || -L "${control_lock%/*}" ]]; then
+  printf 'FAIL: missing trusted production lock; no safe coordinated backup.\n' >&2; exit 2
 fi
 
 mkdir -p "${BACKUP_DIR}"

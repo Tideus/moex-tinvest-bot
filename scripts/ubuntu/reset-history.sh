@@ -36,6 +36,13 @@ if [[ "${ALLOW_NON_ROOT_TEST}" != "1" ]]; then
     exit 2
   fi
 fi
+for evidence in /etc/moex-tinvest-bot/sandbox-long-once.owner "${STATE_DIR}/long-once/sandbox.sqlite3" \
+  /var/lib/moex-tinvest-control/long-once-sandbox/entry.claim; do
+  if [[ -e "${evidence}" || -L "${evidence}" ]]; then
+    printf 'FAIL: sandbox long enrollment present; refusing history reset\n' >&2
+    exit 2
+  fi
+done
 if [[ ! -r "${ENV_FILE}" ]]; then
   printf 'FAIL: secrets file is not readable: %s\n' "${ENV_FILE}" >&2
   exit 2

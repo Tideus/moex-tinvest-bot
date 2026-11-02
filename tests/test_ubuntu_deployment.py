@@ -151,6 +151,8 @@ def test_all_deployment_shell_scripts_use_strict_mode() -> None:
         "install-kuma-local.sh",
         "certbot-reload-nginx.sh",
         "run-prod-long-observer.sh",
+        "run-long-once-sandbox.sh",
+        "lock-long-writer.sh",
     }
     for script in scripts:
         text = script.read_text(encoding="utf-8")

@@ -56,6 +56,8 @@ if ! flock -n 9; then
   exit 2
 fi
 
+source "${PROJECT_DIR}/scripts/ubuntu/lock-long-writer.sh"
+lock_long_writer
 if [[ -x "${APP_DIR}/scripts/ubuntu/backup.sh" ]]; then
   "${APP_DIR}/scripts/ubuntu/backup.sh"
 fi
@@ -76,6 +78,9 @@ if [[ -n "$(git -C "${PROJECT_DIR}" ls-files --others --exclude-standard)" ]]; t
   printf 'FAIL: untracked source files; review before deployment.\n' >&2
   exit 2
 fi
+
+ensure_long_anchor_dir "${CONTROL_DIR}" "${SERVICE_USER}" \
+  "${CONFIG_DIR}/sandbox-long-once.owner" "${STATE_DIR}/long-once/sandbox.sqlite3"
 
 restart_timers() {
   if [[ "${WAS_CALENDAR_ACTIVE:-0}" -eq 1 ]]; then
@@ -107,6 +112,8 @@ WAS_INTRADAY_ACTIVE=0
 WAS_MAINTENANCE_ACTIVE=0
 WAS_PROD_OBSERVER_ACTIVE=0
 WAS_CALENDAR_ACTIVE=0
+WAS_LONG_ONCE_ACTIVE=0
+systemctl is-active --quiet moex-tinvest-long-once-sandbox.timer && WAS_LONG_ONCE_ACTIVE=1
 systemctl is-active --quiet moex-tinvest-calendar.timer && WAS_CALENDAR_ACTIVE=1
 systemctl is-active --quiet moex-tinvest-shadow.timer && WAS_SHADOW_ACTIVE=1
 systemctl is-active --quiet moex-tinvest-health.timer && WAS_HEALTH_ACTIVE=1
@@ -132,6 +139,7 @@ stop_timer_if_installed moex-tinvest-daily-report.timer
 stop_timer_if_installed moex-tinvest-intraday.timer
 stop_timer_if_installed moex-tinvest-maintenance.timer
 stop_timer_if_installed moex-tinvest-prod-long-observer.timer
+stop_timer_if_installed moex-tinvest-long-once-sandbox.timer
 rsync -a --delete \
   --exclude '.git' --exclude '.venv' --exclude '.env' --exclude 'artifacts/*' \
   --exclude 'logs/*' --exclude 'data' --exclude 'work' \
@@ -184,5 +192,9 @@ install -m 0755 "${PROJECT_DIR}/scripts/ubuntu/moex-botctl.sh" \
 systemctl daemon-reload
 restart_timers
 trap - EXIT
+if [[ "${WAS_LONG_ONCE_ACTIVE}" == 1 ]]; then
+  # Resume only an already-active schedule and only after successful verification.
+  systemctl start moex-tinvest-long-once-sandbox.timer
+fi
 # Deployment is not a trading signal: never force a sandbox or live cycle here.
 printf 'Update complete.\n'

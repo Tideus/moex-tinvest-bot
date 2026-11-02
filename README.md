@@ -4,6 +4,11 @@ Safety-first Python 3.12 harness for research, deterministic replay, shadow oper
 explicitly gated execution on T-Invest sandbox accounts. A separately gated manual production
 canary executor is available in 0.7.0rc2, disabled by default; autonomous PROD trading is not enabled.
 
+0.7.0rc7: [одноразовый LONG на рабочем sandbox-счёте](docs/SANDBOX_LONG_ONCE_RU.md).
+По первому допустимому сигналу — одна попытка купить один лот и подтвердить
+нативный стоп. Intraday остаётся на другом счёте; на ИИС предусмотрен отдельный
+связанный предпросмотр, а не автоматическое переключение из песочницы.
+
 Verification: [0.7.0rc2 tests and monitoring](docs/VERIFICATION_2026-10-31_RU.md).
 
 0.7.0rc3 adds a separate, disabled-by-default
