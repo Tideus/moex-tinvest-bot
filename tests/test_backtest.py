@@ -142,6 +142,7 @@ def test_backtest_uses_next_session_costs_and_writes_comparison_bundle(tmp_path:
     )
     assessment = assess_promotion(base, stress, gates, OperationalEvidence())
     assert not assessment.passed
+    assert not next(c for c in assessment.checks if c.name == "full_strategy_inputs").passed
     write_backtest_bundle(
         output_dir=tmp_path,
         base=base,

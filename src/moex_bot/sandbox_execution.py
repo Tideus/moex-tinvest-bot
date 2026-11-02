@@ -8,6 +8,7 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Protocol
 
+from .account_profiles import AccountPurpose
 from .domain import Instrument, OrderIntent, OrderRecord, OrderStatus, Side
 from .execution_journal import ExecutionJournal
 from .runtime_config import RuntimeConfig
@@ -37,6 +38,7 @@ def execute_shadow_plan(
     as_of: datetime,
     order_ttl_seconds: int = 120,
     journal_path: Path,
+    profile: AccountPurpose = AccountPurpose.LONG,
 ) -> SandboxExecutionResult:
     if as_of.tzinfo is None:
         raise ValueError("as_of must be timezone-aware")
@@ -72,6 +74,12 @@ def execute_shadow_plan(
     prefix = next((item for item in ("shadow-", "intraday-") if run_id.startswith(item)), None)
     if prefix is None:
         raise ValueError("shadow artifact has an invalid run id")
+    if prefix != ("shadow-" if profile is AccountPurpose.LONG else "intraday-"):
+        raise ValueError("plan strategy does not match the target sandbox profile")
+    source = raw if profile is AccountPurpose.LONG else raw.get("analysis_input")
+    planned = source.get("portfolio_input") if isinstance(source, Mapping) else None
+    if not isinstance(planned, Mapping) or planned.get("account_id") != adapter.account_id:
+        raise ValueError("plan portfolio does not identify the target sandbox account")
     run_at = datetime.fromisoformat(run_id.removeprefix(prefix))
     if run_at.tzinfo is None or as_of - run_at > timedelta(minutes=30):
         raise ValueError("shadow execution plan is stale")

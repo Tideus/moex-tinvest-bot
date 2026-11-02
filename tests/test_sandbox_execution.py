@@ -5,6 +5,7 @@ from uuid import uuid4
 
 import pytest
 
+from moex_bot.account_profiles import AccountPurpose
 from moex_bot.domain import OrderRecord, OrderStatus
 from moex_bot.runtime_config import RuntimeConfig, RuntimeSchedule
 from moex_bot.sandbox_execution import execute_shadow_plan, reconcile_execution_journal
@@ -52,6 +53,7 @@ def _write_inputs(
         json.dumps(
             {
                 "run_id": "shadow-2026-08-18T10:00:00+00:00",
+                "portfolio_input": {"account_id": "sandbox-1"},
                 "quality": {"passed": True},
                 "orders": [
                     {
@@ -249,6 +251,7 @@ def test_partial_flat_is_closed_with_new_uuid_after_terminal_and_fresh_snapshot(
     account = json.loads(portfolio.read_text())
     now = datetime.now(UTC)
     plan["run_id"] = f"intraday-{now.isoformat()}"
+    plan["analysis_input"] = {"portfolio_input": {"account_id": FakeAdapter.account_id}}
     raw = plan["orders"][0]["intent"]
     raw.update(side="sell", lots=10, notional="3000", rationale="intraday mandatory flat")
     account.update(observed_at=now.isoformat(), snapshot_started_at=now.isoformat(),
@@ -268,6 +271,7 @@ def test_partial_flat_is_closed_with_new_uuid_after_terminal_and_fresh_snapshot(
         runtime=RuntimeConfig(TInvestEnvironment.SANDBOX, RuntimeSchedule(), True, 3),
         as_of=now,
         adapter=PartialCancel(),
+        profile=AccountPurpose.INTRADAY,
     )
     first = execute_shadow_plan(**kwargs)
     first_id = first.submitted[0].intent.order_request_id

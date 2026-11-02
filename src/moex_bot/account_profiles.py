@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass
 from decimal import Decimal
 from enum import StrEnum
@@ -46,6 +47,24 @@ class AccountRegistry:
             if profile.profile_id == profile_id:
                 return profile
         raise KeyError(profile_id)
+
+    def sandbox_bindings(
+        self, env: Mapping[str, str], *, bootstrap: bool = False
+    ) -> dict[AccountPurpose, str]:
+        ids = {p.purpose: env.get(p.account_id_env, "").strip() for p in self.profiles}
+        legacy = env.get("T_INVEST_SANDBOX_ACCOUNT_ID", "").strip()
+        long_id = ids[AccountPurpose.LONG]
+        if long_id and legacy and long_id != legacy:
+            raise ValueError("long sandbox account ids disagree; reconcile the legacy alias")
+        if bootstrap:
+            ids[AccountPurpose.LONG] = long_id or legacy
+        elif not all(ids.values()):
+            raise ValueError("both dedicated sandbox account IDs are required")
+        if ids[AccountPurpose.LONG] and (
+            ids[AccountPurpose.LONG].casefold() == ids[AccountPurpose.INTRADAY].casefold()
+        ):
+            raise ValueError("long and intraday require different broker account IDs")
+        return ids
 
 
 def load_account_registry(path: Path) -> AccountRegistry:
@@ -109,6 +128,8 @@ def _validate(registry: AccountRegistry) -> None:
     ):
         raise ValueError("account_id_env values must be valid and unique env names")
     for profile in registry.profiles:
+        if profile.profile_id != profile.purpose.value:
+            raise ValueError("profile id must match its trading purpose")
         if profile.environment is not TInvestEnvironment.SANDBOX:
             raise ValueError("multi-account rollout is sandbox-only")
         if not profile.target_balance_rub.is_finite() or profile.target_balance_rub <= 0:

@@ -8,8 +8,10 @@ from decimal import Decimal
 from pathlib import Path
 
 from .adapters import DryRunExecutionAdapter
+from .backtest_channel import ChannelReplayHarness
+from .backtest_fills import BacktestTrade, OrderOutcome, Window, WindowBook, match_session
 from .config import BotConfig
-from .domain import Instrument, MarketObservation, OrderRecord, PortfolioSnapshot, Position, Side
+from .domain import Instrument, MarketObservation, OrderRecord, PortfolioSnapshot, Position
 from .harness import TradingHarness
 from .integrations.moexalgo_data import HistoricalCandle
 from .shadow import UniverseEntry
@@ -30,19 +32,20 @@ class BacktestSettings:
     survivorship_safe: bool
     dividends_included: bool
     short_financing_rate_annual: Decimal = Decimal("0")
+    max_volume_participation: Decimal = Decimal("0.01")
+    arrival_delay_seconds: int = 0
 
-
-@dataclass(frozen=True, slots=True)
-class BacktestTrade:
-    trading_date: date
-    secid: str
-    side: str
-    lots: int
-    units: int
-    signal_limit: Decimal
-    fill_price: Decimal
-    gross: Decimal
-    commission: Decimal
+    def __post_init__(self) -> None:
+        if (
+            not self.max_volume_participation.is_finite()
+            or not 0 < self.max_volume_participation <= 1
+        ):
+            raise ValueError("max_volume_participation must be in (0, 1]")
+        if (
+            type(self.arrival_delay_seconds) is not int
+            or not 0 <= self.arrival_delay_seconds <= 86400
+        ):
+            raise ValueError("arrival_delay_seconds must be an integer in [0, 86400]")
 
 
 @dataclass(frozen=True, slots=True)
@@ -69,6 +72,9 @@ class BacktestMetrics:
     turnover: Decimal
     commissions: Decimal
     short_financing: Decimal
+    partial_orders: int = 0
+    expired_lots: int = 0
+    orders_with_fills: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -80,6 +86,10 @@ class BacktestResult:
     equity_curve: tuple[EquityPoint, ...]
     security_pnl: Mapping[str, Decimal]
     evidence_flags: Mapping[str, bool]
+    order_outcomes: tuple[OrderOutcome, ...]
+    execution_data: str
+    pending_at_end: tuple[str, ...]
+    research_strategy: str = "momentum"
 
 
 class _MemoryAudit:
@@ -104,9 +114,9 @@ def load_backtest_settings(path: Path) -> BacktestSettings:
         benchmark_board=str(raw.get("benchmark_board", "SNDX")),
         survivorship_safe=_bool(raw.get("survivorship_safe", False), "survivorship_safe"),
         dividends_included=_bool(raw.get("dividends_included", False), "dividends_included"),
-        short_financing_rate_annual=Decimal(
-            str(raw.get("short_financing_rate_annual", "0"))
-        ),
+        max_volume_participation=Decimal(str(raw.get("max_volume_participation", "0.01"))),
+        arrival_delay_seconds=raw.get("arrival_delay_seconds", 0),
+        short_financing_rate_annual=Decimal(str(raw.get("short_financing_rate_annual", "0"))),
     )
     if not settings.start_date < settings.end_date:
         raise ValueError("backtest start_date must be before end_date")
@@ -129,6 +139,14 @@ def load_backtest_settings(path: Path) -> BacktestSettings:
     return settings
 
 
+def validate_daily_inputs(config: BotConfig) -> None:
+    if config.strategy.flow_confirmation_enabled:
+        raise ValueError(
+            "historical flow is required but this engine only has daily candles; "
+            "use --candle-only for a research baseline, not full-strategy evidence"
+        )
+
+
 def run_backtest(
     *,
     bot_config: BotConfig,
@@ -137,8 +155,16 @@ def run_backtest(
     candles: Mapping[str, Sequence[HistoricalCandle]],
     benchmark_candles: Sequence[HistoricalCandle],
     cost_multiplier: Decimal = Decimal("1"),
+    execution_windows: WindowBook | None = None,
+    channel_long: bool = False,
+    first_decision_date: date | None = None,
 ) -> BacktestResult:
-    if cost_multiplier <= 0:
+    validate_daily_inputs(bot_config)
+    if channel_long and (
+        bot_config.strategy.shorts_enabled or bot_config.strategy.candle_period != "1D"
+    ):
+        raise ValueError("channel challenger requires long-only daily bars")
+    if not cost_multiplier.is_finite() or cost_multiplier <= 0:
         raise ValueError("cost multiplier must be positive")
     instruments = {
         item.secid: Instrument(
@@ -156,9 +182,29 @@ def run_backtest(
         for item in universe
     }
     indexed = {
-        secid: {item.trading_date: item for item in series}
-        for secid, series in candles.items()
+        secid: {item.trading_date: item for item in series} for secid, series in candles.items()
     }
+    if execution_windows is not None:
+        for day, symbols in execution_windows.items():
+            for symbol, windows in symbols.items():
+                daily = indexed.get(symbol, {}).get(day)
+                if daily is None:
+                    raise ValueError("execution window without matching daily candle")
+                end = -1
+                volume = Decimal(0)
+                for window in windows:
+                    c = window.candle
+                    if (
+                        window.start < end
+                        or c.trading_date != day
+                        or c.low < daily.low
+                        or c.high > daily.high
+                    ):
+                        raise ValueError("overlap, date or price mismatch in execution windows")
+                    end = window.end
+                    volume += c.volume
+                if volume > daily.volume:
+                    raise ValueError("execution windows exceed daily volume")
     histories: dict[str, list[HistoricalCandle]] = {secid: [] for secid in instruments}
     dates = sorted(
         {
@@ -174,13 +220,22 @@ def run_backtest(
     pending: tuple[OrderRecord, ...] = ()
     trades: list[BacktestTrade] = []
     points: list[EquityPoint] = []
-    unfilled = 0
+    outcomes: list[OrderOutcome] = []
     started = False
     benchmark_base: Decimal | None = None
     last_benchmark: Decimal | None = None
     last_closes: dict[str, Decimal] = {}
     financing_costs: list[tuple[date, Decimal]] = []
     previous_trading_date: date | None = None
+    harness_config = replace(
+        bot_config, max_data_age_seconds=max(bot_config.max_data_age_seconds, 86400)
+    )
+    adapter = DryRunExecutionAdapter(harness_config.mode)
+    harness = (
+        ChannelReplayHarness(harness_config, adapter, _MemoryAudit(), histories)
+        if channel_long
+        else TradingHarness(harness_config, adapter, _MemoryAudit())
+    )
 
     for trading_date in dates:
         if previous_trading_date is not None:
@@ -201,13 +256,13 @@ def run_backtest(
             cash -= financing
             financing_costs.append((trading_date, financing))
         day_rows = {
-            secid: rows[trading_date]
-            for secid, rows in indexed.items()
-            if trading_date in rows
+            secid: rows[trading_date] for secid, rows in indexed.items() if trading_date in rows
         }
         for secid, row in day_rows.items():
             histories[secid].append(row)
-        cash, positions, filled, missed = _execute_pending(
+        if first_decision_date is not None and trading_date < first_decision_date:
+            continue  # identical warm-up, no holdings, pending orders or P&L before reset
+        cash, positions, filled, evaluated = _execute_pending(
             pending,
             day_rows,
             cash,
@@ -215,9 +270,11 @@ def run_backtest(
             bot_config,
             settings,
             cost_multiplier,
+            day=trading_date,
+            windows=None if execution_windows is None else execution_windows.get(trading_date, {}),
         )
         trades.extend(filled)
-        unfilled += missed
+        outcomes.extend(evaluated)
         last_closes.update({secid: row.close for secid, row in day_rows.items()})
         market = _market_for_date(histories, instruments, bot_config, trading_date)
         if market:
@@ -247,15 +304,7 @@ def run_backtest(
         }
         portfolio = PortfolioSnapshot(cash, portfolio_positions, source="backtest")
         as_of = datetime.combine(trading_date, datetime.min.time(), tzinfo=UTC)
-        harness_config = replace(
-            bot_config,
-            max_data_age_seconds=max(bot_config.max_data_age_seconds, 86400),
-        )
-        result = TradingHarness(
-            harness_config,
-            DryRunExecutionAdapter(harness_config.mode),
-            _MemoryAudit(),
-        ).run(
+        result = harness.run(
             run_id=f"backtest-{trading_date.isoformat()}",
             as_of=as_of,
             market=market,
@@ -267,9 +316,7 @@ def run_backtest(
 
     if len(points) < 2:
         raise ValueError("backtest produced fewer than two equity points")
-    metrics = _metrics(
-        tuple(points), tuple(trades), unfilled, tuple(financing_costs)
-    )
+    metrics = _metrics(tuple(points), tuple(trades), outcomes, tuple(financing_costs))
     oos_points = tuple(item for item in points if item.trading_date >= settings.oos_start_date)
     if len(oos_points) < 2:
         raise ValueError("backtest produced fewer than two OOS equity points")
@@ -277,7 +324,7 @@ def run_backtest(
     oos_metrics = _metrics(
         oos_points,
         oos_trades,
-        0,
+        tuple(item for item in outcomes if item.trading_date >= settings.oos_start_date),
         tuple(item for item in financing_costs if item[0] >= settings.oos_start_date),
     )
     security_pnl = _security_pnl(trades, positions, last_closes, instruments)
@@ -288,7 +335,12 @@ def run_backtest(
         trades=tuple(trades),
         equity_curve=tuple(points),
         security_pnl=security_pnl,
+        research_strategy="channel_20_10" if channel_long else "momentum",
+        order_outcomes=tuple(outcomes),
+        execution_data="daily_ohlcv" if execution_windows is None else "subsession_ohlcv",
+        pending_at_end=tuple(record.intent.order_request_id for record in pending),
         evidence_flags={
+            "full_strategy_inputs": False,
             "survivorship_safe": settings.survivorship_safe,
             "dividends_included": settings.dividends_included,
             "next_session_execution": True,
@@ -319,9 +371,7 @@ def _market_for_date(
             (price / closes[-(window + 1)] - 1 for window in strategy.momentum_windows),
             Decimal("0"),
         ) / Decimal(len(strategy.momentum_windows))
-        trend = sum(closes[-strategy.trend_window :], Decimal("0")) / Decimal(
-            strategy.trend_window
-        )
+        trend = sum(closes[-strategy.trend_window :], Decimal("0")) / Decimal(strategy.trend_window)
         volatility_closes = closes[-(strategy.volatility_window + 1) :]
         returns = [
             volatility_closes[index] / volatility_closes[index - 1] - 1
@@ -352,86 +402,30 @@ def _execute_pending(
     config: BotConfig,
     settings: BacktestSettings,
     cost_multiplier: Decimal,
-) -> tuple[Decimal, dict[str, int], tuple[BacktestTrade, ...], int]:
-    next_positions = dict(positions)
-    result: list[BacktestTrade] = []
-    missed = 0
-    rate = (
-        settings.half_spread_bps + settings.slippage_bps
-    ) / Decimal("10000") * cost_multiplier
-    commission_rate = settings.commission_rate * cost_multiplier
-    for record in pending:
-        intent = record.intent
-        candle = rows.get(intent.instrument.secid)
-        if candle is None:
-            missed += 1
-            continue
-        if intent.side is Side.BUY:
-            if candle.open <= intent.limit_price:
-                reference = candle.open
-            elif candle.low <= intent.limit_price:
-                reference = intent.limit_price
-            else:
-                missed += 1
-                continue
-            fill_price = reference * (Decimal("1") + rate)
-        else:
-            if candle.open >= intent.limit_price:
-                reference = candle.open
-            elif candle.high >= intent.limit_price:
-                reference = intent.limit_price
-            else:
-                missed += 1
-                continue
-            fill_price = reference * (Decimal("1") - rate)
-        units = intent.lots * intent.instrument.lot_size
-        gross = fill_price * units
-        commission = gross * commission_rate
-        current_lots = next_positions.get(intent.instrument.secid, 0)
-        if intent.side is Side.BUY:
-            required = gross + commission
-            resulting_lots = current_lots + intent.lots
-            reducing_short = current_lots < 0 and abs(resulting_lots) < abs(current_lots)
-            reserve = (
-                Decimal("0")
-                if reducing_short
-                else settings.initial_cash * config.min_cash_reserve_weight
-            )
-            if required > max(Decimal("0"), cash - reserve):
-                missed += 1
-                continue
-            cash -= required
-            if resulting_lots:
-                next_positions[intent.instrument.secid] = resulting_lots
-            else:
-                next_positions.pop(intent.instrument.secid, None)
-        else:
-            cash += gross - commission
-            remaining = current_lots - intent.lots
-            if remaining:
-                next_positions[intent.instrument.secid] = remaining
-            else:
-                next_positions.pop(intent.instrument.secid, None)
-        result.append(
-            BacktestTrade(
-                candle.trading_date,
-                intent.instrument.secid,
-                intent.side.value,
-                intent.lots,
-                units,
-                intent.limit_price,
-                fill_price,
-                gross,
-                commission,
-            )
-        )
-    return cash, next_positions, tuple(result), missed
+    *,
+    day: date,
+    windows: Mapping[str, Sequence[Window]] | None = None,
+) -> tuple[Decimal, dict[str, int], tuple[BacktestTrade, ...], tuple[OrderOutcome, ...]]:
+    if windows is None:
+        windows = {k: (Window(0, 86400, c),) for k, c in rows.items()}
+    return match_session(
+        day,
+        pending,
+        windows,
+        cash,
+        positions,
+        reserve=settings.initial_cash * config.min_cash_reserve_weight,
+        impact=(settings.half_spread_bps + settings.slippage_bps) * cost_multiplier / 10000,
+        commission=settings.commission_rate * cost_multiplier,
+        participation=settings.max_volume_participation,
+        latency=settings.arrival_delay_seconds,
+    )
 
 
 def _metrics(
     points: Sequence[EquityPoint],
     trades: Sequence[BacktestTrade],
-    unfilled: int,
+    outcomes: Sequence[OrderOutcome],
     financing_costs: Sequence[tuple[date, Decimal]],
 ) -> BacktestMetrics:
     start, end = points[0], points[-1]
@@ -446,9 +440,7 @@ def _metrics(
         for index in range(1, len(points))
     ]
     mean = sum(returns, Decimal("0")) / Decimal(len(returns))
-    variance = sum(((item - mean) ** 2 for item in returns), Decimal("0")) / Decimal(
-        len(returns)
-    )
+    variance = sum(((item - mean) ** 2 for item in returns), Decimal("0")) / Decimal(len(returns))
     volatility = variance.sqrt()
     sharpe = Decimal("0") if volatility == 0 else mean / volatility * Decimal(252).sqrt()
     peak = Decimal("0")
@@ -456,9 +448,7 @@ def _metrics(
     for point in points:
         peak = max(peak, point.strategy_equity)
         if peak > 0:
-            max_drawdown = max(
-                max_drawdown, (peak - point.strategy_equity) / peak * 100
-            )
+            max_drawdown = max(max_drawdown, (peak - point.strategy_equity) / peak * 100)
     turnover = sum((item.gross for item in trades), Decimal("0"))
     commissions = sum((item.commission for item in trades), Decimal("0"))
     short_financing = sum((item[1] for item in financing_costs), Decimal("0"))
@@ -467,7 +457,7 @@ def _metrics(
         end.trading_date,
         len(points),
         len(trades),
-        unfilled,
+        sum(item.status == "expired" for item in outcomes),
         start.strategy_equity,
         end.strategy_equity,
         strategy_return,
@@ -478,6 +468,9 @@ def _metrics(
         turnover,
         commissions,
         short_financing,
+        sum(item.status == "partial_expired" for item in outcomes),
+        sum(item.expired_lots for item in outcomes),
+        sum(item.filled_lots > 0 for item in outcomes),
     )
 
 
@@ -494,9 +487,10 @@ def _security_pnl(
         pnl[trade.secid] -= trade.commission
     for secid, lots in positions.items():
         if secid in last_closes:
-            pnl[secid] = pnl.get(secid, Decimal("0")) + Decimal(
-                lots * instruments[secid].lot_size
-            ) * last_closes[secid]
+            pnl[secid] = (
+                pnl.get(secid, Decimal("0"))
+                + Decimal(lots * instruments[secid].lot_size) * last_closes[secid]
+            )
     return dict(sorted(pnl.items()))
 
 

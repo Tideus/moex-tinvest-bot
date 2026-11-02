@@ -5,7 +5,7 @@ import json
 import os
 import sqlite3
 import subprocess
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from datetime import UTC, date, datetime, time, timedelta
 from decimal import Decimal
 from importlib import import_module
@@ -15,7 +15,8 @@ from zoneinfo import ZoneInfo
 
 from .account_profiles import AccountPurpose, load_account_registry
 from .adapters import DryRunExecutionAdapter, JsonlAuditLog
-from .backtest import load_backtest_settings, run_backtest
+from .backtest import load_backtest_settings, run_backtest, validate_daily_inputs
+from .backtest_fills import load_execution_windows
 from .backtest_reporting import (
     OperationalEvidence,
     assess_promotion,
@@ -424,6 +425,16 @@ def sandbox_bootstrap(
     return 0
 
 
+def sandbox_check_bindings(accounts_path: Path) -> int:
+    try:
+        load_account_registry(accounts_path).sandbox_bindings(os.environ)
+    except (OSError, ValueError) as exc:
+        print(f"FAIL: sandbox account isolation: {exc}")
+        return 2
+    print("PASS: long and intraday have distinct sandbox account IDs")
+    return 0
+
+
 def sandbox_bootstrap_profiles(
     *,
     env_path: Path,
@@ -434,23 +445,20 @@ def sandbox_bootstrap_profiles(
     """Create/restore both named sandbox accounts and optionally fund configured targets."""
     try:
         registry = load_account_registry(accounts_path)
+        bindings = registry.sandbox_bindings(os.environ, bootstrap=True)
         sandbox = service or TInvestSandboxAccountService.from_environment()
+        resolved = []
         for profile in registry.profiles:
-            profile_configured_id = os.getenv(profile.account_id_env, "").strip()
-            configured_id = profile_configured_id
-            if profile.purpose is AccountPurpose.LONG:
-                legacy_id = os.getenv("T_INVEST_SANDBOX_ACCOUNT_ID", "").strip()
-                if configured_id and legacy_id and configured_id != legacy_id:
-                    raise ValueError(
-                        "long sandbox account ids disagree; reconcile the old account "
-                        "before changing T_INVEST_SANDBOX_LONG_ACCOUNT_ID"
-                    )
-                # Safe migration from the original single-account configuration.
-                configured_id = configured_id or legacy_id
             result = sandbox.ensure_account(
-                configured_id,
+                bindings[profile.purpose],
                 account_name=f"moex-tinvest-bot-{profile.profile_id}",
             )
+            resolved.append((profile, result))
+        returned = [result.account_id.strip().casefold() for _, result in resolved]
+        if not all(returned) or len(set(returned)) != len(returned):
+            raise ValueError("broker did not return two distinct sandbox account IDs; not funded")
+        for profile, result in resolved:
+            profile_configured_id = os.getenv(profile.account_id_env, "").strip()
             if result.account_id != profile_configured_id:
                 upsert_env_value(env_path, profile.account_id_env, result.account_id)
                 os.environ[profile.account_id_env] = result.account_id
@@ -554,7 +562,8 @@ def sandbox_execute(
 ) -> int:
     try:
         runtime = load_runtime_config(runtime_path)
-        profile = load_account_registry(accounts_path).by_id("long")
+        registry = load_account_registry(accounts_path)
+        profile = registry.by_id("long")
         if not profile.order_execution_enabled:
             raise ValueError("long sandbox execution gate is disabled in accounts.json")
         if profile.environment is not TInvestEnvironment.SANDBOX:
@@ -562,11 +571,13 @@ def sandbox_execute(
         if not runtime.sandbox_orders_enabled:
             print("SKIP: sandbox order submission is disabled")
             return 3
+        registry.sandbox_bindings(os.environ)
         adapter = TInvestSandboxExecutionAdapter.from_environment(
             account_id_env=profile.account_id_env
         )
         result = execute_shadow_plan(
             shadow_path=shadow_path,
+            profile=AccountPurpose.LONG,
             portfolio_path=portfolio_path,
             output_path=output_path,
             runtime=runtime,
@@ -872,11 +883,13 @@ def sandbox_journal_prepare(
 
 def sandbox_journal_reconcile(*, accounts_path: Path, profile_id: str, journal_path: Path) -> int:
     try:
-        profile = load_account_registry(accounts_path).by_id(profile_id)
+        registry = load_account_registry(accounts_path)
+        profile = registry.by_id(profile_id)
         if profile.environment is not TInvestEnvironment.SANDBOX:
             raise ValueError("journal reconciliation is sandbox-only")
         if not journal_path.is_file():
             raise ValueError("journal missing; restore it instead of creating an empty replacement")
+        registry.sandbox_bindings(os.environ)
         adapter = TInvestSandboxExecutionAdapter.from_environment(
             account_id_env=profile.account_id_env
         )
@@ -896,13 +909,14 @@ def sandbox_reconcile(
     outbox_path: Path | None = None,
 ) -> int:
     try:
-        profile = load_account_registry(accounts_path).by_id(profile_id)
+        registry = load_account_registry(accounts_path)
+        profile = registry.by_id(profile_id)
         if profile.environment is not TInvestEnvironment.SANDBOX:
             raise ValueError("reconciliation is sandbox-only")
         token = os.getenv("T_INVEST_SANDBOX_TOKEN", "").strip()
-        account_id = os.getenv(profile.account_id_env, "").strip()
-        if not token or not account_id:
-            raise ValueError(f"{profile_id} sandbox token/account id are required")
+        if not token:
+            raise ValueError(f"{profile_id} sandbox token required")
+        account_id = registry.sandbox_bindings(os.environ)[profile.purpose]
         service = TInvestSandboxAccountService(token, transport=UrlLibJsonTransport())
         cancelled = service.reconcile_cancel_active_orders(account_id)
         if cancelled and outbox_path is not None:
@@ -972,6 +986,7 @@ def intraday_plan(
             output_path,
             analysis_input={
                 "as_of": as_of,
+                "decision_ready_at": datetime.now(UTC),
                 "config_snapshot": asdict(config),
                 "portfolio_input": raw_portfolio,
                 "supercandles": [asdict(bar) for bar in bars],
@@ -1016,12 +1031,14 @@ def intraday_sandbox_execute(
     as_of: datetime,
 ) -> int:
     try:
-        profile = load_account_registry(accounts_path).by_id("intraday")
+        registry = load_account_registry(accounts_path)
+        profile = registry.by_id("intraday")
         config = load_intraday_config(config_path)
         if not profile.order_execution_enabled or config.execution_stage != "sandbox":
             raise ValueError("intraday sandbox execution gate is disabled")
         if profile.environment is not TInvestEnvironment.SANDBOX:
             raise ValueError("intraday execution is sandbox-only")
+        registry.sandbox_bindings(os.environ)
         adapter = TInvestSandboxExecutionAdapter.from_environment(
             account_id_env=profile.account_id_env
         )
@@ -1033,6 +1050,7 @@ def intraday_sandbox_execute(
         )
         result = execute_shadow_plan(
             shadow_path=plan_path,
+            profile=AccountPurpose.INTRADAY,
             portfolio_path=portfolio_path,
             output_path=output_path,
             runtime=runtime,
@@ -1540,9 +1558,19 @@ def historical_backtest(
     sandbox_weeks: int,
     reconciled_orders: int,
     unresolved_orders: int,
+    candle_only: bool = False,
+    execution_bars_path: Path | None = None,
 ) -> int:
     try:
         bot_config = load_config(strategy_config_path)
+        if candle_only:
+            bot_config = replace(
+                bot_config, strategy=replace(bot_config.strategy, flow_confirmation_enabled=False)
+            )
+        validate_daily_inputs(bot_config)
+        windows = (
+            None if execution_bars_path is None else load_execution_windows(execution_bars_path)
+        )
         settings = load_backtest_settings(backtest_config_path)
         gates = load_promotion_gates(promotion_gates_path)
         universe = load_universe(universe_path)
@@ -1572,6 +1600,11 @@ def historical_backtest(
             json.dumps(
                 {
                     "source": "MOEX via moexalgo Ticker.candles(period='1D')",
+                    "execution_windows": None if windows is None else {
+                        day.isoformat(): {symbol: [asdict(w) for w in blocks]
+                                          for symbol, blocks in symbols.items()}
+                        for day, symbols in windows.items()
+                    },
                     "fetched_at": datetime.now(UTC).isoformat(),
                     "requested_period": {
                         "start": settings.start_date.isoformat(),
@@ -1595,6 +1628,7 @@ def historical_backtest(
             encoding="utf-8",
         )
         base = run_backtest(
+            execution_windows=windows,
             bot_config=bot_config,
             settings=settings,
             universe=universe,
@@ -1602,6 +1636,7 @@ def historical_backtest(
             benchmark_candles=benchmark,
         )
         stress = run_backtest(
+            execution_windows=windows,
             bot_config=bot_config,
             settings=settings,
             universe=universe,
@@ -1625,7 +1660,7 @@ def historical_backtest(
         print(f"FAIL: historical backtest: {exc}")
         return 2
     print(
-        f"PASS: backtest OOS={base.oos_metrics.return_pct:+.2f}% "
+        f"PASS: candle-only backtest OOS={base.oos_metrics.return_pct:+.2f}% "
         f"benchmark={base.oos_metrics.benchmark_return_pct} "
         f"promotion={'PASS' if assessment.passed else 'BLOCKED'}"
     )
@@ -1763,6 +1798,8 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Only verify the account and show balance",
     )
+    bindings_parser = sub.add_parser("sandbox-check-bindings", help="verify separate accounts")
+    bindings_parser.add_argument("--accounts", type=Path, default=Path("config/accounts.json"))
     sandbox_profiles_parser = sub.add_parser(
         "sandbox-bootstrap-profiles",
         help="Verify/create sandbox accounts declared in accounts.json",
@@ -2058,6 +2095,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--output-dir", type=Path, default=Path("artifacts/historical-backtest")
     )
     backtest_parser.add_argument("--require-token", action="store_true")
+    backtest_parser.add_argument("--execution-bars", type=Path,
+                                 help="Optional sub-session OHLCV JSONL for DAY limit fills")
+    backtest_parser.add_argument(
+        "--candle-only", action="store_true",
+        help="Explicit daily-candle research baseline, without flow; not promotion evidence",
+    )
     backtest_parser.add_argument("--sandbox-weeks", type=int, default=0)
     backtest_parser.add_argument("--reconciled-orders", type=int, default=0)
     backtest_parser.add_argument("--unresolved-orders", type=int, default=0)
@@ -2136,6 +2179,8 @@ def main() -> int:
             top_up=args.top_up,
             no_prompt=args.no_prompt,
         )
+    if args.command == "sandbox-check-bindings":
+        return sandbox_check_bindings(args.accounts)
     if args.command == "sandbox-bootstrap-profiles":
         return sandbox_bootstrap_profiles(
             env_path=args.env_file,
@@ -2351,6 +2396,8 @@ def main() -> int:
             sandbox_weeks=args.sandbox_weeks,
             reconciled_orders=args.reconciled_orders,
             unresolved_orders=args.unresolved_orders,
+            candle_only=args.candle_only,
+            execution_bars_path=args.execution_bars,
         )
     if args.command == "outbox-health":
         as_of = args.as_of or datetime.now(UTC)

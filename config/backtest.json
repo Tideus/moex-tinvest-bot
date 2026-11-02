@@ -4,6 +4,8 @@
   "oos_start_date": "2026-01-01",
   "initial_cash": "300000",
   "commission_rate": "0.0005",
+  "max_volume_participation": "0.01",
+  "arrival_delay_seconds": 0,
   "half_spread_bps": "5",
   "slippage_bps": "5",
   "short_financing_rate_annual": "0.20",

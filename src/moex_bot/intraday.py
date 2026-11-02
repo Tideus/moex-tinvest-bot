@@ -3,7 +3,8 @@ from __future__ import annotations
 import json
 import sqlite3
 from collections import Counter
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
+from contextlib import closing, contextmanager
 from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta
 from decimal import ROUND_HALF_UP, Decimal
@@ -36,6 +37,15 @@ class IntradaySignal:
 
 
 @dataclass(frozen=True, slots=True)
+class SignalDecision:
+    secid: str
+    status: str
+    reasons: tuple[str, ...]
+    candidate: IntradaySignal | None = None
+    order_request_id: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class IntradayPlan:
     run_id: str
     quality_passed: bool
@@ -45,10 +55,9 @@ class IntradayPlan:
     notes: tuple[str, ...]
     quality_errors: tuple[str, ...] = ()
     signal_diagnostics: Mapping[str, int] | None = None
+    decisions: tuple[SignalDecision, ...] = ()
 
-    def write(
-        self, path: Path, *, analysis_input: dict[str, object] | None = None
-    ) -> None:
+    def write(self, path: Path, *, analysis_input: dict[str, object] | None = None) -> None:
         payload = {
             "run_id": self.run_id,
             "quality": {
@@ -57,11 +66,24 @@ class IntradayPlan:
             },
             "phase": self.phase,
             "signals": [asdict(item) for item in self.signals],
-            "orders": [
-                {"status": "validated", "intent": asdict(item)} for item in self.orders
-            ],
+            "orders": [{"status": "validated", "intent": asdict(item)} for item in self.orders],
             "notes": list(self.notes),
             "signal_diagnostics": dict(self.signal_diagnostics or {}),
+            "signal_journal": {
+                "version": 1,
+                "strategy_id": "intraday_momentum_v1",
+                "decisions": [asdict(item) for item in self.decisions],
+                "exit_intents": [
+                    {
+                        "secid": o.instrument.secid,
+                        "side": o.side.value,
+                        "reason": o.rationale,
+                        "order_request_id": o.order_request_id,
+                    }
+                    for o in self.orders
+                    if self.phase in {"force_flat", "loss_limit_flat", "position_exit"}
+                ],
+            },
             "analysis_input": analysis_input or {},
         }
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -98,20 +120,17 @@ class IntradayStateStore:
                 );
                 """
             )
-            columns = {
-                str(row[1])
-                for row in conn.execute("PRAGMA table_info(intraday_signals)")
-            }
+            columns = {str(row[1]) for row in conn.execute("PRAGMA table_info(intraday_signals)")}
             if "price" not in columns:
                 conn.execute(
-                    "ALTER TABLE intraday_signals "
-                    "ADD COLUMN price TEXT NOT NULL DEFAULT '0'"
+                    "ALTER TABLE intraday_signals ADD COLUMN price TEXT NOT NULL DEFAULT '0'"
                 )
 
-    def _connect(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self.path, timeout=5)
-        conn.execute("PRAGMA journal_mode=WAL")
-        return conn
+    @contextmanager
+    def _connect(self) -> Iterator[sqlite3.Connection]:
+        with closing(sqlite3.connect(self.path, timeout=5)) as conn, conn:
+            conn.execute("PRAGMA journal_mode=WAL")
+            yield conn
 
     def add(self, bars: tuple[IntradaySuperCandle, ...]) -> None:
         with self._connect() as conn:
@@ -130,8 +149,7 @@ class IntradayStateStore:
     def recent(self, secid: str, limit: int) -> tuple[IntradaySuperCandle, ...]:
         with self._connect() as conn:
             rows = conn.execute(
-                "SELECT payload FROM intraday_bars WHERE secid=? "
-                "ORDER BY observed_at DESC LIMIT ?",
+                "SELECT payload FROM intraday_bars WHERE secid=? ORDER BY observed_at DESC LIMIT ?",
                 (secid, limit),
             ).fetchall()
         return tuple(reversed(tuple(_bar(json.loads(row[0])) for row in rows)))
@@ -152,9 +170,7 @@ class IntradayStateStore:
             )
         return cursor.rowcount == 1
 
-    def latest_signal(
-        self, trade_day: str, secid: str
-    ) -> tuple[datetime, Side, Decimal] | None:
+    def latest_signal(self, trade_day: str, secid: str) -> tuple[datetime, Side, Decimal] | None:
         with self._connect() as conn:
             row = conn.execute(
                 "SELECT observed_at, side, price FROM intraday_signals "
@@ -218,8 +234,11 @@ def build_intraday_plan(
     else:
         phase = "monitor"
 
-    latest_prices = {bar.secid: bar.close for bar in bars
-                     if timedelta(0) <= as_of - bar.observed_at <= timedelta(minutes=15)}
+    latest_prices = {
+        bar.secid: bar.close
+        for bar in bars
+        if timedelta(0) <= as_of - bar.observed_at <= timedelta(minutes=15)
+    }
     broker_prices = _broker_position_prices(portfolio, instruments, positions)
     position_prices = {**broker_prices, **latest_prices}
     if phase in {"force_flat", "loss_limit_flat"}:
@@ -230,13 +249,19 @@ def build_intraday_plan(
                 + ", ".join(missing_prices)
             )
         flat_orders = _flatten_orders(instruments, positions, position_prices, as_of)
-        notes = [
-            "forced flat before overnight" if phase == "force_flat" else "daily loss gate"
-        ]
+        notes = ["forced flat before overnight" if phase == "force_flat" else "daily loss gate"]
         if not bars:
             notes.append("ALGOPACK unavailable; broker valuation used for mandatory exit")
         return IntradayPlan(
-            run_id, True, phase, (), flat_orders, tuple(notes), (), {}
+            run_id,
+            True,
+            phase,
+            (),
+            flat_orders,
+            tuple(notes),
+            (),
+            {},
+            tuple(SignalDecision(s, "not_evaluated", (phase,)) for s in instruments),
         )
     if _integer_value(portfolio.get("open_orders", 0), "open_orders") != 0:
         return IntradayPlan(
@@ -248,6 +273,7 @@ def build_intraday_plan(
             ("active orders not reconciled",),
             ("active sandbox orders remain after reconciliation",),
             {},
+            tuple(SignalDecision(s, "not_evaluated", ("open_orders",)) for s in instruments),
         )
     missing_position_prices = sorted(set(positions) - set(position_prices))
     if missing_position_prices:
@@ -256,24 +282,24 @@ def build_intraday_plan(
             + ", ".join(missing_position_prices)
         )
     gate_counts: Counter[str] = Counter()
-    signals = tuple(
-        sorted(
-            filter(
-                None,
-                (
-                    _signal(
-                        config,
-                        secid,
-                        store.recent(secid, config.history_bars),
-                        as_of,
-                        gate_counts,
-                    )
-                    for secid in instruments
-                ),
-            ),
-            key=lambda item: (-item.score, item.secid),
+    decisions = {}
+    passed = []
+    for secid in instruments:
+        candidate, reasons = evaluate_candidate(
+            config, secid, store.recent(secid, config.history_bars), as_of, gate_counts
         )
-    )
+        if candidate is not None and not reasons:
+            passed.append(candidate)
+        decisions[secid] = SignalDecision(secid, "filter_rejected", reasons, candidate)
+    signals = tuple(sorted(passed, key=lambda item: (-item.score, item.secid)))
+
+    def blocked_entries(reason: str) -> tuple[SignalDecision, ...]:
+        for signal in signals:
+            decisions[signal.secid] = SignalDecision(
+                signal.secid, "entry_rejected", (reason,), signal
+            )
+        return tuple(decisions.values())
+
     fill_entries = executed_entries(portfolio)
     exit_orders, exit_notes = _position_exit_orders(
         config=config,
@@ -296,6 +322,7 @@ def build_intraday_plan(
             exit_notes,
             (),
             dict(sorted(gate_counts.items())),
+            blocked_entries("position_exit_priority"),
         )
     if phase != "entries":
         monitoring_required = bool(positions)
@@ -315,15 +342,14 @@ def build_intraday_plan(
             ),
             quality_errors if monitoring_required else (),
             dict(sorted(gate_counts.items())),
+            blocked_entries("outside_entry_window"),
         )
     entry_slots = max(0, config.max_entries_per_day - store.entries(trade_day))
     position_slots = max(0, config.max_concurrent_positions - len(positions))
     turnover_left = max(Decimal("0"), config.max_daily_turnover_rub - daily_turnover)
     current_gross = sum(
         (
-            abs(lots)
-            * instruments[secid].lot_size
-            * position_prices[secid]
+            abs(lots) * instruments[secid].lot_size * position_prices[secid]
             for secid, lots in positions.items()
         ),
         Decimal("0"),
@@ -334,16 +360,47 @@ def build_intraday_plan(
         turnover_left,
     )
     entry_orders: list[OrderIntent] = []
+    starting_capital = capital_left
     for signal in signals:
-        if not entry_slots or not position_slots or signal.secid in positions:
-            continue
         instrument = instruments[signal.secid]
+        why = []
+        if not entry_slots:
+            why.append("daily_entry_limit")
+        if not position_slots:
+            why.append("position_limit")
+        if signal.secid in positions:
+            why.append("existing_position")
         if signal.side is Side.SELL and (not config.allow_short or not instrument.short_enabled):
+            why.append("short_unavailable")
+        if why:
+            decisions[signal.secid] = SignalDecision(
+                signal.secid, "entry_rejected", tuple(why), signal
+            )
             continue
         budget = min(config.max_position_notional_rub, capital_left)
         intent = _entry_order(instrument, signal, budget)
-        if intent is None or not store.mark_signal(signal):
+        if intent is None:
+            used = starting_capital - capital_left
+            lot_cost = instrument.lot_size * _tick_price(signal.side, signal, instrument.tick_size)
+            limits = {
+                "cash": cash - used,
+                "turnover": turnover_left - used,
+                "exposure": equity * config.max_capital_weight - current_gross - used,
+                "order_size_cap": config.max_position_notional_rub,
+            }
+            why = ["below_one_lot", *(name for name, amount in limits.items() if amount < lot_cost)]
+            decisions[signal.secid] = SignalDecision(
+                signal.secid, "entry_rejected", tuple(why), signal
+            )
             continue
+        if not store.mark_signal(signal):
+            decisions[signal.secid] = SignalDecision(
+                signal.secid, "entry_rejected", ("duplicate",), signal
+            )
+            continue
+        decisions[signal.secid] = SignalDecision(
+            signal.secid, "planned", (), signal, intent.order_request_id
+        )
         entry_orders.append(intent)
         entry_slots -= 1
         position_slots -= 1
@@ -357,6 +414,7 @@ def build_intraday_plan(
         ("completed 5-minute TradeStats/OrderStats/OBStats",),
         quality_errors,
         dict(sorted(gate_counts.items())),
+        tuple(decisions.values()),
     )
 
 
@@ -399,8 +457,12 @@ def executed_entries(
         if remaining == 0:
             del result[secid]
         elif units * delta > 0:
-            result[secid] = (first, old_side,
-                             (basis * abs(units) + price * quantity) / abs(remaining), remaining)
+            result[secid] = (
+                first,
+                old_side,
+                (basis * abs(units) + price * quantity) / abs(remaining),
+                remaining,
+            )
         elif units * remaining > 0:
             result[secid] = first, old_side, basis, remaining
         else:
@@ -459,21 +521,32 @@ def _signal(
     as_of: datetime,
     diagnostics: Counter[str] | None = None,
 ) -> IntradaySignal | None:
+    signal, reasons = evaluate_candidate(config, secid, bars, as_of, diagnostics)
+    return None if reasons else signal
+
+
+def evaluate_candidate(
+    config: IntradayConfig,
+    secid: str,
+    bars: tuple[IntradaySuperCandle, ...],
+    as_of: datetime,
+    diagnostics: Counter[str] | None = None,
+) -> tuple[IntradaySignal | None, tuple[str, ...]]:
     counts = diagnostics if diagnostics is not None else Counter()
     counts["instruments_evaluated"] += 1
     if len(bars) != config.history_bars or any(bar.close <= 0 for bar in bars):
         counts["failed_history"] += 1
-        return None
+        return None, ("history",)
     if any(
         right.observed_at - left.observed_at != timedelta(minutes=config.candle_minutes)
         for left, right in zip(bars, bars[1:], strict=False)
     ):
         counts["failed_contiguity"] += 1
-        return None
+        return None, ("contiguity",)
     latest = bars[-1]
     if latest.observed_at > as_of or as_of - latest.observed_at > timedelta(minutes=15):
         counts["failed_freshness"] += 1
-        return None
+        return None, ("freshness",)
     move = latest.close / bars[0].close - Decimal("1")
     buy = sum((bar.buy_value for bar in bars), Decimal("0"))
     sell = sum((bar.sell_value for bar in bars), Decimal("0"))
@@ -499,17 +572,15 @@ def _signal(
     if latest.spread_bbo > config.max_spread_bbo:
         failed.append("spread_bbo")
     expected_edge_bps = (
-        abs(move) * Decimal("10000")
-        - config.estimated_round_trip_cost_bps
-        - latest.spread_bbo
+        abs(move) * Decimal("10000") - config.estimated_round_trip_cost_bps - latest.spread_bbo
     )
     if expected_edge_bps < config.min_edge_after_cost_bps:
         failed.append("cost_edge")
     if failed:
         for name in failed:
             counts[f"failed_{name}"] += 1
-        return None
-    counts["signals_passed"] += 1
+    else:
+        counts["signals_passed"] += 1
     return IntradaySignal(
         secid,
         Side.BUY if direction > 0 else Side.SELL,
@@ -520,7 +591,7 @@ def _signal(
         order_flow,
         latest.book_imbalance,
         latest.spread_bbo,
-    )
+    ), tuple(failed)
 
 
 def _entry_order(
@@ -603,15 +674,12 @@ def _position_exit_orders(
             continue
         fill = (fill_entries or {}).get(secid)
         entry = (
-            fill[:3]
-            if fill is not None and fill[3] == lots * instruments[secid].lot_size else None
+            fill[:3] if fill is not None and fill[3] == lots * instruments[secid].lot_size else None
         )
         if entry is None:
             missing_reason = "missing_entry_state"
             orders.append(
-                _position_exit_order(
-                    instruments[secid], lots, prices[secid], as_of, missing_reason
-                )
+                _position_exit_order(instruments[secid], lots, prices[secid], as_of, missing_reason)
             )
             notes.append(f"{secid}: {missing_reason}; unmanaged intraday exposure")
             continue
@@ -623,9 +691,7 @@ def _position_exit_orders(
         direction = Decimal("1") if lots > 0 else Decimal("-1")
         return_bps: Decimal | None = None
         if entry_price > 0:
-            return_bps = direction * (current_price / entry_price - Decimal("1")) * Decimal(
-                "10000"
-            )
+            return_bps = direction * (current_price / entry_price - Decimal("1")) * Decimal("10000")
         held_minutes = max(
             Decimal("0"),
             Decimal(str((as_of - entered_at).total_seconds())) / Decimal("60"),
@@ -647,11 +713,7 @@ def _position_exit_orders(
                 reason = "signal_reversal"
         if reason is None:
             continue
-        orders.append(
-            _position_exit_order(
-                instruments[secid], lots, current_price, as_of, reason
-            )
-        )
+        orders.append(_position_exit_order(instruments[secid], lots, current_price, as_of, reason))
         notes.append(
             f"{secid}: {reason}; entry_side={entry_side.value}; "
             f"entry={entry_price}; current={current_price}"

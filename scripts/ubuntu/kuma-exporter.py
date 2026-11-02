@@ -13,7 +13,7 @@ from urllib.parse import urlencode
 from urllib.request import urlopen
 from uuid import uuid4
 
-from moex_bot.monitoring_labels import API_LABELS
+from moex_bot.monitoring_labels import API_LABELS, compact_checks
 
 NAMES = ("Observer heartbeat", "Resources", "Timers and services",
          "API integrations", "Trading data")
@@ -107,13 +107,18 @@ def main():
     for key in API_LABELS:
         if key in tokens:
             groups[key] = (key,)
+    return publish_groups(tokens, checks, groups)
+
+
+def publish_groups(tokens, checks, groups):
+    failed_delivery = False
     for name, prefixes in groups.items():
-        selected = {key: value for key, value in checks.items() if key.startswith(prefixes)}
-        problems = [f"{key}: {value}" for key, value in selected.items() if value != "OK"]
-        if name != "Observer heartbeat" and not selected:
-            problems.append("Missing expected metrics")
-        query = urlencode({"status": "down" if problems else "up",
-                           "msg": "; ".join(problems)[:800] or "OK"})
+        selected = {key: value for key, value in checks.items()
+                    if (key == name if name in API_LABELS else key.startswith(prefixes))}
+        heartbeat = name == "Observer heartbeat"
+        problems = not heartbeat and (not selected or any(v != "OK" for v in selected.values()))
+        message = "Коллектор: свежий снимок" if heartbeat else compact_checks(selected)
+        query = urlencode({"status": "down" if problems else "up", "msg": message})
         try:
             with urlopen("http://127.0.0.1:3001/api/push/" + tokens[name] + "?" + query,
                          timeout=10) as response:
@@ -122,9 +127,10 @@ def main():
                 raise ValueError("Push rejected")
         except Exception:
             print(f"FAIL: Push {name}; inspect Kuma (URL omitted)")
-            return 2
+            failed_delivery = True
+            continue
         print(f"PUSH {name}: {'DOWN' if problems else 'UP'}")
-    return 0
+    return 2 if failed_delivery else 0
 
 
 if __name__ == "__main__":

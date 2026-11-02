@@ -1,0 +1,13 @@
+{
+  "state/artifacts/shadow-20260907T070519Z.json": "78e8aec41f1b8e011da94e5b2757469787e9d383885e63be297915d7330f24f9",
+  "state/artifacts/intraday-plan-20260907T134002Z.json": "123dd6d607949d5b06a3eb8db60511eb1988adc4d44d794d428f45ad2ee0ded2",
+  "state/artifacts/intraday-plan-20260907T133003Z.json": "9c1f6b906db0448fa2b76eb3516112a80b2e5682e00ee69c446c1785d09ae458",
+  "state/artifacts/intraday-plan-20260907T133502Z.json": "292e6e62d234eb92d52c91ee8ec9fe6380c6c3e4e96fe065ed5b8cdd8414f30f",
+  "state/artifacts/intraday-plan-20260907T134502Z.json": "0c5e04a8b2f2ab0db299c126a83f9ec340652e097b3d60070960cfae23d49787",
+  "state/artifacts/shadow-20260908T070502Z.json": "43ef842d169e4a5759396d9ae5a2d236c788cfda5a2cf596c34ce9249127398c",
+  "state/data/intraday.sqlite3": "2d91c2cdee215e1216864e7121a658bb718d7dc9b6293514ece482f45d12a6f4",
+  "config/universe.json": "50450b49272fde9190268bec9dd70078a3b0e1587dcb8ba0da0c548e639dd382",
+  "config/intraday.json": "24d0b8509cb3c6044225634479cda1c1fd9c7cdcdebbffacd78bf203693dc478",
+  "state/artifacts/portfolio-20260907T070519Z.json": "160494d3fabd9b41e875f9febe78866ca58509c17f4605b6587f2ba06ef55e68",
+  "state/artifacts/geo-20260907T070519Z.json": "3e87d9cda17a0bceb7e10d92c7a54c5489ac3833224b394620dc13f614e0dd70"
+}

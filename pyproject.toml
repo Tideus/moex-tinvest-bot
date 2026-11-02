@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "moex-tinvest-bot"
-version = "0.7.0rc4"
+version = "0.7.0rc5"
 description = "Safety-first research, replay and execution harness for MOEX/ALGOPACK and T-Invest"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -36,6 +36,7 @@ packages = ["src/moex_bot"]
 [tool.pytest.ini_options]
 addopts = "-q --strict-markers"
 testpaths = ["tests"]
+pythonpath = ["scripts/research"]
 
 [tool.ruff]
 line-length = 100

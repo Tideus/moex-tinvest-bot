@@ -67,6 +67,15 @@ if git -C "${PROJECT_DIR}" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
   fi
   git -C "${PROJECT_DIR}" pull --ff-only
 fi
+if [[ -n "${MOEX_EXPECTED_REVISION:-}" &&
+      "$(git -C "${PROJECT_DIR}" rev-parse HEAD)" != "${MOEX_EXPECTED_REVISION}" ]]; then
+  printf 'FAIL: checkout differs from the tested release; installed files untouched.\n' >&2
+  exit 2
+fi
+if [[ -n "$(git -C "${PROJECT_DIR}" ls-files --others --exclude-standard)" ]]; then
+  printf 'FAIL: untracked source files; review before deployment.\n' >&2
+  exit 2
+fi
 
 restart_timers() {
   if [[ "${WAS_CALENDAR_ACTIVE:-0}" -eq 1 ]]; then
@@ -175,7 +184,5 @@ install -m 0755 "${PROJECT_DIR}/scripts/ubuntu/moex-botctl.sh" \
 systemctl daemon-reload
 restart_timers
 trap - EXIT
-if [[ "${WAS_SHADOW_ACTIVE}" -eq 1 ]]; then
-  systemctl start moex-tinvest-shadow.service
-fi
+# Deployment is not a trading signal: never force a sandbox or live cycle here.
 printf 'Update complete.\n'

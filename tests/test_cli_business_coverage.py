@@ -227,7 +227,14 @@ def test_backtest_cli_fetches_evidence_runs_base_and_stress_and_writes_bundle(
     monkeypatch.setattr(cli, "assess_promotion", lambda *args: SimpleNamespace(passed=promoted))
     writer = Mock()
     monkeypatch.setattr(cli, "write_backtest_bundle", writer)
+    execution_bars = tmp_path / "bars.jsonl"
+    execution_bars.write_text(json.dumps({
+        "trading_date": "2026-01-05", "secid": universe[0].secid, "start_seconds": 0,
+        "end_seconds": 300, "open": 100, "high": 101, "low": 99, "close": 100, "volume": 50,
+    }))
     result = cli.historical_backtest(
+        candle_only=True,
+        execution_bars_path=execution_bars if promoted else None,
         strategy_config_path=ROOT / "config/shadow.json",
         backtest_config_path=ROOT / "config/backtest.json",
         promotion_gates_path=ROOT / "config/promotion_gates.json",
@@ -242,7 +249,27 @@ def test_backtest_cli_fetches_evidence_runs_base_and_stress_and_writes_bundle(
     assert run.call_count == (2 if fault == "none" else 0)
     assert writer.call_count == int(fault == "none")
     if fault == "none":
+        assert all((c.kwargs["execution_windows"] is not None) == promoted
+                   for c in run.call_args_list)
+        assert all(not c.kwargs["bot_config"].strategy.flow_confirmation_enabled
+                   for c in run.call_args_list)
+        assert load_config(ROOT / "config/shadow.json").strategy.flow_confirmation_enabled
         assert "market-data.json" in {path.name for path in tmp_path.iterdir()}
+
+
+def test_default_backtest_fails_before_fetch_or_artifacts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+) -> None:
+    import sys
+
+    monkeypatch.chdir(ROOT)
+    monkeypatch.setattr(sys, "argv", ["bot", "historical-backtest", "--output-dir", str(tmp_path)])
+    adapter = Mock(side_effect=AssertionError("unexpected network access"))
+    monkeypatch.setattr(cli.MoexAlgoReadOnlyAdapter, "from_environment", adapter)
+    assert cli.main() == 2
+    assert "--candle-only" in capsys.readouterr().out
+    adapter.assert_not_called()
+    assert not list(tmp_path.iterdir())
 
 
 @pytest.mark.parametrize(
@@ -403,6 +430,9 @@ def test_journal_reconciliation_cli_is_read_only_and_blocks_unknowns(
 ) -> None:
     journal = tmp_path / "journal.sqlite3"
     journal.touch()
+    monkeypatch.delenv("T_INVEST_SANDBOX_ACCOUNT_ID", raising=False)
+    monkeypatch.setenv("T_INVEST_SANDBOX_LONG_ACCOUNT_ID", "test-long")
+    monkeypatch.setenv("T_INVEST_SANDBOX_INTRADAY_ACCOUNT_ID", "test-intraday")
     monkeypatch.setattr(
         cli.TInvestSandboxExecutionAdapter, "from_environment", lambda **kwargs: Mock()
     )
@@ -421,6 +451,8 @@ def test_sandbox_cancel_reconcile_notifies_only_changes_using_profile_binding(
     registry = cli.load_account_registry(ROOT / "config/accounts.json")
     monkeypatch.setenv("T_INVEST_SANDBOX_TOKEN", "fake")
     monkeypatch.setenv(registry.by_id("long").account_id_env, "long-fake")
+    monkeypatch.delenv("T_INVEST_SANDBOX_ACCOUNT_ID", raising=False)
+    monkeypatch.setenv(registry.by_id("intraday").account_id_env, "intraday-fake")
     service = Mock()
     service.reconcile_cancel_active_orders.return_value = cancelled
     monkeypatch.setattr(cli, "TInvestSandboxAccountService", lambda *args, **kwargs: service)
@@ -1211,14 +1243,20 @@ def test_profile_bootstrap_refuses_oversized_deficit(
     monkeypatch.setattr(
         cli,
         "load_account_registry",
-        lambda path: SimpleNamespace(
-            profiles=(replace(registry.by_id("long"), target_balance_rub=Decimal("1000000000000")),)
+        lambda path: replace(
+            registry, profiles=(
+                replace(registry.by_id("long"), target_balance_rub=Decimal("1000000000000")),
+                registry.by_id("intraday"),
+            ),
         ),
     )
     monkeypatch.delenv("T_INVEST_SANDBOX_ACCOUNT_ID", raising=False)
     monkeypatch.delenv("T_INVEST_SANDBOX_LONG_ACCOUNT_ID", raising=False)
     service = Mock()
-    service.ensure_account.return_value = SimpleNamespace(account_id="long", created=False)
+    service.ensure_account.side_effect = [
+        SimpleNamespace(account_id="long", created=False),
+        SimpleNamespace(account_id="intraday", created=False),
+    ]
     service.available_rub_balance.return_value = Decimal("0")
     assert (
         cli.sandbox_bootstrap_profiles(

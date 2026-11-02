@@ -1,0 +1,26 @@
+{
+  "cash": "247457.3418",
+  "blocked_cash": "0",
+  "reported_equity": "301216.6418",
+  "positions": {
+    "GMKN": {
+      "lots": 18,
+      "blocked_lots": 0,
+      "current_value": "23104.80"
+    },
+    "LKOH": {
+      "lots": 5,
+      "blocked_lots": 0,
+      "current_value": "24952.5"
+    },
+    "PHOR": {
+      "lots": 1,
+      "blocked_lots": 0,
+      "current_value": "5702"
+    }
+  },
+  "daily_turnover": "0",
+  "open_orders": 0,
+  "source": "t_invest_sandbox",
+  "observed_at": "2026-09-07T07:05:24.100272+00:00"
+}

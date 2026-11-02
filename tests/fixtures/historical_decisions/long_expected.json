@@ -1,0 +1,281 @@
+{
+  "run_id": "shadow-2026-09-07T07:05:24.646444+00:00",
+  "quality": {
+    "passed": true,
+    "errors": [],
+    "warnings": []
+  },
+  "geo": {
+    "level": "normal",
+    "multiplier": "1",
+    "blocked_secids": "frozenset()",
+    "reasons": []
+  },
+  "targets": [
+    {
+      "secid": "LKOH",
+      "weight": "0.1310957523349496505375956549",
+      "rationale": "direction=long; momentum=0.128560688802745976238398666; price=4972.0>trend=4494.691666666666666666666667; volatility=0.02180323623858659487321823665; weighting=inverse_volatility; geo_multiplier=1"
+    },
+    {
+      "secid": "PHOR",
+      "weight": "0.1166922554256318793076737346",
+      "rationale": "direction=long; momentum=0.08529172750383356571532737333; price=5684>trend=5265.383333333333333333333333; volatility=0.02449444179143279164883007285; weighting=inverse_volatility; geo_multiplier=1"
+    },
+    {
+      "secid": "GMKN",
+      "weight": "0.1115271019188091889179821173",
+      "rationale": "direction=long; momentum=0.074398044263584915689366395; price=128.1>trend=117.3686666666666666666666667; volatility=0.02562885261839740767151193604; weighting=inverse_volatility; geo_multiplier=1"
+    },
+    {
+      "secid": "NVTK",
+      "weight": "0.1366471278419012222262799207",
+      "rationale": "direction=long; momentum=0.067829677069275939948032427; price=996.0>trend=965.5383333333333333333333333; volatility=0.02091746605417988183415190005; weighting=inverse_volatility; geo_multiplier=1"
+    },
+    {
+      "secid": "CHMF",
+      "weight": "0.1040377624787080590104685724",
+      "rationale": "direction=long; momentum=0.059948602959083853775121012; price=647.8>trend=603.45; volatility=0.02747379018862615149169616593; weighting=inverse_volatility; geo_multiplier=1"
+    }
+  ],
+  "orders": [
+    {
+      "intent": {
+        "order_request_id": "19636a00-9d62-5829-aebb-a8703c25accf",
+        "instrument": {
+          "secid": "LKOH",
+          "uid": "02cfdf61-6298-4c0f-a9ca-9cabc82afaf3",
+          "board": "TQBR",
+          "lot_size": 1,
+          "tick_size": "0.5",
+          "currency": "RUB",
+          "issuer_id": "lukoil",
+          "sector": "energy",
+          "risk_cluster": "hydrocarbons",
+          "asset_class": "share",
+          "short_enabled": true
+        },
+        "side": "buy",
+        "lots": 2,
+        "limit_price": "4972.0",
+        "notional": "9944.0",
+        "rationale": "direction=long; momentum=0.128560688802745976238398666; price=4972.0>trend=4494.691666666666666666666667; volatility=0.02180323623858659487321823665; weighting=inverse_volatility; geo_multiplier=1",
+        "confirm_margin_trade": false,
+        "order_type": "limit"
+      },
+      "status": "validated",
+      "filled_lots": 0,
+      "broker_order_id": null
+    },
+    {
+      "intent": {
+        "order_request_id": "1150ba58-960d-5fb3-a3a0-b3452113ac62",
+        "instrument": {
+          "secid": "PHOR",
+          "uid": "9978b56f-782a-4a80-a4b1-a48cbecfd194",
+          "board": "TQBR",
+          "lot_size": 1,
+          "tick_size": "1.0",
+          "currency": "RUB",
+          "issuer_id": "phosagro",
+          "sector": "materials",
+          "risk_cluster": "cyclical_exporters",
+          "asset_class": "share",
+          "short_enabled": true
+        },
+        "side": "buy",
+        "lots": 1,
+        "limit_price": "5684.0",
+        "notional": "5684.0",
+        "rationale": "direction=long; momentum=0.08529172750383356571532737333; price=5684>trend=5265.383333333333333333333333; volatility=0.02449444179143279164883007285; weighting=inverse_volatility; geo_multiplier=1",
+        "confirm_margin_trade": false,
+        "order_type": "limit"
+      },
+      "status": "validated",
+      "filled_lots": 0,
+      "broker_order_id": null
+    },
+    {
+      "intent": {
+        "order_request_id": "f875b3f8-1a81-55a3-86c2-e643d2a532ba",
+        "instrument": {
+          "secid": "GMKN",
+          "uid": "509edd0c-129c-4ee2-934d-7f6246126da1",
+          "board": "TQBR",
+          "lot_size": 10,
+          "tick_size": "0.02",
+          "currency": "RUB",
+          "issuer_id": "nornickel",
+          "sector": "metals_mining",
+          "risk_cluster": "cyclical_exporters",
+          "asset_class": "share",
+          "short_enabled": true
+        },
+        "side": "buy",
+        "lots": 7,
+        "limit_price": "128.10",
+        "notional": "8967.00",
+        "rationale": "direction=long; momentum=0.074398044263584915689366395; price=128.1>trend=117.3686666666666666666666667; volatility=0.02562885261839740767151193604; weighting=inverse_volatility; geo_multiplier=1",
+        "confirm_margin_trade": false,
+        "order_type": "limit"
+      },
+      "status": "validated",
+      "filled_lots": 0,
+      "broker_order_id": null
+    }
+  ],
+  "rejected": [
+    {
+      "type": "risk_reject",
+      "run_id": "shadow-2026-09-07T07:05:24.646444+00:00",
+      "order_request_id": "e6d6e237-72ed-5f0e-8a9b-663958e77d77",
+      "secid": "NVTK",
+      "side": "buy",
+      "lots": 10,
+      "notional": "9960.0",
+      "reasons": [
+        "daily turnover limit exceeded"
+      ]
+    },
+    {
+      "type": "risk_reject",
+      "run_id": "shadow-2026-09-07T07:05:24.646444+00:00",
+      "order_request_id": "4469bd4c-c8ec-5cea-a2ee-1a7248f4cf0c",
+      "secid": "CHMF",
+      "side": "buy",
+      "lots": 15,
+      "notional": "9717.0",
+      "reasons": [
+        "daily turnover limit exceeded"
+      ]
+    }
+  ],
+  "rebalance_allowed": true,
+  "signal_diagnostics": [
+    {
+      "secid": "LKOH",
+      "momentum": "0.128560688802745976238398666",
+      "momentum_threshold": "0.01",
+      "price": "4972.0",
+      "trend": "4494.691666666666666666666667",
+      "eligible": true,
+      "reasons": []
+    },
+    {
+      "secid": "PHOR",
+      "momentum": "0.08529172750383356571532737333",
+      "momentum_threshold": "0.01",
+      "price": "5684",
+      "trend": "5265.383333333333333333333333",
+      "eligible": true,
+      "reasons": []
+    },
+    {
+      "secid": "GMKN",
+      "momentum": "0.074398044263584915689366395",
+      "momentum_threshold": "0.01",
+      "price": "128.1",
+      "trend": "117.3686666666666666666666667",
+      "eligible": true,
+      "reasons": []
+    },
+    {
+      "secid": "NVTK",
+      "momentum": "0.067829677069275939948032427",
+      "momentum_threshold": "0.01",
+      "price": "996.0",
+      "trend": "965.5383333333333333333333333",
+      "eligible": true,
+      "reasons": []
+    },
+    {
+      "secid": "CHMF",
+      "momentum": "0.059948602959083853775121012",
+      "momentum_threshold": "0.01",
+      "price": "647.8",
+      "trend": "603.45",
+      "eligible": true,
+      "reasons": []
+    },
+    {
+      "secid": "GAZP",
+      "momentum": "0.05580471934606447132196859067",
+      "momentum_threshold": "0.01",
+      "price": "89.72",
+      "trend": "89.32066666666666666666666667",
+      "eligible": true,
+      "reasons": []
+    },
+    {
+      "secid": "YDEX",
+      "momentum": "0.05518468648165783051798698433",
+      "momentum_threshold": "0.01",
+      "price": "3727.0",
+      "trend": "3675.0",
+      "eligible": true,
+      "reasons": []
+    },
+    {
+      "secid": "T",
+      "momentum": "0.02889041215479315480437790067",
+      "momentum_threshold": "0.01",
+      "price": "260.0",
+      "trend": "257.2276666666666666666666667",
+      "eligible": true,
+      "reasons": []
+    },
+    {
+      "secid": "MTSS",
+      "momentum": "0.02866893900439130646565966767",
+      "momentum_threshold": "0.01",
+      "price": "186.4",
+      "trend": "183.665",
+      "eligible": true,
+      "reasons": []
+    },
+    {
+      "secid": "SBER",
+      "momentum": "0.02211721426921093022120915967",
+      "momentum_threshold": "0.01",
+      "price": "277.1",
+      "trend": "277.7223333333333333333333333",
+      "eligible": false,
+      "reasons": [
+        "price is not above trend"
+      ]
+    },
+    {
+      "secid": "MOEX",
+      "momentum": "0.013092422443706272386067228",
+      "momentum_threshold": "0.01",
+      "price": "153.52",
+      "trend": "152.8991666666666666666666667",
+      "eligible": true,
+      "reasons": []
+    },
+    {
+      "secid": "X5",
+      "momentum": "-0.01266889260741796203978268497",
+      "momentum_threshold": "0.01",
+      "price": "1800.0",
+      "trend": "1935.166666666666666666666667",
+      "eligible": false,
+      "reasons": [
+        "momentum threshold not passed",
+        "price is not above trend"
+      ]
+    },
+    {
+      "secid": "PLZL",
+      "momentum": "-0.05453528663792464361173721103",
+      "momentum_threshold": "0.01",
+      "price": "991.0",
+      "trend": "1203.21",
+      "eligible": false,
+      "reasons": [
+        "momentum threshold not passed",
+        "price is not above trend"
+      ]
+    }
+  ]
+}

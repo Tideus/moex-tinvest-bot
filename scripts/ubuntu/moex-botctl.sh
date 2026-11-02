@@ -30,7 +30,7 @@ Usage:
   sudo moex-botctl portfolio
   sudo moex-botctl prod-observe
   sudo moex-botctl decisions [SHADOW_JSON]
-  sudo moex-botctl backtest
+  sudo moex-botctl backtest --candle-only
   sudo moex-botctl collect-report [--from YYYY-MM-DD] [--to YYYY-MM-DD] [--output-dir DIR]
   sudo moex-botctl reset-history --confirm-reset-history
   sudo moex-botctl disaster-backup [--output-dir DIR]
@@ -217,10 +217,11 @@ load_secrets() {
 }
 
 check_sandbox_profile_credentials() {
-  [[ -n "${T_INVEST_SANDBOX_TOKEN:-}" ]]
-  [[ -n "${T_INVEST_SANDBOX_LONG_ACCOUNT_ID:-}" ]]
-  [[ -n "${T_INVEST_SANDBOX_INTRADAY_ACCOUNT_ID:-}" ]]
-  [[ -n "${MOEX_APIKEY:-}" ]]
+  [[ -n "${T_INVEST_SANDBOX_TOKEN:-}" && -n "${MOEX_APIKEY:-}" ]] || return 2
+  # Resolve the configured bindings (default T_INVEST_SANDBOX_LONG_ACCOUNT_ID
+  # and T_INVEST_SANDBOX_INTRADAY_ACCOUNT_ID), not just the variable names.
+  as_service "${PYTHON_BIN}" -m moex_bot.cli sandbox-check-bindings \
+    --accounts "${APP_DIR}/config/accounts.json"
 }
 
 check_prod_observer_credentials() {
@@ -309,8 +310,8 @@ prelaunch() {
     "исправьте config/shadow.json; торговые действия останутся заблокированы" \
     as_service "${PYTHON_BIN}" -m moex_bot.cli preflight \
       --config "${APP_DIR}/config/shadow.json"
-  check "Long и intraday Sandbox credentials присутствуют" \
-    "выполните sandbox-bootstrap-profiles и заполните MOEX_APIKEY" \
+  check "Sandbox: ключи заданы, long и intraday используют разные счета" \
+    "проверьте sandbox ID обоих профилей, legacy alias long и ключи; не публикуйте bot.env" \
     check_sandbox_profile_credentials
   check "Prod observer credentials присутствуют" \
     "заполните T_INVEST_PROD_TOKEN и T_INVEST_PROD_ACCOUNT_ID" \

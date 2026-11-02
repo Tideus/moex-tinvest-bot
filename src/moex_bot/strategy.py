@@ -82,15 +82,7 @@ def _weighted_targets(
 ) -> tuple[Target, ...]:
     if not selected or gross_target == 0:
         return ()
-    if config.inverse_volatility_weights:
-        risk_units = {
-            item.instrument.secid: Decimal("1") / max(
-                item.volatility, config.volatility_floor
-            )
-            for item in selected
-        }
-    else:
-        risk_units = {item.instrument.secid: Decimal("1") for item in selected}
+    risk_units = allocation_units(selected, config)
     total_risk_units = sum(risk_units.values(), Decimal("0"))
     sign = Decimal("1") if direction == "long" else Decimal("-1")
     return tuple(
@@ -109,3 +101,14 @@ def _weighted_targets(
         )
         for item in selected
     )
+
+
+def allocation_units(
+    selected: tuple[MarketObservation, ...], config: StrategyConfig
+) -> dict[str, Decimal]:
+    if config.inverse_volatility_weights:
+        return {
+            item.instrument.secid: Decimal("1") / max(item.volatility, config.volatility_floor)
+            for item in selected
+        }
+    return {item.instrument.secid: Decimal("1") for item in selected}

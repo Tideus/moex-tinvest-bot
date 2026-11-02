@@ -126,12 +126,15 @@ def enroll_live_journal(
     if path.exists():
         raise ValueError("production journal already exists; never overwrite/re-enroll it")
     if (
-        state.account_type != policy.account_type
+        not state.account_id.strip()
+        or state.account_type != policy.account_type
         or state.account_status != "ACCOUNT_STATUS_OPEN"
         or state.access_level != "ACCOUNT_ACCESS_LEVEL_FULL_ACCESS"
         or state.active_orders
         or state.started_at.tzinfo is None
+        or state.finished_at.tzinfo is None
         or now.tzinfo is None
+        or not state.started_at <= state.finished_at <= now
         or not timedelta(0) <= now - state.started_at <= timedelta(seconds=20)
     ):
         raise ValueError("first enrollment requires eligible fresh broker state with no orders")
@@ -244,20 +247,21 @@ def _authorize(
         raise ValueError("active regular/protective orders require reconciliation")
     if count >= policy.canary.max_orders_per_day:
         raise ValueError("persistent daily order-attempt limit reached")
-    if (
-        max(state.daily_turnover, reserved_turnover) + notional
-        > policy.canary.max_daily_turnover_rub
-    ):
-        raise ValueError("persistent daily turnover limit reached")
     numeric = (
         state.cash_available,
         state.equity,
         state.daily_pnl,
         state.daily_turnover,
         state.estimated_total,
+        reserved_turnover,
     )
     if any(not x.is_finite() for x in numeric) or state.equity <= 0 or state.daily_turnover < 0:
         raise ValueError("live monetary state is invalid")
+    if (
+        max(state.daily_turnover, reserved_turnover) + notional
+        > policy.canary.max_daily_turnover_rub
+    ):
+        raise ValueError("persistent daily turnover limit reached")
     gross = Decimal("0")
     for uid, units in owned.items():
         if units == 0:

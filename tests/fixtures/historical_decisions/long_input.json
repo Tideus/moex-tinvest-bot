@@ -1,0 +1,587 @@
+{
+  "as_of": "2026-09-07T07:05:24.646444+00:00",
+  "batches": [
+    {
+      "captured_at": "2026-09-07T07:05:24.646444+00:00",
+      "rows": [
+        {
+          "instrument": {
+            "secid": "CHMF",
+            "uid": "fa6aae10-b8d5-48c8-bbfd-d320d925d096",
+            "board": "TQBR",
+            "lot_size": 1,
+            "tick_size": "0.2",
+            "currency": "RUB",
+            "issuer_id": "severstal",
+            "sector": "materials",
+            "risk_cluster": "cyclical_exporters",
+            "asset_class": "share",
+            "short_enabled": true
+          },
+          "price": "647.8",
+          "trend": "603.45",
+          "momentum": "0.059948602959083853775121012",
+          "volatility": "0.02747379018862615149169616593",
+          "observed_at": "2026-09-06 23:59:57+03:00",
+          "complete": true,
+          "tradable": true
+        },
+        {
+          "instrument": {
+            "secid": "GAZP",
+            "uid": "962e2a95-02a9-4171-abd7-aa198dbe643a",
+            "board": "TQBR",
+            "lot_size": 10,
+            "tick_size": "0.01",
+            "currency": "RUB",
+            "issuer_id": "gazprom",
+            "sector": "energy",
+            "risk_cluster": "hydrocarbons",
+            "asset_class": "share",
+            "short_enabled": true
+          },
+          "price": "89.72",
+          "trend": "89.32066666666666666666666667",
+          "momentum": "0.05580471934606447132196859067",
+          "volatility": "0.01942844554078042765971861478",
+          "observed_at": "2026-09-06 23:59:57+03:00",
+          "complete": true,
+          "tradable": true
+        },
+        {
+          "instrument": {
+            "secid": "GMKN",
+            "uid": "509edd0c-129c-4ee2-934d-7f6246126da1",
+            "board": "TQBR",
+            "lot_size": 10,
+            "tick_size": "0.02",
+            "currency": "RUB",
+            "issuer_id": "nornickel",
+            "sector": "metals_mining",
+            "risk_cluster": "cyclical_exporters",
+            "asset_class": "share",
+            "short_enabled": true
+          },
+          "price": "128.1",
+          "trend": "117.3686666666666666666666667",
+          "momentum": "0.074398044263584915689366395",
+          "volatility": "0.02562885261839740767151193604",
+          "observed_at": "2026-09-06 23:59:57+03:00",
+          "complete": true,
+          "tradable": true
+        },
+        {
+          "instrument": {
+            "secid": "LKOH",
+            "uid": "02cfdf61-6298-4c0f-a9ca-9cabc82afaf3",
+            "board": "TQBR",
+            "lot_size": 1,
+            "tick_size": "0.5",
+            "currency": "RUB",
+            "issuer_id": "lukoil",
+            "sector": "energy",
+            "risk_cluster": "hydrocarbons",
+            "asset_class": "share",
+            "short_enabled": true
+          },
+          "price": "4972.0",
+          "trend": "4494.691666666666666666666667",
+          "momentum": "0.128560688802745976238398666",
+          "volatility": "0.02180323623858659487321823665",
+          "observed_at": "2026-09-06 23:59:57+03:00",
+          "complete": true,
+          "tradable": true
+        },
+        {
+          "instrument": {
+            "secid": "MOEX",
+            "uid": "5e1c2634-afc4-4e50-ad6d-f78fc14a539a",
+            "board": "TQBR",
+            "lot_size": 10,
+            "tick_size": "0.01",
+            "currency": "RUB",
+            "issuer_id": "moscow_exchange",
+            "sector": "financials",
+            "risk_cluster": "domestic_financial",
+            "asset_class": "share",
+            "short_enabled": true
+          },
+          "price": "153.52",
+          "trend": "152.8991666666666666666666667",
+          "momentum": "0.013092422443706272386067228",
+          "volatility": "0.01219583041488200968543416753",
+          "observed_at": "2026-09-06 23:59:57+03:00",
+          "complete": true,
+          "tradable": true
+        },
+        {
+          "instrument": {
+            "secid": "MTSS",
+            "uid": "cd8063ad-73ad-4b31-bd0d-93138d9e99a2",
+            "board": "TQBR",
+            "lot_size": 10,
+            "tick_size": "0.05",
+            "currency": "RUB",
+            "issuer_id": "mts",
+            "sector": "telecommunications",
+            "risk_cluster": "domestic_defensive",
+            "asset_class": "share",
+            "short_enabled": true
+          },
+          "price": "186.4",
+          "trend": "183.665",
+          "momentum": "0.02866893900439130646565966767",
+          "volatility": "0.01358627536428346959219131605",
+          "observed_at": "2026-09-06 23:59:57+03:00",
+          "complete": true,
+          "tradable": true
+        },
+        {
+          "instrument": {
+            "secid": "NVTK",
+            "uid": "0da66728-6c30-44c4-9264-df8fac2467ee",
+            "board": "TQBR",
+            "lot_size": 1,
+            "tick_size": "0.1",
+            "currency": "RUB",
+            "issuer_id": "novatek",
+            "sector": "energy",
+            "risk_cluster": "hydrocarbons",
+            "asset_class": "share",
+            "short_enabled": true
+          },
+          "price": "996.0",
+          "trend": "965.5383333333333333333333333",
+          "momentum": "0.067829677069275939948032427",
+          "volatility": "0.02091746605417988183415190005",
+          "observed_at": "2026-09-06 23:59:57+03:00",
+          "complete": true,
+          "tradable": true
+        },
+        {
+          "instrument": {
+            "secid": "PHOR",
+            "uid": "9978b56f-782a-4a80-a4b1-a48cbecfd194",
+            "board": "TQBR",
+            "lot_size": 1,
+            "tick_size": "1.0",
+            "currency": "RUB",
+            "issuer_id": "phosagro",
+            "sector": "materials",
+            "risk_cluster": "cyclical_exporters",
+            "asset_class": "share",
+            "short_enabled": true
+          },
+          "price": "5684",
+          "trend": "5265.383333333333333333333333",
+          "momentum": "0.08529172750383356571532737333",
+          "volatility": "0.02449444179143279164883007285",
+          "observed_at": "2026-09-06 23:59:57+03:00",
+          "complete": true,
+          "tradable": true
+        },
+        {
+          "instrument": {
+            "secid": "PLZL",
+            "uid": "10620843-28ce-44e8-80c2-f26ceb1bd3e1",
+            "board": "TQBR",
+            "lot_size": 1,
+            "tick_size": "0.2",
+            "currency": "RUB",
+            "issuer_id": "polyus",
+            "sector": "metals_mining",
+            "risk_cluster": "precious_metals",
+            "asset_class": "share",
+            "short_enabled": true
+          },
+          "price": "991.0",
+          "trend": "1203.21",
+          "momentum": "-0.05453528663792464361173721103",
+          "volatility": "0.02599642533583870012888686093",
+          "observed_at": "2026-09-06 23:59:57+03:00",
+          "complete": true,
+          "tradable": true
+        },
+        {
+          "instrument": {
+            "secid": "SBER",
+            "uid": "e6123145-9665-43e0-8413-cd61b8aa9b13",
+            "board": "TQBR",
+            "lot_size": 1,
+            "tick_size": "0.01",
+            "currency": "RUB",
+            "issuer_id": "sberbank",
+            "sector": "financials",
+            "risk_cluster": "domestic_financial",
+            "asset_class": "share",
+            "short_enabled": true
+          },
+          "price": "277.1",
+          "trend": "277.7223333333333333333333333",
+          "momentum": "0.02211721426921093022120915967",
+          "volatility": "0.01231225008050926709135692230",
+          "observed_at": "2026-09-06 23:59:57+03:00",
+          "complete": true,
+          "tradable": true
+        },
+        {
+          "instrument": {
+            "secid": "T",
+            "uid": "87db07bc-0e02-4e29-90bb-05e8ef791d7b",
+            "board": "TQBR",
+            "lot_size": 1,
+            "tick_size": "0.02",
+            "currency": "RUB",
+            "issuer_id": "t_technologies",
+            "sector": "financials",
+            "risk_cluster": "domestic_financial",
+            "asset_class": "share",
+            "short_enabled": true
+          },
+          "price": "260.0",
+          "trend": "257.2276666666666666666666667",
+          "momentum": "0.02889041215479315480437790067",
+          "volatility": "0.01643609570581345972953793585",
+          "observed_at": "2026-09-06 23:59:57+03:00",
+          "complete": true,
+          "tradable": true
+        },
+        {
+          "instrument": {
+            "secid": "X5",
+            "uid": "0964acd0-e2cb-4810-a177-ef4ad8856ff0",
+            "board": "TQBR",
+            "lot_size": 1,
+            "tick_size": "0.5",
+            "currency": "RUB",
+            "issuer_id": "x5_group",
+            "sector": "consumer_staples",
+            "risk_cluster": "domestic_consumer",
+            "asset_class": "share",
+            "short_enabled": true
+          },
+          "price": "1800.0",
+          "trend": "1935.166666666666666666666667",
+          "momentum": "-0.01266889260741796203978268497",
+          "volatility": "0.01796646817012527421383519460",
+          "observed_at": "2026-09-06 23:59:57+03:00",
+          "complete": true,
+          "tradable": true
+        },
+        {
+          "instrument": {
+            "secid": "YDEX",
+            "uid": "7de75794-a27f-4d81-a39b-492345813822",
+            "board": "TQBR",
+            "lot_size": 1,
+            "tick_size": "0.5",
+            "currency": "RUB",
+            "issuer_id": "yandex",
+            "sector": "technology",
+            "risk_cluster": "domestic_growth",
+            "asset_class": "share",
+            "short_enabled": true
+          },
+          "price": "3727.0",
+          "trend": "3675.0",
+          "momentum": "0.05518468648165783051798698433",
+          "volatility": "0.02247107958844122101997629145",
+          "observed_at": "2026-09-06 23:59:57+03:00",
+          "complete": true,
+          "tradable": true
+        }
+      ]
+    },
+    {
+      "captured_at": "2026-09-08T07:05:08.103319+00:00",
+      "rows": [
+        {
+          "instrument": {
+            "secid": "CHMF",
+            "uid": "fa6aae10-b8d5-48c8-bbfd-d320d925d096",
+            "board": "TQBR",
+            "lot_size": 1,
+            "tick_size": "0.2",
+            "currency": "RUB",
+            "issuer_id": "severstal",
+            "sector": "materials",
+            "risk_cluster": "cyclical_exporters",
+            "asset_class": "share",
+            "short_enabled": true
+          },
+          "price": "672.0",
+          "trend": "605.2066666666666666666666667",
+          "momentum": "0.069600658384606340870792021",
+          "volatility": "0.02467407554271680406674896678",
+          "observed_at": "2026-09-07 23:59:54+03:00",
+          "complete": true,
+          "tradable": true
+        },
+        {
+          "instrument": {
+            "secid": "GAZP",
+            "uid": "962e2a95-02a9-4171-abd7-aa198dbe643a",
+            "board": "TQBR",
+            "lot_size": 10,
+            "tick_size": "0.01",
+            "currency": "RUB",
+            "issuer_id": "gazprom",
+            "sector": "energy",
+            "risk_cluster": "hydrocarbons",
+            "asset_class": "share",
+            "short_enabled": true
+          },
+          "price": "91.13",
+          "trend": "89.20883333333333333333333333",
+          "momentum": "0.05882508797111780608049598167",
+          "volatility": "0.01902704323683816611979260947",
+          "observed_at": "2026-09-07 23:59:54+03:00",
+          "complete": true,
+          "tradable": true
+        },
+        {
+          "instrument": {
+            "secid": "GMKN",
+            "uid": "509edd0c-129c-4ee2-934d-7f6246126da1",
+            "board": "TQBR",
+            "lot_size": 10,
+            "tick_size": "0.02",
+            "currency": "RUB",
+            "issuer_id": "nornickel",
+            "sector": "metals_mining",
+            "risk_cluster": "cyclical_exporters",
+            "asset_class": "share",
+            "short_enabled": true
+          },
+          "price": "131.92",
+          "trend": "117.494",
+          "momentum": "0.084035422190130442791666225",
+          "volatility": "0.02529100786384901857252990850",
+          "observed_at": "2026-09-07 23:59:54+03:00",
+          "complete": true,
+          "tradable": true
+        },
+        {
+          "instrument": {
+            "secid": "LKOH",
+            "uid": "02cfdf61-6298-4c0f-a9ca-9cabc82afaf3",
+            "board": "TQBR",
+            "lot_size": 1,
+            "tick_size": "0.5",
+            "currency": "RUB",
+            "issuer_id": "lukoil",
+            "sector": "energy",
+            "risk_cluster": "hydrocarbons",
+            "asset_class": "share",
+            "short_enabled": true
+          },
+          "price": "5134.0",
+          "trend": "4509.066666666666666666666667",
+          "momentum": "0.1302443778125498926948592343",
+          "volatility": "0.02238587868877653925474128123",
+          "observed_at": "2026-09-07 23:59:54+03:00",
+          "complete": true,
+          "tradable": true
+        },
+        {
+          "instrument": {
+            "secid": "MOEX",
+            "uid": "5e1c2634-afc4-4e50-ad6d-f78fc14a539a",
+            "board": "TQBR",
+            "lot_size": 10,
+            "tick_size": "0.01",
+            "currency": "RUB",
+            "issuer_id": "moscow_exchange",
+            "sector": "financials",
+            "risk_cluster": "domestic_financial",
+            "asset_class": "share",
+            "short_enabled": true
+          },
+          "price": "154.21",
+          "trend": "152.6395",
+          "momentum": "0.0101987888807633017799140122",
+          "volatility": "0.01079958235367590169611315747",
+          "observed_at": "2026-09-07 23:59:54+03:00",
+          "complete": true,
+          "tradable": true
+        },
+        {
+          "instrument": {
+            "secid": "MTSS",
+            "uid": "cd8063ad-73ad-4b31-bd0d-93138d9e99a2",
+            "board": "TQBR",
+            "lot_size": 10,
+            "tick_size": "0.05",
+            "currency": "RUB",
+            "issuer_id": "mts",
+            "sector": "telecommunications",
+            "risk_cluster": "domestic_defensive",
+            "asset_class": "share",
+            "short_enabled": true
+          },
+          "price": "188.2",
+          "trend": "183.2091666666666666666666667",
+          "momentum": "0.02779950546509411257347641767",
+          "volatility": "0.01202363733918323248154105117",
+          "observed_at": "2026-09-07 23:59:54+03:00",
+          "complete": true,
+          "tradable": true
+        },
+        {
+          "instrument": {
+            "secid": "NVTK",
+            "uid": "0da66728-6c30-44c4-9264-df8fac2467ee",
+            "board": "TQBR",
+            "lot_size": 1,
+            "tick_size": "0.1",
+            "currency": "RUB",
+            "issuer_id": "novatek",
+            "sector": "energy",
+            "risk_cluster": "hydrocarbons",
+            "asset_class": "share",
+            "short_enabled": true
+          },
+          "price": "1024.8",
+          "trend": "967.05",
+          "momentum": "0.07395799934869065446530394667",
+          "volatility": "0.01882707308530291126485618738",
+          "observed_at": "2026-09-07 23:59:54+03:00",
+          "complete": true,
+          "tradable": true
+        },
+        {
+          "instrument": {
+            "secid": "PHOR",
+            "uid": "9978b56f-782a-4a80-a4b1-a48cbecfd194",
+            "board": "TQBR",
+            "lot_size": 1,
+            "tick_size": "1.0",
+            "currency": "RUB",
+            "issuer_id": "phosagro",
+            "sector": "materials",
+            "risk_cluster": "cyclical_exporters",
+            "asset_class": "share",
+            "short_enabled": true
+          },
+          "price": "5567",
+          "trend": "5272.333333333333333333333333",
+          "momentum": "0.04834839559706277147252013967",
+          "volatility": "0.02328699506996700586392574924",
+          "observed_at": "2026-09-07 23:59:54+03:00",
+          "complete": true,
+          "tradable": true
+        },
+        {
+          "instrument": {
+            "secid": "PLZL",
+            "uid": "10620843-28ce-44e8-80c2-f26ceb1bd3e1",
+            "board": "TQBR",
+            "lot_size": 1,
+            "tick_size": "0.2",
+            "currency": "RUB",
+            "issuer_id": "polyus",
+            "sector": "metals_mining",
+            "risk_cluster": "precious_metals",
+            "asset_class": "share",
+            "short_enabled": true
+          },
+          "price": "991.6",
+          "trend": "1187.6",
+          "momentum": "-0.05494174534941755979133915113",
+          "volatility": "0.02580512469002678155037768258",
+          "observed_at": "2026-09-07 23:59:54+03:00",
+          "complete": true,
+          "tradable": true
+        },
+        {
+          "instrument": {
+            "secid": "SBER",
+            "uid": "e6123145-9665-43e0-8413-cd61b8aa9b13",
+            "board": "TQBR",
+            "lot_size": 1,
+            "tick_size": "0.01",
+            "currency": "RUB",
+            "issuer_id": "sberbank",
+            "sector": "financials",
+            "risk_cluster": "domestic_financial",
+            "asset_class": "share",
+            "short_enabled": true
+          },
+          "price": "278.03",
+          "trend": "276.989",
+          "momentum": "0.01257275516650647007991585867",
+          "volatility": "0.01137155795190018277385962854",
+          "observed_at": "2026-09-08 10:05:01+03:00",
+          "complete": true,
+          "tradable": true
+        },
+        {
+          "instrument": {
+            "secid": "T",
+            "uid": "87db07bc-0e02-4e29-90bb-05e8ef791d7b",
+            "board": "TQBR",
+            "lot_size": 1,
+            "tick_size": "0.02",
+            "currency": "RUB",
+            "issuer_id": "t_technologies",
+            "sector": "financials",
+            "risk_cluster": "domestic_financial",
+            "asset_class": "share",
+            "short_enabled": true
+          },
+          "price": "263.94",
+          "trend": "257.3923333333333333333333333",
+          "momentum": "0.035685030927281443654112600",
+          "volatility": "0.01513791636445836360277855153",
+          "observed_at": "2026-09-07 23:59:54+03:00",
+          "complete": true,
+          "tradable": true
+        },
+        {
+          "instrument": {
+            "secid": "X5",
+            "uid": "0964acd0-e2cb-4810-a177-ef4ad8856ff0",
+            "board": "TQBR",
+            "lot_size": 1,
+            "tick_size": "0.5",
+            "currency": "RUB",
+            "issuer_id": "x5_group",
+            "sector": "consumer_staples",
+            "risk_cluster": "domestic_consumer",
+            "asset_class": "share",
+            "short_enabled": true
+          },
+          "price": "1814.0",
+          "trend": "1928.183333333333333333333333",
+          "momentum": "-0.0085422504796982345363336800",
+          "volatility": "0.01494170577605541936421445680",
+          "observed_at": "2026-09-07 23:59:54+03:00",
+          "complete": true,
+          "tradable": true
+        },
+        {
+          "instrument": {
+            "secid": "YDEX",
+            "uid": "7de75794-a27f-4d81-a39b-492345813822",
+            "board": "TQBR",
+            "lot_size": 1,
+            "tick_size": "0.5",
+            "currency": "RUB",
+            "issuer_id": "yandex",
+            "sector": "technology",
+            "risk_cluster": "domestic_growth",
+            "asset_class": "share",
+            "short_enabled": true
+          },
+          "price": "3861.5",
+          "trend": "3681.641666666666666666666667",
+          "momentum": "0.074218977391641097943668049",
+          "volatility": "0.02150924595178028698539557450",
+          "observed_at": "2026-09-07 23:59:54+03:00",
+          "complete": true,
+          "tradable": true
+        }
+      ]
+    }
+  ]
+}

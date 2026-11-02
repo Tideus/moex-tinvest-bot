@@ -425,13 +425,15 @@ sudo systemctl restart moex-tinvest-health.timer
 systemctl list-timers 'moex-tinvest-*' --all --no-pager
 ```
 
-Историческая проверка текущей стратегии на реальных дневных свечах MOEX запускается одной
-командой:
+Для исследовательской версии стратегии только по дневным свечам MOEX:
 
 ```bash
-sudo moex-botctl backtest
+sudo moex-botctl backtest --candle-only
 ```
 
+Без флага стратегия с обязательным flow завершится ошибкой до сетевого запроса:
+в дневном тестере нет исторического потока сделок/заявок. Свечной результат
+не допускает полную модель в PROD даже при положительной доходности и не меняет рабочий конфиг.
 Результаты сохраняются в
 `/var/lib/moex-tinvest-bot/artifacts/historical-backtest/`: исходные OHLCV, сделки, equity CSV,
 интерактивный HTML-график, Markdown-отчёт и fail-closed gate допуска к production. Команда ничего

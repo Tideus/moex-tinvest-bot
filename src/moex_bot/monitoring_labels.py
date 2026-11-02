@@ -71,6 +71,59 @@ def monitor_description(name: str) -> str:
     return "MONITORING / Проверка Kuma; подробности и история доступны в dashboard."
 
 
+UNITS = {"shadow", "intraday", "health", "daily-report", "maintenance", "prod-long-observer",
+         "calendar"}
+INACTIVE = "FAIL: active=inactive, no schedule"
+
+
+def safe_reason(value: str) -> str:
+    """Only known templates; never echo arbitrary collector errors to Kuma or Telegram."""
+    http = re.fullmatch(r"FAIL: HTTP ([1-5][0-9]{2})", value)
+    if http:
+        return "HTTP " + http[1]
+    if value == "FAIL: missing token":
+        return "токен отсутствует"
+    if value == "FAIL: calendar database missing":
+        return "нет локальной БД events.sqlite3; проверить calendar.timer"
+    if value in {"FAIL: stale", "FAIL: stale/incomplete", "FAIL: no refresh"}:
+        return "данные устарели или не получены"
+    if value in {"FAIL: storage/read error", "FAIL: artifact read/schema error"}:
+        return "ошибка чтения хранилища/формата"
+    if value == INACTIVE:
+        return "таймер выключен; проверить, запланирована ли остановка"
+    if value == "FAIL: quality gate blocked":
+        return "контроль качества данных не пройден"
+    if re.fullmatch(r"(CRITICAL|WARNING): free=[0-9.]+ GiB \([0-9.]+%\)", value):
+        return value
+    return "сбой; подробности в diagnose"
+
+
+def compact_checks(checks: dict[str, str]) -> str:
+    """One cause per line, no lost failure count and no unknown labels or response bodies."""
+    known = set(API_LABELS) | {
+        f"{kind}:{unit}" for kind in ("timer", "service") for unit in UNITS
+    } | {"api:geo_cbr_press", "api:geo_moex_risk", "data:calendar", "data:long",
+         "data:intraday", "data:prod-long-observer", "quality:long", "quality:intraday",
+         "quality:prod-long-observer", "backup:age", "telegram:outbox", "memory:available",
+         "intraday:overnight_exposure", "monitor:collector", "collector:resources",
+         "collector:services", "collector:integrations", "collector:artifacts"}
+    for mount in ("/", "/var/lib/moex-tinvest-bot", "/var/log/moex-tinvest-bot"):
+        known.update(("disk:" + mount, "inodes:" + mount))
+    failures = {k: v for k, v in checks.items() if v != "OK"}
+    if not checks:
+        return "Нет ожидаемых метрик"
+    if not failures:
+        return f"OK · проверок: {len(checks)}"
+    inactive = sorted(k[6:] for k, v in failures.items()
+                      if k.startswith("timer:") and k[6:] in UNITS and v == INACTIVE)
+    groups = ([f"Таймеры выключены ({len(inactive)}): {', '.join(inactive)}"] if inactive else [])
+    for key, value in sorted(failures.items()):
+        if key not in {"timer:" + name for name in inactive}:
+            groups.append(f"{key if key in known else 'проверка'}: {safe_reason(value)}")
+    extra = f"; ещё причин: {len(groups)-4}" if len(groups) > 4 else ""
+    return f"Сбой {len(failures)}/{len(checks)} · " + "; ".join(groups[:4]) + extra
+
+
 def safe_failure_details(name: str, path: Path, now: datetime) -> str:
     """Whitelist transformed local checks, never raw webhook/exception/response text."""
     try:
@@ -79,6 +132,11 @@ def safe_failure_details(name: str, path: Path, now: datetime) -> str:
         if not 0 <= age <= 600:
             return ""
         checks = raw["checks"]
+        if "timer" in name.lower():
+            timers = {k: v for k, v in checks.items() if k.startswith(("timer:", "service:"))
+                      and isinstance(v, str)}
+            if len(timers) > 1:
+                return compact_checks(timers)
         units = {"shadow", "intraday", "health", "daily-report", "maintenance",
                  "prod-long-observer", "calendar"}
         allowed = set(API_LABELS) | {
@@ -108,23 +166,7 @@ def safe_failure_details(name: str, path: Path, now: datetime) -> str:
                 continue
             if "api" in lower and "[api:" not in name and not key.startswith("api:"):
                 continue
-            reason = "сбой; подробности в diagnose"
-            http = re.fullmatch(r"FAIL: HTTP ([1-5][0-9]{2})", value)
-            if http:
-                reason = "HTTP " + http[1]
-            elif value == "FAIL: missing token":
-                reason = "токен отсутствует"
-            elif value in {"FAIL: stale", "FAIL: stale/incomplete", "FAIL: no refresh"}:
-                reason = "данные устарели или не получены"
-            elif value in {"FAIL: storage/read error", "FAIL: artifact read/schema error"}:
-                reason = "ошибка чтения хранилища/формата"
-            elif value == "FAIL: active=inactive, no schedule":
-                reason = "таймер выключен; проверить, запланирована ли остановка"
-            elif value == "FAIL: quality gate blocked":
-                reason = "контроль качества данных не пройден"
-            elif re.fullmatch(r"CRITICAL: free=[0-9.]+ GiB \([0-9.]+%\)", value):
-                reason = value
-            lines.append(f"• {key}: {reason}")
+            lines.append(f"• {key}: {safe_reason(value)}")
         return "\n".join(lines[:10])
     except (OSError, ValueError, KeyError, TypeError, AttributeError):
         return ""

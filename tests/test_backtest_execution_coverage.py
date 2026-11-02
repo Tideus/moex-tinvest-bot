@@ -21,11 +21,21 @@ from moex_bot.backtest import (
     run_backtest,
     serialize_backtest,
 )
+from moex_bot.config import load_config
 from moex_bot.domain import OrderRecord, OrderStatus, PortfolioSnapshot, Position, Side
 from moex_bot.harness import TradingHarness
 from moex_bot.shadow import UniverseEntry
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def test_engine_rejects_required_flow_before_simulating_daily_bars() -> None:
+    with pytest.raises(ValueError, match="historical flow is required"):
+        run_backtest(
+            bot_config=load_config(ROOT / "config/shadow.json"),
+            settings=load_backtest_settings(ROOT / "config/backtest.json"),
+            universe=(), candles={}, benchmark_candles=(),
+        )
 
 
 @pytest.mark.parametrize("fault", ["shape", "range", "oos", "cash", "cost", "bool"])
@@ -72,6 +82,8 @@ def test_pending_orders_use_session_range_and_available_cash(fault: str) -> None
     positions = (
         {"SBER": 2 if fault == "sell_close" else -2} if fault in {"sell_close", "cover"} else {}
     )
+    if fault == "sell_touch":
+        positions = {"SBER": 2}
     result = _execute_pending(
         (OrderRecord(intent, OrderStatus.VALIDATED),),
         {} if fault == "missing" else {"SBER": candle},
@@ -80,8 +92,11 @@ def test_pending_orders_use_session_range_and_available_cash(fault: str) -> None
         _bot_config(),
         settings,
         Decimal(1),
+        day=candle.trading_date,
     )
-    assert result[3] == int(fault in {"missing", "buy_miss", "sell_miss", "cash"})
+    assert (result[3][0].status == "expired") == (
+        fault in {"missing", "buy_miss", "sell_miss", "cash"}
+    )
     if fault in {"sell_close", "cover"}:
         assert not result[1]
 
@@ -144,5 +159,5 @@ def test_metrics_does_not_divide_drawdown_by_nonpositive_peak() -> None:
         EquityPoint(date(2026, 1, 1), Decimal(-100), None),
         EquityPoint(date(2026, 1, 2), Decimal(-50), None),
     )
-    metrics = _metrics(points, (), 0, ())
+    metrics = _metrics(points, (), (), ())
     assert metrics.max_drawdown_pct == 0 and metrics.return_pct == -50

@@ -79,6 +79,13 @@ def assess_promotion(
     oos = base.oos_metrics
     checks = (
         _check(
+            "full_strategy_inputs",
+            all(r.evidence_flags.get("full_strategy_inputs") is True for r in (base, stress)),
+            (base.evidence_flags.get("full_strategy_inputs"),
+             stress.evidence_flags.get("full_strategy_inputs")),
+            "True in both base and stress",
+        ),
+        _check(
             "oos_sessions",
             oos.sessions >= gates.min_oos_sessions,
             oos.sessions,
@@ -86,8 +93,8 @@ def assess_promotion(
         ),
         _check(
             "oos_trades",
-            oos.trades >= gates.min_oos_trades,
-            oos.trades,
+            oos.orders_with_fills >= gates.min_oos_trades,
+            oos.orders_with_fills,
             gates.min_oos_trades,
         ),
         _check(
@@ -159,6 +166,10 @@ def render_backtest_report(
     oos = base.oos_metrics
     lines = [
         "# MOEX Strategy v2 — исторический backtest",
+        "Режим: candle-only (1D). Не воспроизводит исторические flow/геособытия.",
+        f"Исполнение DAY: {base.execution_data}; задержка {base.settings.arrival_delay_seconds} с; "
+        f"бюджет объёма окна {base.settings.max_volume_participation * 100}%. "
+        "Касание без прохода не исполняется; остаток истекает.",
         "",
         "## Полный период",
         "",
@@ -168,7 +179,11 @@ def render_backtest_report(
         f"- Excess: {_optional_pct(metrics.excess_return_pct)}",
         f"- Max drawdown: {metrics.max_drawdown_pct:.2f}%",
         f"- Sharpe (без risk-free): {metrics.annualized_sharpe:.3f}",
-        f"- Сделок: {metrics.trades}; неисполненных DAY-заявок: {metrics.unfilled_orders}",
+        f"- Исполнений: {metrics.trades} по {metrics.orders_with_fills} заявкам; "
+        f"DAY-заявок без исполнения: {metrics.unfilled_orders}",
+        f"- Частично исполнено заявок: {metrics.partial_orders}; истекло лотов "
+        f"(включая полностью неисполненные): {metrics.expired_lots}. "
+        f"Без следующей сессии в конце данных: {len(base.pending_at_end)} заявок.",
         f"- Оборот: {_money(metrics.turnover)}; комиссии: {_money(metrics.commissions)}",
         f"- Финансирование short: {_money(metrics.short_financing)} "
         f"при годовой ставке {base.settings.short_financing_rate_annual * 100:.2f}%",
@@ -184,6 +199,8 @@ def render_backtest_report(
         f"- Cost stress ×{base.settings.cost_stress_multiplier}: "
         f"{stress.oos_metrics.return_pct:+.2f}%",
         f"- OOS финансирование short: {_money(oos.short_financing)}",
+        f"- OOS: без исполнения {oos.unfilled_orders}; частично {oos.partial_orders}; "
+        f"истекло лотов {oos.expired_lots}",
         "",
         "## Вклад бумаг",
         "",
@@ -279,7 +296,7 @@ def _html_chart(result: BacktestResult) -> str:
 .card{{max-width:1050px;background:#1f2937;padding:20px;border-radius:14px}}
 svg{{width:100%;height:auto;background:#0f172a;border-radius:10px}}
 .legend span{{margin-right:20px}} .strategy{{color:#34d399}} .benchmark{{color:#60a5fa}}</style>
-<div class="card"><h1>MOEX Strategy v2</h1>
+<div class="card"><h1>MOEX Strategy v2 — candle-only baseline</h1>
 <p>{html.escape(str(points[0].trading_date))} —
 {html.escape(str(points[-1].trading_date))}; индекс=100</p>
 <div class="legend"><span class="strategy">● Strategy</span>

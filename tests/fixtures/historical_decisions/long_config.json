@@ -1,0 +1,43 @@
+{
+  "mode": "shadow",
+  "base_currency": "RUB",
+  "max_data_age_seconds": 345600,
+  "max_position_weight": "0.15",
+  "max_order_notional": "10000",
+  "max_gross_exposure": "0.80",
+  "max_daily_turnover": "30000",
+  "min_trade_notional": "500",
+  "max_open_orders": 5,
+  "allow_margin": false,
+  "live_interlock": false,
+  "strategy": {
+    "top_n": 5,
+    "min_momentum": "0.01",
+    "require_above_trend": true,
+    "candle_period": "1D",
+    "momentum_windows": [
+      5,
+      10,
+      20
+    ],
+    "trend_window": 60,
+    "volatility_window": 20,
+    "volatility_floor": "0.005",
+    "inverse_volatility_weights": true,
+    "exit_rank_buffer": 2,
+    "rebalance_hours_moscow": [
+      10
+    ],
+    "shorts_enabled": false,
+    "short_top_n": 0,
+    "max_short_momentum": "-0.03",
+    "require_below_trend_for_short": true,
+    "long_target_gross": "0.60",
+    "short_target_gross": "0"
+  },
+  "min_cash_reserve_weight": "0.10",
+  "max_sector_weight": "0.35",
+  "max_risk_cluster_weight": "0.45",
+  "max_short_position_weight": "0",
+  "max_short_gross_exposure": "0"
+}

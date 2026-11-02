@@ -1,0 +1,61 @@
+{
+  "run_id": "intraday-2026-09-07T13:40:04.512077+00:00",
+  "quality": {
+    "passed": true,
+    "errors": []
+  },
+  "phase": "entries",
+  "signals": [
+    {
+      "secid": "PHOR",
+      "side": "sell",
+      "observed_at": "2026-09-07 16:35:00+03:00",
+      "price": "5538",
+      "price_move": "-0.0057450628366247755834829443",
+      "trade_imbalance": "-0.4428065121610465282047027006",
+      "order_flow": "-0.002811620376320683617122133705",
+      "book_imbalance": "-0.41",
+      "spread_bbo": "2.8"
+    }
+  ],
+  "orders": [
+    {
+      "status": "validated",
+      "intent": {
+        "order_request_id": "722dcbb7-1b8f-5e14-bac7-4f122dbcb0e3",
+        "instrument": {
+          "secid": "PHOR",
+          "uid": "9978b56f-782a-4a80-a4b1-a48cbecfd194",
+          "board": "TQBR",
+          "lot_size": 1,
+          "tick_size": "0.01",
+          "currency": "RUB",
+          "issuer_id": "phosagro",
+          "sector": "materials",
+          "risk_cluster": "cyclical_exporters",
+          "asset_class": "share",
+          "short_enabled": true
+        },
+        "side": "sell",
+        "lots": 1,
+        "limit_price": "5538.00",
+        "notional": "5538.00",
+        "rationale": "intraday momentum;move=-0.0057450628366247755834829443;trade=-0.4428065121610465282047027006;order=-0.002811620376320683617122133705;book=-0.41",
+        "confirm_margin_trade": true,
+        "order_type": "limit"
+      }
+    }
+  ],
+  "notes": [
+    "completed 5-minute TradeStats/OrderStats/OBStats"
+  ],
+  "signal_diagnostics": {
+    "failed_book_imbalance": 10,
+    "failed_order_flow": 10,
+    "failed_price_move": 12,
+    "failed_spread_bbo": 2,
+    "failed_trade_imbalance": 8,
+    "instruments_evaluated": 13,
+    "signals_passed": 1
+  }
+}

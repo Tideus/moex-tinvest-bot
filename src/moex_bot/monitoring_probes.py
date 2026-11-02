@@ -18,6 +18,10 @@ from zoneinfo import ZoneInfo
 
 
 def read_calendar_health(path: Path, now: datetime) -> str:
+    try:
+        path.stat()
+    except FileNotFoundError:
+        return "FAIL: calendar database missing"
     with closing(sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True)) as db:
         last = db.execute("SELECT received_at, failures FROM refreshes "
                           "ORDER BY rowid DESC LIMIT 1").fetchone()

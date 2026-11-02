@@ -287,12 +287,13 @@ Strategy v2 uses completed daily candles, a blended 5/10/20-session momentum sig
 60-session trend filter, inverse-volatility allocation and one scheduled rebalance hour. Long
 requires momentum above +1% and price above trend. Sandbox short requires momentum below −3%,
 price below trend, current T-Invest short availability, explicit margin confirmation, an 8%
-per-name cap and a 25% portfolio short-gross cap. Run the
-same signal/risk path on real MOEX candles with next-session execution and modeled commission,
-spread and slippage:
+per-name cap and a 25% portfolio short-gross cap. The daily-candle engine has no historical
+flow or geo feed. A strategy requiring flow is refused before fetching candles. To run the
+research-only baseline (without changing the working config), explicitly select candle-only:
 
 ```powershell
 python -m moex_bot.cli historical-backtest `
+  --candle-only `
   --strategy-config config/shadow.json `
   --backtest-config config/backtest.json `
   --promotion-gates config/promotion_gates.json `

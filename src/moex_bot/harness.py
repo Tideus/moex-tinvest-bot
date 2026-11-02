@@ -68,6 +68,17 @@ class TradingHarness:
         self.execution = execution
         self.audit = audit
 
+    def _select_targets(
+        self, market: Mapping[str, MarketObservation], portfolio: PortfolioSnapshot, as_of: datetime
+    ) -> tuple[Target, ...]:
+        return calculate_targets(
+            market.values(), self.config.strategy,
+            held_secids=frozenset(s for s, pos in portfolio.positions.items() if pos.lots > 0),
+            held_short_secids=frozenset(
+                s for s, pos in portfolio.positions.items() if pos.lots < 0
+            ),
+        )
+
     def run(
         self,
         *,
@@ -99,16 +110,7 @@ class TradingHarness:
                 self.config.strategy.rebalance_hours_moscow,
             )
 
-        raw_targets = calculate_targets(
-            market.values(),
-            self.config.strategy,
-            held_secids=frozenset(
-                secid for secid, position in portfolio.positions.items() if position.lots > 0
-            ),
-            held_short_secids=frozenset(
-                secid for secid, position in portfolio.positions.items() if position.lots < 0
-            ),
-        )
+        raw_targets = self._select_targets(market, portfolio, as_of)
         flow_diagnostics: tuple[FlowDiagnostic, ...] = ()
         if self.config.strategy.flow_confirmation_enabled and allow_rebalance:
             flow_map = flow or {}
