@@ -72,12 +72,20 @@ def monitor_description(name: str) -> str:
 
 
 UNITS = {"shadow", "intraday", "health", "daily-report", "maintenance", "prod-long-observer",
-         "calendar"}
+         "calendar", "long-once-sandbox", "legacy-long-excluded"}
 INACTIVE = "FAIL: active=inactive, no schedule"
 
 
 def safe_reason(value: str) -> str:
     """Only known templates; never echo arbitrary collector errors to Kuma or Telegram."""
+    long_reasons = {
+        "FAIL: reconcile one-shot entry/protection": "LONG sandbox: сверить покупку и защиту",
+        "FAIL: scheduled one-shot plan missing": "LONG sandbox: нет ожидаемого утреннего плана",
+        "FAIL: one-shot enrollment/ledger/plan unreadable": "LONG sandbox: проверить журнал/допуск",
+        "FAIL: legacy LONG writer not disabled": "старый LONG должен быть выключен",
+    }
+    if value in long_reasons:
+        return long_reasons[value]
     http = re.fullmatch(r"FAIL: HTTP ([1-5][0-9]{2})", value)
     if http:
         return "HTTP " + http[1]

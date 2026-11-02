@@ -16,6 +16,8 @@ from urllib.request import Request, urlopen
 from xml.etree import ElementTree
 from zoneinfo import ZoneInfo
 
+from . import monitoring_long_once
+
 
 def read_calendar_health(path: Path, now: datetime) -> str:
     try:
@@ -113,8 +115,15 @@ def collect_resources(app: Path, state: Path, settings: dict[str, Any],
 def collect_services(app: Path, state: Path, settings: dict[str, Any],
                     now: datetime) -> dict[str, str]:
     checks: dict[str, str] = {}
-    units = ["shadow", "intraday", "health", "daily-report", "maintenance",
-             "prod-long-observer"]
+    once = monitoring_long_once.enrolled(state)
+    units = ["long-once-sandbox" if once else "shadow", "intraday", "health",
+             "daily-report", "maintenance", "prod-long-observer"]
+    if once:
+        active = systemd("moex-tinvest-shadow.timer", "ActiveState")
+        enabled = systemd("moex-tinvest-shadow.timer", "UnitFileState")
+        checks["timer:legacy-long-excluded"] = (
+            "OK" if active == "inactive" and enabled in {"disabled", "masked"}
+            else "FAIL: legacy LONG writer not disabled")
     if settings["calendar_required"]:
         units.append("calendar")
     for name in units:
@@ -207,10 +216,15 @@ def collect_artifacts(app: Path, state: Path, settings: dict[str, Any],
     except Exception:
         checks["telegram:outbox"] = "FAIL: storage/read error"
     local = now.astimezone(ZoneInfo("Europe/Moscow"))
+    once = monitoring_long_once.enrolled(state)
+    if once:
+        checks.update(monitoring_long_once.evidence(state, now))
     if local.weekday() < 5 and 625 <= local.hour * 60 + local.minute < 1140:
         limits = (("intraday", "intraday-plan-", settings["intraday_max_age_seconds"]),
                   ("long", "shadow-", settings["long_max_age_seconds"]))
         for kind, prefix, limit in limits:
+            if kind == "long" and once:
+                continue
             files = list((state / "artifacts").glob(prefix + "*.json"))
             # API probes may take time; a new artifact can appear after collection started.
             observed_at = max(now.timestamp(), datetime.now(UTC).timestamp())

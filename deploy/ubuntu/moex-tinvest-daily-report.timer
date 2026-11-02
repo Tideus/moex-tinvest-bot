@@ -3,7 +3,8 @@ Description=Send MOEX/T-Invest daily shadow trade report
 
 [Timer]
 OnCalendar=*-*-* 23:20:00 Europe/Moscow
-Persistent=true
+# The service reports today's date; never replay a missed evening report at midday.
+Persistent=false
 RandomizedDelaySec=20s
 AccuracySec=1s
 Unit=moex-tinvest-daily-report.service

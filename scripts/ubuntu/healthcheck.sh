@@ -58,8 +58,15 @@ stage "Telegram durable outbox"
   --outbox "${STATE_DIR}/data/notifications.sqlite3" --max-pending-due 20
 
 stage "last trading service results"
+long_service=moex-tinvest-shadow.service
+for evidence in "${CONFIG_DIR}/sandbox-long-once.owner" "${STATE_DIR}/long-once/sandbox.sqlite3" \
+  /var/lib/moex-tinvest-control/long-once-sandbox/entry.claim; do
+  if [[ -e "${evidence}" || -L "${evidence}" ]]; then
+    long_service=moex-tinvest-long-once-sandbox.service
+  fi
+done
 for unit in \
-  moex-tinvest-shadow.service \
+  "${long_service}" \
   moex-tinvest-intraday.service \
   moex-tinvest-prod-long-observer.service \
   moex-tinvest-maintenance.service; do
@@ -69,6 +76,12 @@ for unit in \
   fi
   printf 'PASS: %s is not failed\n' "${unit}"
 done
+
+if [[ "${long_service}" == moex-tinvest-long-once-sandbox.service ]]; then
+  # monitoring above checked the bound ledger and last scheduled 10:05 decision.
+  printf 'PASS: one-shot LONG schedule/ledger checked; no hourly shadow output expected\n'
+  exit 0
+fi
 
 stage "latest shadow artifact"
 latest="$(find "${STATE_DIR}/artifacts" -maxdepth 1 -type f -name 'shadow-*.json' \

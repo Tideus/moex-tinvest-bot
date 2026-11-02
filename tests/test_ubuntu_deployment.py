@@ -55,7 +55,7 @@ def test_daily_report_timer_and_service_send_at_moscow_eod() -> None:
     timer = _unit("moex-tinvest-daily-report.timer")
     service = _unit("moex-tinvest-daily-report.service")
     assert "OnCalendar=*-*-* 23:20:00 Europe/Moscow" in timer
-    assert "Persistent=true" in timer
+    assert "Persistent=false" in timer  # A missed EOD must not send today's incomplete report.
     assert "run-daily-report.sh" in service
     assert "EnvironmentFile=/etc/moex-tinvest-bot/bot.env" in service
 

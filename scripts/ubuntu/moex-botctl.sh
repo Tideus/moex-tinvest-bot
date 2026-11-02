@@ -16,6 +16,18 @@ RUNTIME_FILE="${CONFIG_DIR}/runtime.json"
 SERVICES_FILE="${APP_DIR}/config/services.json"
 FAILURES=0
 
+long_timer() {
+  local path
+  for path in "${CONFIG_DIR}/sandbox-long-once.owner" "${STATE_DIR}/long-once/sandbox.sqlite3" \
+    /var/lib/moex-tinvest-control/long-once-sandbox/entry.claim; do
+    if [[ -e "${path}" || -L "${path}" ]]; then
+      printf '%s\n' moex-tinvest-long-once-sandbox.timer
+      return
+    fi
+  done
+  printf '%s\n' moex-tinvest-shadow.timer
+}
+
 usage() {
   cat <<'EOF'
 Usage:
@@ -339,6 +351,8 @@ prelaunch() {
     systemd-analyze verify \
       "${SYSTEMD_DIR}/moex-tinvest-shadow.service" \
       "${SYSTEMD_DIR}/moex-tinvest-shadow.timer" \
+      "${SYSTEMD_DIR}/moex-tinvest-long-once-sandbox.service" \
+      "${SYSTEMD_DIR}/moex-tinvest-long-once-sandbox.timer" \
       "${SYSTEMD_DIR}/moex-tinvest-health.service" \
       "${SYSTEMD_DIR}/moex-tinvest-health.timer" \
       "${SYSTEMD_DIR}/moex-tinvest-daily-report.service" \
@@ -361,6 +375,21 @@ prelaunch() {
 
 start_bot() {
   prelaunch || return 2
+  local selected_long
+  local -a long_to_enable=()
+  selected_long="$(long_timer)"
+  if [[ "${selected_long}" == moex-tinvest-long-once-sandbox.timer ]]; then
+    # The general start command cannot grant or resume entry permission.
+    if ! systemctl is-enabled --quiet "${selected_long}" ||
+       ! systemctl is-active --quiet "${selected_long}" ||
+       systemctl is-active --quiet moex-tinvest-shadow.timer ||
+       systemctl is-enabled --quiet moex-tinvest-shadow.timer; then
+      printf 'BLOCKED: verify explicit one-shot timer enrollment and disable legacy LONG.\n' >&2
+      return 2
+    fi
+  else
+    long_to_enable=("${selected_long}")
+  fi
   heading "Применение расписания"
   check "Systemd drop-in создан" "проверьте runtime.json и права /etc/systemd/system" \
     "${PYTHON_BIN}" -m moex_bot.cli runtime-render-systemd \
@@ -380,6 +409,7 @@ start_bot() {
     printf '\033[1;31mBLOCKED\033[0m: расписание не применено; сервисы не запускались.\n'
     return 2
   fi
+  if [[ "${selected_long}" == moex-tinvest-shadow.timer ]]; then
   check "Первый shadow-цикл завершён" \
     "посмотрите journalctl -u moex-tinvest-shadow.service" \
     systemctl start moex-tinvest-shadow.service
@@ -408,12 +438,15 @@ start_bot() {
     printf '\033[1;31mBLOCKED\033[0m: health-check не пройден; timers не включены.\n'
     return 2
   fi
+  else
+    printf 'SANDBOX LONG: existing one-shot schedule retained; no forced broker cycles.\n'
+  fi
   check "Таймеры включены" "проверьте systemctl status таймеров" \
-    systemctl enable --now moex-tinvest-shadow.timer moex-tinvest-health.timer \
+    systemctl enable --now "${long_to_enable[@]}" moex-tinvest-health.timer \
       moex-tinvest-daily-report.timer moex-tinvest-intraday.timer \
       moex-tinvest-maintenance.timer moex-tinvest-prod-long-observer.timer
   for timer in \
-    moex-tinvest-shadow.timer \
+    "${selected_long}" \
     moex-tinvest-health.timer \
     moex-tinvest-daily-report.timer \
     moex-tinvest-intraday.timer \
@@ -506,6 +539,8 @@ stop_bot() {
 
 diagnose_once() {
   FAILURES=0
+  local selected_long
+  selected_long="$(long_timer)"
   if systemctl is-enabled --quiet moex-tinvest-calendar.timer; then
     check "Calendar timer active" "Check calendar.timer" \
       systemctl is-active --quiet moex-tinvest-calendar.timer
@@ -527,8 +562,8 @@ diagnose_once() {
       --services "${SERVICES_FILE}" --runtime "${RUNTIME_FILE}" \
       --require moex_algopack --require telegram \
       --require "${requirement}"
-  check "Shadow timer активен" "выполните sudo moex-botctl start" \
-    systemctl is-active --quiet moex-tinvest-shadow.timer
+  check "Активный LONG: ${selected_long}" "проверьте ожидаемый таймер LONG" \
+    systemctl is-active --quiet "${selected_long}"
   check "Health timer активен" "выполните sudo moex-botctl start" \
     systemctl is-active --quiet moex-tinvest-health.timer
   check "Daily report timer активен" "выполните sudo moex-botctl start" \
@@ -540,7 +575,7 @@ diagnose_once() {
   check "Prod long observer timer активен" "выполните sudo moex-botctl start" \
     systemctl is-active --quiet moex-tinvest-prod-long-observer.timer
   for timer in \
-    moex-tinvest-shadow.timer \
+    "${selected_long}" \
     moex-tinvest-health.timer \
     moex-tinvest-daily-report.timer \
     moex-tinvest-intraday.timer \
