@@ -192,7 +192,8 @@ reset_archive="$(find "${RUNTIME_DIR}/reset-backups" -name 'moex-history-reset-*
 [[ -n "${reset_archive}" && -f "${reset_archive}.sha256" ]]
 (cd "$(dirname "${reset_archive}")" && sha256sum -c "$(basename "${reset_archive}.sha256")") \
   >/dev/null
-tar -tzf "${reset_archive}" | grep -q 'state/data/history-marker.txt'
-tar -tzf "${reset_archive}" | grep -q 'logs/history-marker.log'
+tar -tzf "${reset_archive}" >"${RUNTIME_DIR}/reset-members.txt"
+grep -Fxq './state/data/history-marker.txt' "${RUNTIME_DIR}/reset-members.txt"
+grep -Fxq './logs/history-marker.log' "${RUNTIME_DIR}/reset-members.txt"
 
 printf 'PASS: Ubuntu deployment staging, runner, health and backup contracts\n'
