@@ -28,6 +28,24 @@ class SandboxExecutionResult:
     stopped_reason: str | None
 
 
+def expected_intraday_ttl_stop(result: SandboxExecutionResult) -> bool:
+    """Presentation/exit-code classification only; never continue the execution batch."""
+    if (not result.run_id.startswith("intraday-")
+            or result.stopped_reason != "submission stopped after cancelled order"
+            or not result.submitted):
+        return False
+    last = result.submitted[-1]
+    return (
+        all(r.status is OrderStatus.FILLED and r.filled_lots == r.intent.lots
+            for r in result.submitted[:-1])
+        and last.status is OrderStatus.CANCELLED
+        and last.status_detail == "ttl_expired"
+        and type(last.filled_lots) is int and last.filled_lots == 0
+        and last.intent.order_type == "limit"
+        and isinstance(last.broker_order_id, str) and bool(last.broker_order_id.strip())
+    )
+
+
 def execute_shadow_plan(
     *,
     shadow_path: Path,
@@ -156,7 +174,8 @@ def execute_shadow_plan(
 
 def render_sandbox_execution_report(result: SandboxExecutionResult) -> str:
     lines = [
-        "✅ T‑INVEST SANDBOX · РЕАЛЬНОЕ ИСПОЛНЕНИЕ НА ТЕСТОВОМ СЧЁТЕ",
+        ("⌛ T‑INVEST SANDBOX · ШТАТНАЯ ОТМЕНА ПО TTL" if expected_intraday_ttl_stop(result)
+         else "✅ T‑INVEST SANDBOX · РЕАЛЬНОЕ ИСПОЛНЕНИЕ НА ТЕСТОВОМ СЧЁТЕ"),
         f"План: {result.run_id}",
         f"Передано брокеру заявок: {len(result.submitted)}",
     ]
@@ -168,7 +187,11 @@ def render_sandbox_execution_report(result: SandboxExecutionResult) -> str:
             + (f" ({record.status_detail})" if record.status_detail else "")
         )
     if result.stopped_reason:
-        lines.append(f"⛔ {result.stopped_reason}")
+        if expected_intraday_ttl_stop(result):
+            lines.append("⌛ Штатная отмена по TTL: лимитная заявка не исполнилась; "
+                         "брокер подтвердил отмену. Пакет остановлен, повторного входа нет.")
+        else:
+            lines.append(f"⛔ {result.stopped_reason}")
     lines.append(
         "Заявки действительно переданы API Sandbox. Это тестовый счёт; "
         "реальные деньги не используются."

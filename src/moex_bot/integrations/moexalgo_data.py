@@ -10,6 +10,7 @@ from typing import Any, Protocol, cast
 from zoneinfo import ZoneInfo
 
 from ..domain import Instrument, MarketObservation
+from .read_failure import read_moex
 
 MOSCOW = ZoneInfo("Europe/Moscow")
 
@@ -154,8 +155,10 @@ class MoexAlgoReadOnlyAdapter:
             or selected_volatility_window < 2
         ):
             raise ValueError("invalid signal windows")
-        ticker = self._ticker_factory(secid, board)
-        info = self._metadata_factory(secid, board)
+        ticker = read_moex(lambda: self._ticker_factory(secid, board), stage="ticker", secid=secid)
+        info = read_moex(
+            lambda: self._metadata_factory(secid, board), stage="metadata", secid=secid
+        )
         instrument = Instrument(
             secid=secid,
             uid=uid,
@@ -166,7 +169,11 @@ class MoexAlgoReadOnlyAdapter:
         local_as_of = as_of.astimezone(MOSCOW)
         start = (local_as_of - timedelta(days=lookback_days)).date().isoformat()
         end = local_as_of.date().isoformat()
-        candle_rows = ticker.candles(start=start, end=end, period=period).to_dict(orient="records")
+        candle_rows = read_moex(
+            lambda: ticker.candles(start=start, end=end, period=period).to_dict(orient="records"),
+            stage="candles",
+            secid=secid,
+        )
         completed: list[tuple[datetime, Decimal]] = []
         for row in candle_rows:
             candle_end = _timestamp(_field(row, "end"))
@@ -186,10 +193,7 @@ class MoexAlgoReadOnlyAdapter:
         price = closes[-1]
         trend = sum(closes[-trend_window:], start=Decimal("0")) / Decimal(trend_window)
         momentum = sum(
-            (
-                price / closes[-(window + 1)] - Decimal("1")
-                for window in selected_momentum_windows
-            ),
+            (price / closes[-(window + 1)] - Decimal("1") for window in selected_momentum_windows),
             Decimal("0"),
         ) / Decimal(len(selected_momentum_windows))
         volatility_closes = closes[-(selected_volatility_window + 1) :]
@@ -214,14 +218,24 @@ class MoexAlgoReadOnlyAdapter:
     ) -> tuple[HistoricalCandle, ...]:
         if start > end:
             raise ValueError("historical start must not be after end")
-        ticker = self._ticker_factory(secid, board)
+        ticker = read_moex(lambda: self._ticker_factory(secid, board), stage="ticker", secid=secid)
         by_date: dict[date, HistoricalCandle] = {}
         chunk_start = start
         while chunk_start <= end:
             chunk_end = min(end, chunk_start + timedelta(days=364))
-            rows = ticker.candles(
-                start=chunk_start.isoformat(), end=chunk_end.isoformat(), period="1D"
-            ).to_dict(orient="records")
+
+            def read_chunk(
+                start: date = chunk_start, end: date = chunk_end
+            ) -> list[dict[str, Any]]:
+                return ticker.candles(
+                    start=start.isoformat(), end=end.isoformat(), period="1D"
+                ).to_dict(orient="records")
+
+            rows = read_moex(
+                read_chunk,
+                stage="historical_candles",
+                secid=secid,
+            )
             for row in rows:
                 begin = _timestamp(_field(row, "begin", "end")).astimezone(MOSCOW).date()
                 candle = HistoricalCandle(

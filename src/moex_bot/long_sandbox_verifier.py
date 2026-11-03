@@ -177,6 +177,46 @@ def publish(result: dict[str, Any], output: Path, outbox: Path, now: datetime) -
                                 body=render(result), now=now)
 
 
+def publish_planner_failures(root: Path, outbox: Path, now: datetime) -> None:
+    """The read-only verifier owns notification writes, not the isolated trading writer."""
+    for path in root.glob("run-*/plan.error.json"):
+        if path.is_symlink() or path.parent.is_symlink():
+            continue
+        try:
+            receipt = json.loads(path.read_bytes())
+            at = datetime.fromisoformat(receipt["as_of"])
+            if receipt["environment"] != "SANDBOX" or not 0 <= (now - at).total_seconds() <= 86400:
+                continue
+            failure = receipt["failure"]
+            host = failure["host"]
+            stage = failure["stage"]
+            category = failure["category"]
+            symbol = failure["secid"]
+            attempts = failure["attempts"]
+            if (host not in {"apim.moex.com", "iss.moex.com", "unknown"}
+                    or stage not in {"ticker", "metadata", "candles", "historical_candles"}
+                    or category not in {"dns", "tls", "connection", "http"}
+                    or not isinstance(symbol, str) or not symbol.isascii()
+                    or not symbol.isalnum() or len(symbol) > 20
+                    or type(attempts) is not int or not 1 <= attempts <= 3):
+                continue
+            body = (
+                "🚨 LONG · SANDBOX · ошибка рыночных данных\n"
+                f"Время: {at.astimezone(MOSCOW):%d.%m.%Y %H:%M:%S МСК}\n"
+                f"API: MOEX market data · {host} (не T-Invest sandbox)\n"
+                f"Этап: {stage} · бумага: {symbol}\n"
+                f"Причина: {category} · попыток: {attempts}\n"
+                "План не построен: это не отсутствие сигнала. Проверьте API/DNS/TLS.\n"
+                "Детали — plan.error.json в каталоге цикла. Заявки не повторять."
+            )
+            SQLiteOutbox(outbox).enqueue(
+                kind="health_failure", dedupe_key="long-planner-failure:" + at.isoformat(),
+                body=body, now=now,
+            )
+        except (OSError, ValueError, KeyError, TypeError):
+            print("WARN: invalid or unavailable LONG planner error receipt; inspect journal")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.parse_args()
@@ -204,6 +244,7 @@ def main() -> int:
                   "environment": "sandbox", "read_only": True}
     if result is not None:
         publish(result, OUTPUT, OUTBOX, now)
+    publish_planner_failures(STATE.parent, OUTBOX, now)
     token, chat = os.getenv("TELEGRAM_BOT_TOKEN", ""), os.getenv("TELEGRAM_CHAT_ID", "")
     if token and chat:
         # Durable outbox is the receipt; an unavailable Telegram API is retried on next cycle.

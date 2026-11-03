@@ -35,6 +35,7 @@ from .integration_health import probe_algopack
 from .integrations.algopack_flow import AlgoPackFlowAdapter
 from .integrations.algopack_intraday import AlgoPackIntradayAdapter
 from .integrations.moexalgo_data import MoexAlgoReadOnlyAdapter
+from .integrations.read_failure import MarketDataReadError
 from .integrations.tinvest_sandbox import (
     GET_OPERATIONS_BY_CURSOR_PATH,
     GET_ORDERS_PATH,
@@ -73,6 +74,7 @@ from .runtime_config import (
 )
 from .sandbox_execution import (
     execute_shadow_plan,
+    expected_intraday_ttl_stop,
     reconcile_execution_journal,
     render_sandbox_execution_report,
 )
@@ -680,6 +682,7 @@ def hourly_shadow(
     report_environment: str = "SANDBOX",
     allowed_secids_policy_path: Path | None = None,
     quality_block_is_safe: bool = False,
+    failure_outbox_path: Path | None = None,
 ) -> int:
     try:
         if quality_block_is_safe and report_environment != "PROD OBSERVER":
@@ -723,6 +726,39 @@ def hourly_shadow(
                 ),
                 now=as_of,
             )
+    except MarketDataReadError as exc:
+        evidence = {
+            "component": "LONG planner", "environment": report_environment,
+            "as_of": as_of.isoformat(), "failure": exc.evidence,
+            "result": "DATA_UNAVAILABLE; no plan produced by this invocation",
+        }
+        body = (
+            f"🚨 LONG · {report_environment} · данные недоступны\n"
+            f"Время решения: {as_of.isoformat()}\n"
+            f"API: MOEX market data (общий для sandbox/PROD, не T-Invest)\n"
+            f"Адрес: {exc.evidence['host']}{exc.evidence['path']}\n"
+            f"Этап: {exc.evidence['stage']} · бумага: {exc.evidence['secid']}\n"
+            f"Ошибка: {exc.evidence['error']} · причина: {exc.evidence['category']}\n"
+            f"HTTP: {exc.evidence['http_status']} · попыток: {exc.evidence['attempts']}\n"
+            "План не построен; это ошибка данных, не отсутствие сигнала.\n"
+            "Проверьте доступность API/DNS/TLS и журнал цикла. Заявки не повторять."
+        )
+        print(body)
+        try:
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            output_path.with_suffix(".error.json").write_text(
+                json.dumps(evidence, ensure_ascii=False, indent=2), encoding="utf-8",
+            )
+            alert_outbox = failure_outbox_path or outbox_path
+            if alert_outbox is not None:
+                SQLiteOutbox(alert_outbox).enqueue(
+                    kind="health_failure",
+                    dedupe_key=f"long-data:{report_environment}:{as_of.isoformat()}",
+                    body=body, now=as_of,
+                )
+        except (OSError, sqlite3.Error):
+            print("FAIL: LONG failure evidence/alert persistence failed; inspect journal")
+        return 2
     except (RuntimeError, ValueError, OSError, json.JSONDecodeError) as exc:
         print(f"FAIL: {exc}")
         return 2
@@ -961,6 +997,8 @@ def intraday_plan(
     outbox_path: Path | None,
 ) -> int:
     try:
+        if output_path.exists() or output_path.is_symlink():
+            raise ValueError("intraday plan already exists; historical decisions are immutable")
         config = load_intraday_config(config_path)
         universe = load_universe(universe_path)
         instruments = _verified_instruments_by_secid(universe)
@@ -968,19 +1006,22 @@ def intraday_plan(
         if not isinstance(raw_portfolio, dict):
             raise ValueError("intraday portfolio snapshot must be an object")
         try:
-            bars = AlgoPackIntradayAdapter.from_environment().latest(
-                secids=tuple(instruments), as_of=as_of
+            bars = AlgoPackIntradayAdapter.from_environment().history(
+                secids=tuple(instruments), as_of=as_of, bars_per_secid=config.history_bars,
             )
         except (OSError, RuntimeError, ValueError):
             print("WARN: ALGOPACK unavailable; entries blocked, broker-based exits remain active")
             bars = ()
+        received_at = datetime.now(UTC)
+        store = IntradayStateStore(state_path)
         plan = build_intraday_plan(
             config=config,
             instruments=instruments,
             portfolio=raw_portfolio,
-            store=IntradayStateStore(state_path),
+            store=store,
             bars=bars,
             as_of=as_of,
+            received_at=received_at,
         )
         plan.write(
             output_path,
@@ -990,6 +1031,11 @@ def intraday_plan(
                 "config_snapshot": asdict(config),
                 "portfolio_input": raw_portfolio,
                 "supercandles": [asdict(bar) for bar in bars],
+                "market_data_received_at": received_at,
+                "history_policy": "current-session-common-window-v1; insert-only",
+                "history_used": [asdict(bar) for secid in instruments for bar in
+                                 store.recent(secid, config.history_bars, as_of=as_of,
+                                              available_at=received_at)],
                 "signal_formula": {
                     "price_move": "last_close / first_close - 1",
                     "trade_imbalance": "sum(val_b-val_s) / sum(val_b+val_s)",
@@ -1072,8 +1118,16 @@ def intraday_sandbox_execute(
             json.JSONDecodeError) as exc:
         print(f"FAIL: intraday sandbox execution: {exc}")
         return 2
+    if expected_intraday_ttl_stop(result):
+        print("INFO: INTRADAY SANDBOX expected_ttl_cancelled; filled=0 for expired order; "
+              "broker cancellation confirmed; batch stopped, no retry")
+        return 0
+    if result.stopped_reason:
+        print(f"FAIL: intraday sandbox attention_required; submitted={len(result.submitted)}; "
+              "inspect execution artifact and reconcile broker state")
+        return 2
     print(f"PASS: intraday sandbox submitted={len(result.submitted)}")
-    return 2 if result.stopped_reason else 0
+    return 0
 
 
 def intraday_trade_notifications(
@@ -1976,6 +2030,8 @@ def build_parser() -> argparse.ArgumentParser:
     shadow_parser.add_argument("--as-of", type=datetime.fromisoformat)
     shadow_parser.add_argument("--require-token", action="store_true")
     shadow_parser.add_argument("--outbox", type=Path)
+    shadow_parser.add_argument("--failure-outbox", type=Path,
+                               help="Technical alerts only; does not enable trading reports")
     shadow_parser.add_argument(
         "--quality-block-is-safe",
         action="store_true",
@@ -2429,6 +2485,7 @@ def main() -> int:
             report_environment=args.report_environment,
             allowed_secids_policy_path=args.allowed_secids_policy,
             quality_block_is_safe=args.quality_block_is_safe,
+            failure_outbox_path=args.failure_outbox,
         )
     if args.command == "sandbox-execute":
         as_of = args.as_of or datetime.now(UTC)

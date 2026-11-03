@@ -5,6 +5,7 @@ import hashlib
 import io
 import json
 import os
+import sys
 from contextlib import redirect_stdout
 from dataclasses import asdict
 from datetime import UTC, date, datetime, time
@@ -144,9 +145,13 @@ def observe(root, profile, warmup=False):
             code=code,
             plan=plan.name if plan.exists() else None,
         )
+        failure_path = plan.with_suffix(".error.json")
+        if code != 0 and failure_path.exists():
+            status["failure"] = json.loads(failure_path.read_text(encoding="utf-8"))
+            print(json.dumps(status["failure"], ensure_ascii=False), file=sys.stderr)
         return code
     except Exception as exc:
-        status.update(error=type(exc).__name__, http_status=getattr(exc, "code", None))
+        status.update(code=2, error=type(exc).__name__, http_status=getattr(exc, "code", None))
         return 2
     finally:
         status["finished_at"] = datetime.now(UTC)

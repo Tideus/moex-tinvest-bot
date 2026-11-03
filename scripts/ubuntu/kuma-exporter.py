@@ -13,6 +13,7 @@ from urllib.parse import urlencode
 from urllib.request import urlopen
 from uuid import uuid4
 
+from moex_bot.monitoring_execution import TTL_NOTE
 from moex_bot.monitoring_labels import API_LABELS, compact_checks
 
 NAMES = ("Observer heartbeat", "Resources", "Timers and services",
@@ -107,10 +108,10 @@ def main():
     for key in API_LABELS:
         if key in tokens:
             groups[key] = (key,)
-    return publish_groups(tokens, checks, groups)
+    return publish_groups(tokens, checks, groups, snapshot.get("observations"))
 
 
-def publish_groups(tokens, checks, groups):
+def publish_groups(tokens, checks, groups, observations=None):
     failed_delivery = False
     for name, prefixes in groups.items():
         selected = {key: value for key, value in checks.items()
@@ -118,6 +119,10 @@ def publish_groups(tokens, checks, groups):
         heartbeat = name == "Observer heartbeat"
         problems = not heartbeat and (not selected or any(v != "OK" for v in selected.values()))
         message = "Коллектор: свежий снимок" if heartbeat else compact_checks(selected)
+        if (name == "Timers and services" and not problems
+                and isinstance(observations, dict)
+                and observations.get("intraday_execution") == TTL_NOTE):
+            message += " · " + TTL_NOTE
         query = urlencode({"status": "down" if problems else "up", "msg": message})
         try:
             with urlopen("http://127.0.0.1:3001/api/push/" + tokens[name] + "?" + query,

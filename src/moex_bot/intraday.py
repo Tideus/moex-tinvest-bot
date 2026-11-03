@@ -87,10 +87,9 @@ class IntradayPlan:
             "analysis_input": analysis_input or {},
         }
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(
-            json.dumps(payload, ensure_ascii=False, default=str, indent=2),
-            encoding="utf-8",
-        )
+        # A new collection may inform a NEW plan, never replace historical evidence.
+        with path.open("x", encoding="utf-8") as stream:
+            stream.write(json.dumps(payload, ensure_ascii=False, default=str, indent=2))
 
 
 class IntradayStateStore:
@@ -104,6 +103,12 @@ class IntradayStateStore:
                     secid TEXT NOT NULL,
                     observed_at TEXT NOT NULL,
                     payload TEXT NOT NULL,
+                    PRIMARY KEY(secid, observed_at)
+                );
+                CREATE TABLE IF NOT EXISTS intraday_bar_receipts (
+                    secid TEXT NOT NULL,
+                    observed_at TEXT NOT NULL,
+                    received_at TEXT NOT NULL,
                     PRIMARY KEY(secid, observed_at)
                 );
                 CREATE TABLE IF NOT EXISTS intraday_signals (
@@ -132,25 +137,47 @@ class IntradayStateStore:
             conn.execute("PRAGMA journal_mode=WAL")
             yield conn
 
-    def add(self, bars: tuple[IntradaySuperCandle, ...]) -> None:
+    def add(self, bars: tuple[IntradaySuperCandle, ...], *,
+            received_at: datetime | None = None) -> None:
+        if received_at is not None and received_at.tzinfo is None:
+            raise ValueError("received_at must be timezone-aware")
         with self._connect() as conn:
-            conn.executemany(
-                "INSERT OR IGNORE INTO intraday_bars(secid, observed_at, payload) VALUES(?,?,?)",
-                (
-                    (
-                        bar.secid,
-                        bar.observed_at.isoformat(),
-                        json.dumps(asdict(bar), default=str, ensure_ascii=False),
-                    )
-                    for bar in bars
-                ),
-            )
+            for bar in bars:
+                cursor = conn.execute(
+                    "INSERT OR IGNORE INTO intraday_bars(secid, observed_at, payload) "
+                    "VALUES(?,?,?)",
+                    (bar.secid, bar.observed_at.isoformat(),
+                     json.dumps(asdict(bar), default=str, ensure_ascii=False)),
+                )
+                if cursor.rowcount == 1 and received_at is not None:
+                    conn.execute("INSERT INTO intraday_bar_receipts VALUES(?,?,?)",
+                                 (bar.secid, bar.observed_at.isoformat(), received_at.isoformat()))
 
-    def recent(self, secid: str, limit: int) -> tuple[IntradaySuperCandle, ...]:
+    def recent(self, secid: str, limit: int, *,
+               as_of: datetime | None = None,
+               available_at: datetime | None = None) -> tuple[IntradaySuperCandle, ...]:
+        if limit <= 0:
+            raise ValueError("history limit must be positive")
+        clauses = ["b.secid=?"]
+        params: list[str | int] = [secid]
+        if as_of is not None:
+            if as_of.tzinfo is None:
+                raise ValueError("as_of must be timezone-aware")
+            midnight = as_of.astimezone(MOSCOW).replace(hour=0, minute=0, second=0, microsecond=0)
+            clauses += ["julianday(b.observed_at)>=julianday(?)",
+                        "julianday(b.observed_at)<=julianday(?)"]
+            params += [midnight.isoformat(), as_of.isoformat()]
+        if available_at is not None:
+            if available_at.tzinfo is None:
+                raise ValueError("available_at must be timezone-aware")
+            clauses.append("(r.received_at IS NULL OR julianday(r.received_at)<=julianday(?))")
+            params.append(available_at.isoformat())
+        params.append(limit)
         with self._connect() as conn:
             rows = conn.execute(
-                "SELECT payload FROM intraday_bars WHERE secid=? ORDER BY observed_at DESC LIMIT ?",
-                (secid, limit),
+                "SELECT b.payload FROM intraday_bars b LEFT JOIN intraday_bar_receipts r "
+                "ON b.secid=r.secid AND b.observed_at=r.observed_at WHERE " + " AND ".join(clauses)
+                + " ORDER BY julianday(b.observed_at) DESC LIMIT ?", params,
             ).fetchall()
         return tuple(reversed(tuple(_bar(json.loads(row[0])) for row in rows)))
 
@@ -208,12 +235,16 @@ def build_intraday_plan(
     store: IntradayStateStore,
     bars: tuple[IntradaySuperCandle, ...],
     as_of: datetime,
+    received_at: datetime | None = None,
 ) -> IntradayPlan:
     if as_of.tzinfo is None:
         raise ValueError("as_of must be timezone-aware")
     local = as_of.astimezone(MOSCOW)
     run_id = f"intraday-{as_of.isoformat()}"
-    store.add(bars)
+    bars = tuple(sorted((b for b in bars if b.observed_at <= as_of and
+                         b.observed_at.astimezone(MOSCOW).date() == local.date()),
+                        key=lambda b: (b.secid, b.observed_at)))
+    store.add(bars, received_at=received_at)
     quality_errors = () if bars else ("no completed TradeStats/OrderStats/OBStats",)
     positions = _positions(portfolio)
     equity = Decimal(str(portfolio.get("reported_equity", "0")))
@@ -286,7 +317,8 @@ def build_intraday_plan(
     passed = []
     for secid in instruments:
         candidate, reasons = evaluate_candidate(
-            config, secid, store.recent(secid, config.history_bars), as_of, gate_counts
+            config, secid, store.recent(secid, config.history_bars, as_of=as_of,
+                                       available_at=received_at), as_of, gate_counts
         )
         if candidate is not None and not reasons:
             passed.append(candidate)

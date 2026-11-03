@@ -113,3 +113,39 @@ def test_adapter_retries_transient_read_failure() -> None:
     )
     assert bars
     assert delays == [0.25]
+
+
+def test_latest_only_sampling_reproduces_lost_interval_after_publication_lag(tmp_path):
+    """Characterize the diagnosed gap, without changing the production data/entry policy."""
+    from dataclasses import replace
+    from pathlib import Path
+
+    from moex_bot.intraday import IntradayStateStore, evaluate_candidate
+    from moex_bot.intraday_config import load_intraday_config
+
+    class LagThenComplete(FakeGetTransport):
+        recovered = False
+
+        def get(self, url, *, headers, timeout):
+            payload = super().get(url, headers=headers, timeout=timeout)
+            rows = payload["data"]["data"]
+            if rows:
+                times = ("10:00:00", "10:05:00", "10:10:00") if self.recovered else ("10:00:00",)
+                payload["data"]["data"] = [[row[0], at, *row[2:]] for at in times for row in rows]
+            return payload
+
+    transport = LagThenComplete()
+    adapter = AlgoPackIntradayAdapter("token", transport)
+    store = IntradayStateStore(tmp_path / "state.sqlite3")
+    first = adapter.latest(secids=("SBER",),
+                           as_of=datetime(2026, 8, 20, 10, 5, tzinfo=MOSCOW))
+    store.add((replace(first[0], observed_at=datetime(2026, 8, 20, 9, 55, tzinfo=MOSCOW)), *first))
+    transport.recovered = True
+    now = datetime(2026, 8, 20, 10, 10, tzinfo=MOSCOW)
+    latest = adapter.latest(secids=("SBER",), as_of=now)
+    store.add(latest)
+    assert [b.observed_at.minute for b in store.recent("SBER", 3)] == [55, 0, 10]
+    config = load_intraday_config(Path(__file__).resolve().parents[1] / "config/intraday.json")
+    signal, reasons = evaluate_candidate(config, "SBER", store.recent("SBER", 3), now)
+    assert signal is None and reasons == ("contiguity",)
+    assert latest[0].observed_at <= now

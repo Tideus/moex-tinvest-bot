@@ -8,6 +8,7 @@ from pathlib import Path
 from uuid import uuid4
 
 from .monitoring_config import load_settings as load_settings
+from .monitoring_execution import intraday_execution_note
 from .monitoring_incidents import notify as notify
 from .monitoring_probes import collect as collect
 from .monitoring_probes import disk_status as disk_status
@@ -44,14 +45,18 @@ def main() -> int:
     output = args.state / "artifacts/monitoring-latest.json"
     output.parent.mkdir(parents=True, exist_ok=True)
     temporary = output.with_name(f".{output.name}.{uuid4().hex}.tmp")
+    observations = {"intraday_execution": intraday_execution_note(args.state, now)}
     try:
         temporary.write_text(json.dumps({"schema_version": 1, "observed_at": now.isoformat(),
-                                         "checks": checks}, ensure_ascii=False, indent=2))
+                                         "checks": checks, "observations": observations},
+                                        ensure_ascii=False, indent=2))
         temporary.replace(output)
     finally:
         temporary.unlink(missing_ok=True)
     for key, value in checks.items():
         print(f"{key}: {value}")
+    if observations["intraday_execution"]:
+        print("INFO: " + observations["intraday_execution"])
     return 2 if failures else 0
 
 

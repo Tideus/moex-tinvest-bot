@@ -45,7 +45,7 @@ class IntradaySuperCandle:
 
 
 class AlgoPackIntradayAdapter:
-    """Three batched latest-row reads; ALGOPACK remains read-only."""
+    """Paginated read-only joins; latest for LONG, bounded history for intraday."""
 
     def __init__(
         self,
@@ -75,8 +75,16 @@ class AlgoPackIntradayAdapter:
         return cls(os.getenv("MOEX_APIKEY", ""), UrlLibJsonGetTransport())
 
     def latest(self, *, secids: Sequence[str], as_of: datetime) -> tuple[IntradaySuperCandle, ...]:
+        return self.history(secids=secids, as_of=as_of, bars_per_secid=1)
+
+    def history(
+        self, *, secids: Sequence[str], as_of: datetime, bars_per_secid: int,
+    ) -> tuple[IntradaySuperCandle, ...]:
+        """Recover only a current-day decision window, never synthesize missing bars."""
         if as_of.tzinfo is None:
             raise ValueError("as_of must be timezone-aware")
+        if type(bars_per_secid) is not int or not 1 <= bars_per_secid <= 288:
+            raise ValueError("bars_per_secid must be an integer in [1, 288]")
         wanted = frozenset(secids)
         if not wanted:
             return ()
@@ -87,15 +95,15 @@ class AlgoPackIntradayAdapter:
         }
         complete: list[IntradaySuperCandle] = []
         common = set(blocks["tradestats"]) & set(blocks["orderstats"]) & set(blocks["obstats"])
-        latest_by_secid: dict[str, tuple[str, datetime]] = {}
-        for key in common:
+        keys_by_secid: dict[str, list[tuple[str, datetime]]] = {}
+        for key in sorted(common):
             secid, observed_at = key
-            if observed_at > as_of.astimezone(MOSCOW):
+            if (observed_at > as_of.astimezone(MOSCOW)
+                    or observed_at.astimezone(MOSCOW).date().isoformat() != local_day):
                 continue
-            current = latest_by_secid.get(secid)
-            if current is None or observed_at > current[1]:
-                latest_by_secid[secid] = key
-        for key in sorted(latest_by_secid.values()):
+            keys_by_secid.setdefault(secid, []).append(key)
+        keys = [key for group in keys_by_secid.values() for key in group[-bars_per_secid:]]
+        for key in sorted(keys):
             trade = blocks["tradestats"][key]
             order = blocks["orderstats"][key]
             book = blocks["obstats"][key]

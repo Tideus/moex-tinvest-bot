@@ -119,6 +119,46 @@ def test_active_orders_block_new_sandbox_submission(tmp_path: Path) -> None:
         )
 
 
+def test_expected_intraday_ttl_still_stops_batch_and_keeps_journal(tmp_path: Path) -> None:
+    from dataclasses import replace
+
+    from moex_bot.sandbox_execution import expected_intraday_ttl_stop
+
+    shadow, portfolio = _write_inputs(tmp_path)
+    raw = json.loads(shadow.read_text())
+    raw["run_id"] = raw["run_id"].replace("shadow-", "intraday-")
+    raw["analysis_input"] = {"portfolio_input": raw.pop("portfolio_input")}
+    raw["orders"].append(json.loads(json.dumps(raw["orders"][0])))
+    raw["orders"][1]["intent"]["order_request_id"] = str(uuid4())
+    shadow.write_text(json.dumps(raw))
+
+    class ExpiringAdapter(FakeAdapter):
+        calls = 0
+
+        def submit(self, intent):
+            self.calls += 1
+            return super().submit(intent)
+
+        def settle(self, records, *, ttl_seconds):
+            return (replace(records[0], status=OrderStatus.CANCELLED, filled_lots=0,
+                            broker_order_id="broker-ttl", status_detail="ttl_expired"),)
+
+    adapter = ExpiringAdapter()
+    result = execute_shadow_plan(
+        shadow_path=shadow, portfolio_path=portfolio, output_path=tmp_path / "result.json",
+        journal_path=tmp_path / "journal.sqlite3",
+        runtime=RuntimeConfig(TInvestEnvironment.SANDBOX, RuntimeSchedule(), True, 3),
+        adapter=adapter, as_of=datetime(2026, 8, 18, 10, 1, tzinfo=UTC),
+        profile=AccountPurpose.INTRADAY,
+    )
+    assert adapter.calls == 1
+    assert len(result.submitted) == 1
+    assert expected_intraday_ttl_stop(result)
+    assert result.stopped_reason == "submission stopped after cancelled order"
+    assert (tmp_path / "journal.sqlite3").is_file()
+    assert json.loads((tmp_path / "result.json").read_text())["submitted"][0]["filled_lots"] == 0
+
+
 def test_enabled_sandbox_accepts_verified_explicit_short_plan(tmp_path: Path) -> None:
     shadow, portfolio = _write_inputs(tmp_path, short=True)
     runtime = RuntimeConfig(TInvestEnvironment.SANDBOX, RuntimeSchedule(), True, 3)

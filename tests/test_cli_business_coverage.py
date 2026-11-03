@@ -289,9 +289,9 @@ def test_intraday_plan_persists_analysis_inputs_and_broker_exit_fallback(
 ) -> None:
     adapter = Mock()
     if unavailable:
-        adapter.latest.side_effect = OSError("data unavailable")
+        adapter.history.side_effect = OSError("data unavailable")
     else:
-        adapter.latest.return_value = ()
+        adapter.history.return_value = ()
     monkeypatch.setattr(cli.AlgoPackIntradayAdapter, "from_environment", lambda: adapter)
     plan = Mock(phase=phase, quality_passed=passed, signals=(), orders=(), run_id="test")
     monkeypatch.setattr(cli, "build_intraday_plan", lambda **kwargs: plan)
