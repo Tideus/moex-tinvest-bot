@@ -119,11 +119,15 @@ def collect_services(app: Path, state: Path, settings: dict[str, Any],
     units = ["long-once-sandbox" if once else "shadow", "intraday", "health",
              "daily-report", "maintenance", "prod-long-observer"]
     prod_settings = Path("/etc/moex-tinvest-bot/prod-long-once.json")
-    if prod_settings.exists():
-        from .prod_long_once_operator import load_settings
+    try:
+        if prod_settings.exists():
+            from .prod_long_once_operator import load_settings
 
-        if load_settings(prod_settings)["enabled"]:
-            units.append("long-once-prod")
+            if load_settings(prod_settings)["enabled"]:
+                units.append("long-once-prod")
+    except (OSError, ValueError):
+        # Preserve all other service checks, but never silently declare PROD disabled.
+        checks["timer:long-once-prod"] = "FAIL: PROD evidence or read-only API unavailable"
     if once:
         active = systemd("moex-tinvest-shadow.timer", "ActiveState")
         enabled = systemd("moex-tinvest-shadow.timer", "UnitFileState")

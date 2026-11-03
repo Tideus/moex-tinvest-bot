@@ -108,3 +108,18 @@ def test_start_does_not_resume_or_force_the_one_shot():
     assert 'else\n    long_to_enable=("${selected_long}")' in block
     assert 'systemctl enable --now "${long_to_enable[@]}"' in block
     assert "start moex-tinvest-long-once-sandbox.service" not in block
+
+
+def test_inaccessible_prod_settings_does_not_hide_other_timers(enrolled, monkeypatch):
+    original = Path.exists
+
+    def exists(path):
+        if str(path).replace("\\", "/") == "/etc/moex-tinvest-bot/prod-long-once.json":
+            raise PermissionError("inaccessible")
+        return original(path)
+
+    monkeypatch.setattr(Path, "exists", exists)
+    monkeypatch.setattr(probes, "systemd", lambda *args: "inactive")
+    checks = probes.collect_services(enrolled, enrolled, {"calendar_required": False}, NOW)
+    assert checks["timer:long-once-prod"].startswith("FAIL")
+    assert "timer:long-once-sandbox" in checks and "timer:intraday" in checks
