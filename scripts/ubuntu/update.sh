@@ -140,6 +140,11 @@ stop_timer_if_installed moex-tinvest-intraday.timer
 stop_timer_if_installed moex-tinvest-maintenance.timer
 stop_timer_if_installed moex-tinvest-prod-long-observer.timer
 stop_timer_if_installed moex-tinvest-long-once-sandbox.timer
+# A release-bound PROD admission must be reviewed again. Never auto-resume it.
+# production_session flock above ensures no BUY -> stop is interrupted here.
+if systemctl cat moex-tinvest-long-once-prod.timer >/dev/null 2>&1; then
+  systemctl disable --now moex-tinvest-long-once-prod.timer
+fi
 rsync -a --delete \
   --exclude '.git' --exclude '.venv' --exclude '.env' --exclude 'artifacts/*' \
   --exclude 'logs/*' --exclude 'data' --exclude 'work' \

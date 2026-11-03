@@ -49,6 +49,12 @@ else
   --outbox "${outbox_path}" || report_status=$?
 fi
 
+prod_status=0
+"${PYTHON_BIN}" -m moex_bot.prod_once_observer \
+  --settings "${CONFIG_DIR}/prod-long-once.json" --report-date "${report_date}" \
+  --output "${STATE_DIR}/artifacts/prod-long-daily-control-${report_date}.txt" \
+  --outbox "${outbox_path}" || prod_status=$?
+
 intraday_status=0
 "${PYTHON_BIN}" -m moex_bot.cli intraday-performance-report \
   --accounts "${APP_DIR}/config/accounts.json" \
@@ -89,4 +95,5 @@ if [[ "${telegram_status}" -ne 0 && "${telegram_status}" -ne 3 ]]; then
 fi
 if [[ "${report_status}" -ne 0 && "${report_status}" -ne 3 ]]; then exit "${report_status}"; fi
 if [[ "${intraday_status}" -ne 0 && "${intraday_status}" -ne 3 ]]; then exit "${intraday_status}"; fi
+if [[ "${prod_status}" -ne 0 ]]; then exit "${prod_status}"; fi
 exit 0

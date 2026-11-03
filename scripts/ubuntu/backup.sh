@@ -57,4 +57,12 @@ stamp="$(date -u +%Y%m%dT%H%M%SZ)"
 archive="${BACKUP_DIR}/moex-tinvest-${stamp}.tar.gz"
 tar --create --gzip --file "${archive}" --directory "${STATE_DIR}" .
 (cd "${BACKUP_DIR}" && sha256sum "$(basename "${archive}")") >"${archive}.sha256"
+# Independent anti-replay fences must travel WITH, not inside, a resettable state DB.
+# Preserve all control evidence, but never auto-extract/re-enroll from this sidecar.
+if [[ -d /var/lib/moex-tinvest-control/prod-long-once ]]; then
+  control_archive="${archive%.tar.gz}.prod-control.tar.gz"
+  tar --create --gzip --file "${control_archive}" \
+    --directory /var/lib/moex-tinvest-control prod-long-once
+  (cd "${BACKUP_DIR}" && sha256sum "$(basename "${control_archive}")") >"${control_archive}.sha256"
+fi
 printf '%s\n' "${archive}"

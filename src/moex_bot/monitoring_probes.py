@@ -118,6 +118,12 @@ def collect_services(app: Path, state: Path, settings: dict[str, Any],
     once = monitoring_long_once.enrolled(state)
     units = ["long-once-sandbox" if once else "shadow", "intraday", "health",
              "daily-report", "maintenance", "prod-long-observer"]
+    prod_settings = Path("/etc/moex-tinvest-bot/prod-long-once.json")
+    if prod_settings.exists():
+        from .prod_long_once_operator import load_settings
+
+        if load_settings(prod_settings)["enabled"]:
+            units.append("long-once-prod")
     if once:
         active = systemd("moex-tinvest-shadow.timer", "ActiveState")
         enabled = systemd("moex-tinvest-shadow.timer", "UnitFileState")
@@ -219,6 +225,10 @@ def collect_artifacts(app: Path, state: Path, settings: dict[str, Any],
     once = monitoring_long_once.enrolled(state)
     if once:
         checks.update(monitoring_long_once.evidence(state, now))
+    from .prod_long_once_operator import SETTINGS
+    from .prod_once_observer import KEY, safe_observe
+
+    checks[KEY] = str(safe_observe(SETTINGS, now)["check"])
     if local.weekday() < 5 and 625 <= local.hour * 60 + local.minute < 1140:
         limits = (("intraday", "intraday-plan-", settings["intraday_max_age_seconds"]),
                   ("long", "shadow-", settings["long_max_age_seconds"]))

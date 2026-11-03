@@ -36,10 +36,12 @@ if [[ "${ALLOW_NON_ROOT_TEST}" != "1" ]]; then
     exit 2
   fi
 fi
-for evidence in /etc/moex-tinvest-bot/sandbox-long-once.owner "${STATE_DIR}/long-once/sandbox.sqlite3" \
+for evidence in /etc/moex-tinvest-bot/prod-long-once.json \
+  /var/lib/moex-tinvest-control/prod-long-once "${STATE_DIR}/prod-long-once" \
+  /etc/moex-tinvest-bot/sandbox-long-once.owner "${STATE_DIR}/long-once/sandbox.sqlite3" \
   /var/lib/moex-tinvest-control/long-once-sandbox/entry.claim; do
   if [[ -e "${evidence}" || -L "${evidence}" ]]; then
-    printf 'FAIL: sandbox long enrollment present; refusing history reset\n' >&2
+    printf 'FAIL: long enrollment present; refusing history reset\n' >&2
     exit 2
   fi
 done

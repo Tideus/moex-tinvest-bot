@@ -72,13 +72,18 @@ def monitor_description(name: str) -> str:
 
 
 UNITS = {"shadow", "intraday", "health", "daily-report", "maintenance", "prod-long-observer",
-         "calendar", "long-once-sandbox", "legacy-long-excluded"}
+         "calendar", "long-once-sandbox", "long-once-prod", "legacy-long-excluded"}
 INACTIVE = "FAIL: active=inactive, no schedule"
 
 
 def safe_reason(value: str) -> str:
     """Only known templates; never echo arbitrary collector errors to Kuma or Telegram."""
     long_reasons = {
+        "FAIL: PROD admission requires operator check": "LONG ИИС: требуется проверка допуска",
+        "FAIL: PROD attempt needs review": "LONG ИИС: зарезервированную попытку нужно сверить",
+        "FAIL: PROD position or stop unverified": "LONG ИИС: лот/защитный стоп не подтверждён",
+        "FAIL: PROD evidence or read-only API unavailable": (
+            "LONG ИИС: журнал, допуск или PROD API недоступен"),
         "FAIL: reconcile one-shot entry/protection": "LONG sandbox: сверить покупку и защиту",
         "FAIL: scheduled one-shot plan missing": "LONG sandbox: нет ожидаемого утреннего плана",
         "FAIL: one-shot enrollment/ledger/plan unreadable": "LONG sandbox: проверить журнал/допуск",
@@ -111,7 +116,8 @@ def compact_checks(checks: dict[str, str]) -> str:
     known = set(API_LABELS) | {
         f"{kind}:{unit}" for kind in ("timer", "service") for unit in UNITS
     } | {"api:geo_cbr_press", "api:geo_moex_risk", "data:calendar", "data:long",
-         "data:intraday", "data:prod-long-observer", "quality:long", "quality:intraday",
+         "data:intraday", "data:prod-long-observer", "data:prod-long-protection",
+         "quality:long", "quality:intraday",
          "quality:prod-long-observer", "backup:age", "telegram:outbox", "memory:available",
          "intraday:overnight_exposure", "monitor:collector", "collector:resources",
          "collector:services", "collector:integrations", "collector:artifacts"}
@@ -150,7 +156,8 @@ def safe_failure_details(name: str, path: Path, now: datetime) -> str:
         allowed = set(API_LABELS) | {
             f"{kind}:{unit}" for kind in ("timer", "service") for unit in units
         } | {"api:geo_cbr_press", "api:geo_moex_risk",
-             "data:calendar", "data:long", "data:intraday", "quality:long",
+             "data:calendar", "data:long", "data:intraday", "data:prod-long-protection",
+             "quality:long",
              "quality:intraday", "backup:age", "telegram:outbox", "memory:available"}
         for mount in ("/", "/var/lib/moex-tinvest-bot", "/var/log/moex-tinvest-bot"):
             allowed |= {"disk:" + mount, "inodes:" + mount}

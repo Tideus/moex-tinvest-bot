@@ -41,6 +41,7 @@ Usage:
   sudo moex-botctl version [--remote]
   sudo moex-botctl portfolio
   sudo moex-botctl prod-observe
+  sudo moex-botctl prod-long-once-enable --confirm-real-money
   sudo moex-botctl decisions [SHADOW_JSON]
   sudo moex-botctl backtest --candle-only
   sudo moex-botctl collect-report [--from YYYY-MM-DD] [--to YYYY-MM-DD] [--output-dir DIR]
@@ -479,6 +480,7 @@ start_bot() {
 timers_are_stopped() {
   local unit=""
   for unit in \
+    moex-tinvest-long-once-prod.timer \
     moex-tinvest-long-once-sandbox.timer \
     moex-tinvest-calendar.timer \
     moex-tinvest-shadow.timer \
@@ -498,9 +500,41 @@ timers_are_stopped() {
   done
 }
 
+enable_prod_long_once() {
+  if [[ $# -ne 1 || "$1" != --confirm-real-money ]]; then
+    printf 'Usage: sudo moex-botctl prod-long-once-enable --confirm-real-money\n' >&2
+    return 2
+  fi
+  load_secrets || return 2
+  # This does NOT manufacture an admission, enable config, initialize journals or
+  # clear a spent claim. The root-reviewed release-bound evidence must exist first.
+  version_status || return 2
+  as_service "${PYTHON_BIN}" -m moex_bot.prod_long_once_operator status || return 2
+  systemctl is-active --quiet moex-observer.timer || return 2
+  systemctl is-active --quiet moex-tinvest-daily-report.timer || return 2
+  for kind in service timer; do
+    install -m 0644 "${APP_DIR}/deploy/ubuntu/moex-tinvest-long-once-prod.${kind}.example" \
+      "${SYSTEMD_DIR}/moex-tinvest-long-once-prod.${kind}" || return 2
+  done
+  systemctl daemon-reload || return 2
+  systemd-analyze verify "${SYSTEMD_DIR}/moex-tinvest-long-once-prod.service" \
+    "${SYSTEMD_DIR}/moex-tinvest-long-once-prod.timer" || return 2
+  systemctl enable --now moex-tinvest-long-once-prod.timer || return 2
+  printf 'ARMED: one IIS LONG attempt, 1 lot <=10000 RUB with fees and native stop; Intraday unchanged.\n'
+}
+
 stop_bot() {
   FAILURES=0
   heading "Остановка расписания"
+  if systemctl cat moex-tinvest-long-once-prod.timer >/dev/null 2>&1; then
+    systemctl disable --now moex-tinvest-long-once-prod.timer || return 2
+    local prod_phase
+    prod_phase="$(systemctl show moex-tinvest-long-once-prod.service -p ActiveState --value)"
+    if [[ "${prod_phase}" != inactive && "${prod_phase}" != failed ]]; then
+      printf 'WARNING: IIS LONG in flight; timer disabled, BUY -> stop must finish.\n' >&2
+      FAILURES=$((FAILURES + 1))
+    fi
+  fi
   if systemctl cat moex-tinvest-long-once-sandbox.timer >/dev/null 2>&1; then
     systemctl disable --now moex-tinvest-long-once-sandbox.timer || return 2
     local long_phase
@@ -975,6 +1009,7 @@ case "${command}" in
   status) status_bot ;;
   portfolio) show_portfolio ;;
   prod-observe) prod_observe ;;
+  prod-long-once-enable) enable_prod_long_once "$@" ;;
   decisions) show_decisions "$@" ;;
   backtest) historical_backtest "$@" ;;
   collect-report) collect_report "$@" ;;

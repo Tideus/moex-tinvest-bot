@@ -328,12 +328,19 @@ def run_once(
     )
 
     def protect_gate() -> None:
-        authority()
+        # The already approved pair survives revocation/expiry of *new entry* authority.
+        # This in-process capability cannot buy: wrappers permit only its bound cancel/stop,
+        # after fresh parent/holdings reconciliation and exclusive durable dispatch fences.
+        # It is not persisted as a reusable recovery permission.
+        if not now <= clock() < now + timedelta(minutes=10):
+            raise ValueError("bounded protection continuation expired; operator review required")
+        permission.validate(candidate.account_id, intent, policy, release, now)
         claim.check()
         if journal_identity(journal, candidate.account_id) != identity:
             raise ValueError("production journal binding changed")
 
     def entry_gate() -> None:
+        authority()
         protect_gate()
         if clock() >= candidate.valid_until:
             raise ValueError("strategy signal expired before dispatch")
@@ -355,6 +362,7 @@ def run_once(
             stop_broker=protected,
             approval_gate=protect_gate,
             entry_approval_gate=entry_gate,
+            continuation_gate=protect_gate,
             clock=clock,
         )
         claim.create("result", result)

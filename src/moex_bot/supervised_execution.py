@@ -157,6 +157,7 @@ def run_supervised_entry(
     stop_broker: ProtectionBroker,
     approval_gate: Callable[[], None],
     entry_approval_gate: Callable[[], None] | None = None,
+    continuation_gate: Callable[[], None] | None = None,
     wait_seconds: int = 30,
     clock: Callable[[], datetime] = lambda: datetime.now(UTC),
     monotonic: Callable[[], float] = time.monotonic,
@@ -218,12 +219,14 @@ def run_supervised_entry(
             sleeper(1)
     if parent.status not in terminal:
         # The complete preview must explicitly approve this cancellation of the new entry only.
-        permission.validate(broker.account_id, intent, policy, release, clock())
-        approval_gate()
-        if isinstance(broker, SupervisedTInvestBroker):
-            def cancel_gate() -> None:
+        def cancel_gate() -> None:
+            if continuation_gate is not None:
+                continuation_gate()
+            else:
                 permission.validate(broker.account_id, intent, policy, release, clock())
                 approval_gate()
+        cancel_gate()
+        if isinstance(broker, SupervisedTInvestBroker):
             broker.cancel_pending(parent, before_cancel=cancel_gate)
         else:
             broker.cancel_pending(parent)
@@ -239,8 +242,11 @@ def run_supervised_entry(
         raise ValueError("CRITICAL: entry ambiguous/partial; operator intervention required")
 
     def stop_gate() -> None:
-        permission.validate(broker.account_id, intent, policy, release, clock())
-        approval_gate()
+        if continuation_gate is not None:
+            continuation_gate()
+        else:
+            permission.validate(broker.account_id, intent, policy, release, clock())
+            approval_gate()
 
     status = stops.activate(
         protection,

@@ -8,11 +8,28 @@ if [[ "${EUID}" -ne 0 ]]; then
   exit 2
 fi
 
+# Uninstall is not a production recovery tool. Preserve admission, journals and
+# independent fences even with --purge; a reviewed de-enrollment is required.
+for evidence in /etc/moex-tinvest-bot/prod-long-once.json \
+  /var/lib/moex-tinvest-control/prod-long-once /var/lib/moex-tinvest-bot/prod-long-once; do
+  if [[ -e "${evidence}" || -L "${evidence}" ]]; then
+    printf 'FAIL: PROD LONG enrollment/evidence exists; uninstall cannot remove it.\n' >&2
+    exit 2
+  fi
+done
+
 if [[ -d /var/lib/moex-tinvest-control ]]; then
   source "$(dirname "${BASH_SOURCE[0]}")/lock-long-writer.sh"
   lock_long_writer
 fi
 systemctl disable --now moex-tinvest-long-once-sandbox.timer 2>/dev/null || true
+# Disable future entries only; do not kill an in-flight protected IIS purchase.
+systemctl disable --now moex-tinvest-long-once-prod.timer 2>/dev/null || true
+prod_phase="$(systemctl show moex-tinvest-long-once-prod.service -p ActiveState --value 2>/dev/null || true)"
+if [[ -n "${prod_phase}" && "${prod_phase}" != inactive && "${prod_phase}" != failed ]]; then
+  printf 'FAIL: IIS LONG is running; wait for BUY -> protection before uninstall.\n' >&2
+  exit 2
+fi
 systemctl disable --now moex-tinvest-shadow.timer moex-tinvest-health.timer \
   moex-tinvest-daily-report.timer 2>/dev/null || true
 systemctl disable --now moex-tinvest-intraday.timer 2>/dev/null || true
