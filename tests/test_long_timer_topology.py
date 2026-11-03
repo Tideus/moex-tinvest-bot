@@ -123,3 +123,23 @@ def test_inaccessible_prod_settings_does_not_hide_other_timers(enrolled, monkeyp
     checks = probes.collect_services(enrolled, enrolled, {"calendar_required": False}, NOW)
     assert checks["timer:long-once-prod"].startswith("FAIL")
     assert "timer:long-once-sandbox" in checks and "timer:intraday" in checks
+
+
+@pytest.mark.parametrize("scheduled_quality", [True, False, None])
+def test_late_diagnostic_plan_cannot_hide_or_replace_scheduled_run(enrolled, scheduled_quality):
+    os.utime(once.MARKER, (1, 1))
+    for time, quality in (("070510", scheduled_quality), ("074726", True)):
+        if quality is None:
+            continue
+        plan = enrolled / f"long-once/run-20261102T{time}Z.12345678/plan.json"
+        plan.parent.mkdir()
+        plan.write_text(json.dumps({
+            "run_id": f"shadow-2026-11-02T{time[:2]}:{time[2:4]}:{time[4:]}+00:00",
+            "quality": {"passed": quality},
+        }))
+    result = once.evidence(enrolled, NOW)
+    if scheduled_quality is None:
+        assert "missing" in result["data:long"]
+    else:
+        assert result["data:long"] == "OK"
+        assert (result["quality:long"] == "OK") == scheduled_quality

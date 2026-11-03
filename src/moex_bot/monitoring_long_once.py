@@ -48,8 +48,10 @@ def evidence(state: Path, now: datetime) -> dict[str, str]:
             return {"data:long": "OK"}  # First scheduled run is still ahead.
         # Use the decision's timestamp, not merely a copied file's modification time.
         plans = sorted(base.glob(f"run-{due:%Y%m%d}T*/plan.json"), reverse=True)
-        if plans:
-            raw = json.loads(plans[0].read_bytes())
+        # An additional later diagnostic run must not hide the scheduled morning run.
+        # Only decisions actually inside the scheduled window can satisfy its liveness.
+        for path in plans:
+            raw = json.loads(path.read_bytes())
             run = raw["run_id"]
             at = datetime.fromisoformat(run.removeprefix("shadow-"))
             if (
