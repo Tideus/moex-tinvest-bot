@@ -1,0 +1,21 @@
+[Unit]
+Description=Read-only LONG forward experiment markouts and Telegram report
+After=network-online.target
+Wants=network-online.target
+[Service]
+Type=oneshot
+User=moexbot
+Group=moexbot
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
+ExecStart=/opt/moex-tinvest-bot/.venv/bin/python -B /opt/moex-long-flow-shadow/long_flow_forward.py report
+TimeoutStartSec=15min
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+ReadWritePaths=/var/lib/moex-long-flow-shadow /var/lib/moex-tinvest-bot/data
+InaccessiblePaths=-/etc/moex-tinvest-bot/bot.env -/var/lib/moex-tinvest-bot/execution -/var/lib/moex-tinvest-control
+UMask=0077
+

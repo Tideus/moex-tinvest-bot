@@ -1,0 +1,10 @@
+[Unit]
+Description=Observe LONG at 11:05 MSK, never catch up a missed decision
+[Timer]
+OnCalendar=Mon..Fri *-*-* 11:05:30 Europe/Moscow
+Persistent=false
+AccuracySec=1s
+Unit=moex-long-flow-shadow.service
+[Install]
+WantedBy=timers.target
+

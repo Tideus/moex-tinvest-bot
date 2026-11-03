@@ -1,0 +1,10 @@
+[Unit]
+Description=Report LONG experiment after the evening session
+[Timer]
+OnCalendar=*-*-* 23:57:00 Europe/Moscow
+Persistent=true
+AccuracySec=1s
+Unit=moex-long-flow-shadow-report.service
+[Install]
+WantedBy=timers.target
+

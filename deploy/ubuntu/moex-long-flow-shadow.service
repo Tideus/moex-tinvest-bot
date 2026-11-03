@@ -1,0 +1,24 @@
+[Unit]
+Description=Read-only LONG 11:05 retry and book persistence experiment
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=moexbot
+Group=moexbot
+EnvironmentFile=/etc/moex-tinvest-bot/bot.env
+UnsetEnvironment=T_INVEST_PROD_TOKEN T_INVEST_READONLY_TOKEN TELEGRAM_BOT_TOKEN T_INVEST_SANDBOX_ACCOUNT_ID
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
+ExecStart=/opt/moex-tinvest-bot/.venv/bin/python -B /opt/moex-long-flow-shadow/long_flow_forward.py collect
+TimeoutStartSec=12min
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+ReadWritePaths=/var/lib/moex-long-flow-shadow
+InaccessiblePaths=-/var/lib/moex-tinvest-bot/execution -/var/lib/moex-tinvest-control/prod-long-once -/etc/moex-tinvest-bot/prod-long-once-admission.json
+UMask=0077
+
