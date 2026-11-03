@@ -22,5 +22,7 @@ ProtectSystem=strict
 ProtectHome=true
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 ReadWritePaths=/var/lib/moex-tinvest-bot /var/lib/moex-tinvest-control/prod-long-once /var/lib/moex-observer
+# Open the existing root-owned session lock O_RDWR; never replace its inode.
+ReadWritePaths=/var/lib/moex-tinvest-control/prod-session.lock
 # Runtime is bounded by API timeouts and finite entry polling. Do not SIGKILL mid-protection.
 TimeoutStartSec=10min

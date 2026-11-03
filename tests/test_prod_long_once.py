@@ -383,6 +383,7 @@ def test_units_are_examples_not_automatically_installed():
     service = (folder / "moex-tinvest-long-once-prod.service.example").read_text()
     timer = (folder / "moex-tinvest-long-once-prod.timer.example").read_text()
     assert "ConditionPathExists=/etc/moex-tinvest-bot/prod-long-once-admission.json" in service
+    assert "ReadWritePaths=/var/lib/moex-tinvest-control/prod-session.lock" in service
     assert "Persistent=false" in timer
     script = (ROOT / "scripts/ubuntu/run-long-once-prod.sh").read_text()
     assert '--runtime "${app}/config/prod_runtime.json"' in script
