@@ -122,6 +122,10 @@ FAKE_PYTHON="${RUNTIME_DIR}/fake-python"
 cat >"${FAKE_PYTHON}" <<'EOF'
 #!/usr/bin/env bash
 set -Eeuo pipefail
+if [[ " $* " == *" --date-only "* ]]; then
+  printf '%s\n' "${MOEX_BOT_REPORT_DATE:-2026-08-18}"
+  exit 0
+fi
 output=""
 previous=""
 for argument in "$@"; do
@@ -163,6 +167,7 @@ MOEX_BOT_STATE_DIR="${RUNTIME_DIR}/state" \
 MOEX_BOT_LOG_DIR="${RUNTIME_DIR}/logs" \
 MOEX_BOT_PYTHON="${FAKE_PYTHON}" \
 MOEX_BOT_REPORT_DATE="2026-08-18" \
+MOEX_BOT_CONFIG_DIR="${STAGE_DIR}/etc/moex-tinvest-bot" \
   bash "${PROJECT_DIR}/scripts/ubuntu/run-daily-report.sh"
 find "${RUNTIME_DIR}/state/artifacts" -name 'daily-performance-*.txt' -print -quit | grep -q .
 MOEX_BOT_APP_DIR="${PROJECT_DIR}" \

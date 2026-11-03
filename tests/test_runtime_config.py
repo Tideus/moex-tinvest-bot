@@ -103,6 +103,6 @@ def test_runtime_migration_completes_minimal_file_without_replacing_values(
     assert raw["schedule"]["health_interval"] == "30min"
     assert raw["schedule"]["timezone"] == "Europe/Moscow"
     assert raw["schedule"]["diagnostics_interval_seconds"] == 60
-    assert raw["schedule"]["daily_report_on_calendar"] == "*-*-* 23:20:00"
+    assert raw["schedule"]["daily_report_on_calendar"] == "*-*-* 23:55:00"
     assert raw["future_extension"] == {"keep": True}
     assert not materialize_runtime_defaults(runtime)

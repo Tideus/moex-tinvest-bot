@@ -133,7 +133,7 @@ class OnceLedger:
             raise ValueError("one-shot process lock cannot be a symlink")
         with target.open("a+b") as stream:
             if os.name == "nt":
-                import msvcrt
+                msvcrt = import_module("msvcrt")
 
                 if target.stat().st_size == 0:
                     stream.write(b"0")

@@ -11,7 +11,7 @@ from .service_config import TInvestEnvironment
 
 _DURATION = re.compile(r"^[1-9][0-9]*(?:s|min|h)$")
 _DEFAULT_SHADOW_CALENDAR = "*-*-* *:05:00"
-_DEFAULT_DAILY_REPORT_CALENDAR = "*-*-* 23:20:00"
+_DEFAULT_DAILY_REPORT_CALENDAR = "*-*-* 23:55:00"
 
 
 @dataclass(frozen=True, slots=True)

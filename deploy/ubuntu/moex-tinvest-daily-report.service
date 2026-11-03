@@ -1,5 +1,5 @@
 [Unit]
-Description=MOEX/T-Invest daily shadow trade report
+Description=MOEX/T-Invest post-close LONG and intraday reports (read-only broker access)
 Documentation=file:///opt/moex-tinvest-bot/docs/UBUNTU_24_SERVER_RU.md
 Wants=network-online.target
 After=network-online.target moex-tinvest-shadow.service

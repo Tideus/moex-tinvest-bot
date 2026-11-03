@@ -1,9 +1,9 @@
 [Unit]
-Description=Send MOEX/T-Invest daily shadow trade report
+Description=Send MOEX/T-Invest reports after the evening session
 
 [Timer]
-OnCalendar=*-*-* 23:20:00 Europe/Moscow
-# The service reports today's date; never replay a missed evening report at midday.
+OnCalendar=*-*-* 23:55:00 Europe/Moscow
+# No implicit replay; an explicit delayed run selects the last closed date in Moscow.
 Persistent=false
 RandomizedDelaySec=20s
 AccuracySec=1s

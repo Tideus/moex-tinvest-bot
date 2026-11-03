@@ -54,7 +54,7 @@ def test_trading_services_fail_fast_on_rejected_algopack_token() -> None:
 def test_daily_report_timer_and_service_send_at_moscow_eod() -> None:
     timer = _unit("moex-tinvest-daily-report.timer")
     service = _unit("moex-tinvest-daily-report.service")
-    assert "OnCalendar=*-*-* 23:20:00 Europe/Moscow" in timer
+    assert "OnCalendar=*-*-* 23:55:00 Europe/Moscow" in timer
     assert "Persistent=false" in timer  # A missed EOD must not send today's incomplete report.
     assert "run-daily-report.sh" in service
     assert "EnvironmentFile=/etc/moex-tinvest-bot/bot.env" in service

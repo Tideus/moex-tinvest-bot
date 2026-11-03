@@ -187,7 +187,7 @@ Audit-флаги намеренно нельзя отключить: непол�
 | `schedule.timezone` | IANA timezone, например `Europe/Moscow` | Часовой пояс выражения запуска shadow. |
 | `schedule.shadow_on_calendar` | однострочное systemd `OnCalendar` | Когда создаётся очередной shadow-снимок. По умолчанию каждый час в `HH:05`. |
 | `schedule.shadow_randomized_delay_seconds` | целое `0…3600` | Случайная задержка запуска, уменьшающая нагрузку ровно на границе часа. |
-| `schedule.daily_report_on_calendar` | однострочное systemd `OnCalendar` | Время дневного Telegram P&L по broker equity и исполненным sandbox-операциям. В пятницу тот же запуск создаёт недельный отчёт. По умолчанию `23:20`. |
+| `schedule.daily_report_on_calendar` | однострочное systemd `OnCalendar` | Время дневного Telegram-отчёта после закрытия вечерней сессии. По умолчанию `23:55` МСК. Для действующего one-shot LONG используется отдельный read-only отчёт; legacy-недельная агрегация применяется только к legacy long. После полуночи выбирается предыдущая дата МСК. Существующий runtime автоматически не перезаписывается. |
 | `schedule.health_on_boot` | `30s`, `10min`, `1h` | Задержка первого health-check после загрузки сервера. |
 | `schedule.health_interval` | `30s`, `15min`, `1h` | Интервал systemd health-check. |
 | `schedule.diagnostics_interval_seconds` | целое `10…86400` | Пауза между циклами `moex-botctl diagnose --watch`. |
