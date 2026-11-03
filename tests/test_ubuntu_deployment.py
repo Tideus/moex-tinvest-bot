@@ -129,6 +129,9 @@ def test_network_services_and_runners_use_system_ca_bundle() -> None:
 
 
 def test_env_template_contains_names_only() -> None:
+    # Windows git archive must not turn empty shell values into literal CR bytes.
+    assert "*.env.example text eol=lf" in (PROJECT_ROOT / ".gitattributes").read_text()
+    assert b"\r\n" not in (DEPLOY / "bot.env.example").read_bytes()
     lines = [
         line for line in _unit("bot.env.example").splitlines()
         if line and not line.startswith("#")
