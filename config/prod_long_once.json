@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "mode": "prod_long_once",
+  "enabled": false,
+  "account_id_env": "T_INVEST_PROD_ACCOUNT_ID",
+  "entry_lots": 1,
+  "max_total_with_fees_rub": "10000",
+  "max_attempts_total": 1,
+  "protect_manual_positions": true,
+  "native_stop_required": true,
+  "journal": "/var/lib/moex-tinvest-bot/execution/prod-orders.sqlite3",
+  "protection_journal": "/var/lib/moex-tinvest-bot/execution/prod-protection.sqlite3",
+  "claim_directory": "/var/lib/moex-tinvest-control/prod-long-once",
+  "authorization": "/etc/moex-tinvest-bot/prod-long-once-admission.json"
+}

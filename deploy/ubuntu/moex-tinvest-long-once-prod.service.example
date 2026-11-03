@@ -1,0 +1,26 @@
+[Unit]
+Description=Operator-enrolled single-use LONG on IIS (REAL MONEY)
+Wants=network-online.target
+After=network-online.target
+ConditionPathExists=/etc/moex-tinvest-bot/prod-long-once.json
+ConditionPathExists=/etc/moex-tinvest-bot/prod-long-once-admission.json
+
+[Service]
+Type=oneshot
+User=moexbot
+Group=moexbot
+WorkingDirectory=/opt/moex-tinvest-bot
+EnvironmentFile=/etc/moex-tinvest-bot/bot.env
+Environment=SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
+Environment=PYTHONDONTWRITEBYTECODE=1
+UnsetEnvironment=T_INVEST_SANDBOX_TOKEN T_INVEST_READONLY_TOKEN
+ExecStart=/usr/bin/bash /opt/moex-tinvest-bot/scripts/ubuntu/run-long-once-prod.sh
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+ReadWritePaths=/var/lib/moex-tinvest-bot /var/lib/moex-tinvest-control/prod-long-once /var/lib/moex-observer
+# Runtime is bounded by API timeouts and finite entry polling. Do not SIGKILL mid-protection.
+TimeoutStartSec=10min

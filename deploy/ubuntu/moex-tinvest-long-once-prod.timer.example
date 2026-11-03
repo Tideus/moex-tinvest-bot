@@ -1,0 +1,11 @@
+[Unit]
+Description=Operator-enrolled LONG IIS first signal; no missed-run catch-up
+
+[Timer]
+OnCalendar=Mon..Fri *-*-* 10:10:00 Europe/Moscow
+Persistent=false
+AccuracySec=1s
+Unit=moex-tinvest-long-once-prod.service
+
+[Install]
+WantedBy=timers.target

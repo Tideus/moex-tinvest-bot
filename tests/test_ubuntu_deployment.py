@@ -152,6 +152,7 @@ def test_all_deployment_shell_scripts_use_strict_mode() -> None:
         "certbot-reload-nginx.sh",
         "run-prod-long-observer.sh",
         "run-long-once-sandbox.sh",
+        "run-long-once-prod.sh",
         "lock-long-writer.sh",
     }
     for script in scripts:

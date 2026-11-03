@@ -18,6 +18,7 @@ from .notification_policy import load_notification_policy
 from .ownership import load_ownership_disclosures
 from .prod_experiment import load_experiment_settings
 from .prod_long import load_prod_long_policy
+from .prod_long_once_operator import load_settings as load_prod_long_once_settings
 from .runtime_config import load_runtime_config
 from .service_config import load_service_config
 from .shadow import load_geo_feed, load_universe
@@ -45,6 +46,8 @@ def validate_project_configs(root: Path) -> tuple[str, ...]:
     checks.append("config/prod_live.json")
     load_experiment_settings(root / "config" / "prod_experiment.json")
     checks.append("config/prod_experiment.json")
+    load_prod_long_once_settings(root / "config" / "prod_long_once.json")
+    checks.append("config/prod_long_once.json")
     checks.append("config/services.json")
     accounts = load_account_registry(root / "config" / "accounts.json")
     for profile in accounts.profiles:

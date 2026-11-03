@@ -3,6 +3,8 @@
 *.toml text eol=lf
 *.service text eol=lf
 *.timer text eol=lf
+*.service.example text eol=lf
+*.timer.example text eol=lf
 .env.example text eol=lf
 *.crt text eol=lf
 SHA256SUMS text eol=lf
