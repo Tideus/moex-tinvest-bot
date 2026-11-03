@@ -23,6 +23,8 @@ if [[ -d /var/lib/moex-tinvest-control ]]; then
   lock_long_writer
 fi
 systemctl disable --now moex-tinvest-long-once-sandbox.timer 2>/dev/null || true
+systemctl disable --now moex-tinvest-long-sandbox-verifier.timer 2>/dev/null || true
+systemctl stop moex-tinvest-long-sandbox-verifier.service 2>/dev/null || true
 # Disable future entries only; do not kill an in-flight protected IIS purchase.
 systemctl disable --now moex-tinvest-long-once-prod.timer 2>/dev/null || true
 prod_phase="$(systemctl show moex-tinvest-long-once-prod.service -p ActiveState --value 2>/dev/null || true)"
@@ -38,6 +40,8 @@ systemctl stop moex-tinvest-calendar.service 2>/dev/null || true
 systemctl disable --now moex-tinvest-maintenance.timer 2>/dev/null || true
 systemctl disable --now moex-tinvest-prod-long-observer.timer 2>/dev/null || true
 rm -f /etc/systemd/system/moex-tinvest-shadow.service \
+  /etc/systemd/system/moex-tinvest-long-sandbox-verifier.service \
+  /etc/systemd/system/moex-tinvest-long-sandbox-verifier.timer \
   /etc/systemd/system/moex-tinvest-long-once-sandbox.service \
   /etc/systemd/system/moex-tinvest-long-once-sandbox.timer \
   /etc/systemd/system/moex-tinvest-calendar.service \

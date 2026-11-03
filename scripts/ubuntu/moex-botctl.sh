@@ -380,6 +380,8 @@ start_bot() {
   local -a long_to_enable=()
   selected_long="$(long_timer)"
   if [[ "${selected_long}" == moex-tinvest-long-once-sandbox.timer ]]; then
+    # Observation can resume independently; this never grants/resumes entry permission.
+    systemctl enable --now moex-tinvest-long-sandbox-verifier.timer || return 2
     # The general start command cannot grant or resume entry permission.
     if ! systemctl is-enabled --quiet "${selected_long}" ||
        ! systemctl is-active --quiet "${selected_long}" ||
@@ -480,6 +482,7 @@ start_bot() {
 timers_are_stopped() {
   local unit=""
   for unit in \
+    moex-tinvest-long-sandbox-verifier.timer \
     moex-tinvest-long-once-prod.timer \
     moex-tinvest-long-once-sandbox.timer \
     moex-tinvest-calendar.timer \
@@ -526,6 +529,10 @@ enable_prod_long_once() {
 stop_bot() {
   FAILURES=0
   heading "Остановка расписания"
+  if systemctl cat moex-tinvest-long-sandbox-verifier.timer >/dev/null 2>&1; then
+    systemctl disable --now moex-tinvest-long-sandbox-verifier.timer || return 2
+    systemctl stop moex-tinvest-long-sandbox-verifier.service || return 2
+  fi
   if systemctl cat moex-tinvest-long-once-prod.timer >/dev/null 2>&1; then
     systemctl disable --now moex-tinvest-long-once-prod.timer || return 2
     local prod_phase

@@ -72,7 +72,8 @@ def monitor_description(name: str) -> str:
 
 
 UNITS = {"shadow", "intraday", "health", "daily-report", "maintenance", "prod-long-observer",
-         "calendar", "long-once-sandbox", "long-once-prod", "legacy-long-excluded"}
+         "calendar", "long-once-sandbox", "long-once-prod", "long-sandbox-verifier",
+         "legacy-long-excluded"}
 INACTIVE = "FAIL: active=inactive, no schedule"
 
 

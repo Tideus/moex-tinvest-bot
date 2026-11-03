@@ -25,6 +25,8 @@ CONFIG = (
     "prod-live.json",
     "prod-experiment.json",
 )
+ONCE_CONFIG = "prod-long-once.json"
+CONTROL = Path("/var/lib/moex-tinvest-control/prod-long-once")
 META = ("BUILD_INFO", "BUILD_MANIFEST.sha256", "VERSION")
 STATE = "/var/lib/moex-tinvest-bot"
 CORE = {
@@ -231,9 +233,42 @@ def linked_actions(orders, protection, account, identity):
     )
 
 
-def head(app, config, state, checkout=None):
+def config_names(config):
+    return CONFIG + ((ONCE_CONFIG,) if os.path.lexists(config / ONCE_CONFIG) else ())
+
+
+def once_control(config, control, orders, identity, account):
+    if ONCE_CONFIG not in config_names(config):
+        check(control is None or not os.path.lexists(control), "control without one-shot settings")
+        return None
+    from moex_bot.prod_long_once_operator import load_settings
+    from moex_bot.prod_once_observer import candidate_from_claim
+    from moex_bot.prod_once_restore import control_digest
+
+    settings = load_settings(source_file(config, ONCE_CONFIG))
+    check(control is not None, "explicit one-shot control source required")
+    if not os.path.lexists(control):
+        check(settings["enabled"] is False and not orders.execute(
+            "SELECT 1 FROM actions LIMIT 1").fetchone(), "missing active/spent control evidence")
+        return {"state": "NOT_ENROLLED", "files": {}}
+    verified = control_digest(control)
+    claim = json.loads(small_bytes(control / "claim.json"))
+    candidate = candidate_from_claim(claim)
+    check(candidate.account_id == account and claim["journal_uuid"] == identity,
+          "control belongs to another account/journal")
+    if (control / "buy-dispatch.json").exists():
+        from moex_bot.prod_long_once import paired
+
+        _, plan = paired(candidate)
+        check(orders.execute("SELECT 1 FROM actions WHERE request_id=?", (
+            plan.entry_request_id,)).fetchone(), "dispatch fence newer than entry journal")
+    return {"state": "CLAIMED_NO_REARM", "digest": verified,
+            "files": {p.name: digest(source_file(control, p.name)) for p in control.iterdir()}}
+
+
+def head(app, config, state, checkout=None, control=None):
     release_files(app, checkout)
-    policies = {name: digest(source_file(config, name)) for name in CONFIG}
+    policies = {name: digest(source_file(config, name)) for name in config_names(config)}
     for name in ("prod-experiment.json", "prod-live.json"):
         cfg = json.loads(small_bytes(config / name))
         check(
@@ -282,6 +317,7 @@ def head(app, config, state, checkout=None):
                     rel = p.relative_to(folder).as_posix()
                     audit[rel] = digest(source_file(folder, rel))
         protection_hash = None
+        protection_activity = False
         if os.path.lexists(folder / PAIR[1]):
             with readonly(source_file(state, "execution/" + PAIR[1])) as protection:
                 integrity(protection)
@@ -293,6 +329,8 @@ def head(app, config, state, checkout=None):
                     "mismatched protection enrollment",
                 )
                 protection_hash = logical_hash(protection)
+                protection_activity = bool(protection.execute(
+                    "SELECT 1 FROM protection LIMIT 1").fetchone())
                 linked_actions(orders, protection, account, identity)
         else:
             check(
@@ -301,7 +339,7 @@ def head(app, config, state, checkout=None):
                 and not any((folder / "audit").rglob("*")),
                 "protection journal missing despite evidence of activity",
             )
-        return {
+        result = {
             "format": 2,
             "account": account,
             "enrollment": identity,
@@ -311,19 +349,25 @@ def head(app, config, state, checkout=None):
             "release": {name: digest(app / name) for name in META},
             "config": policies,
         }
+        once = once_control(config, control, orders, identity, account)
+        if once is not None:
+            check(once["state"] != "NOT_ENROLLED" or not protection_activity,
+                  "one-shot control absent despite protection evidence")
+            result.update(format=3, control=once)
+        return result
 
 
-def snapshot(app, config, state, stage, checkout):
+def snapshot(app, config, state, stage, checkout, control=None):
     """Caller holds production_session() throughout this entire operation."""
     app_out, config_out, state_out = stage / "release", stage / "config", stage / "state"
-    before = head(app, config, state, checkout)
+    before = head(app, config, state, checkout, control)
     app_out.mkdir()
     config_out.mkdir(exist_ok=True)
     for name in (*release_files(app), *META):
         target = app_out / name
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(source_file(app, name), target)
-    for name in CONFIG:
+    for name in config_names(config):
         shutil.copyfile(source_file(config, name), config_out / name)
     check(not stage.resolve().is_relative_to(state.resolve()), "stage inside source state")
     state_out.mkdir(exist_ok=True)
@@ -353,7 +397,14 @@ def snapshot(app, config, state, stage, checkout):
                     )
             else:
                 shutil.copyfile(srcfile, target)
-    check(before == head(app_out, config_out, state_out), "snapshot changed during capture")
+    control_out = stage / "control" / "prod-long-once"
+    if control is not None and os.path.lexists(control):
+        control_out.mkdir(parents=True)
+        for name in before["control"]["files"]:
+            shutil.copyfile(source_file(control, name), control_out / name)
+    check(before == head(app_out, config_out, state_out, control=control_out),
+          "snapshot changed during capture")
+    check(before == head(app, config, state, checkout, control), "source changed during snapshot")
     (stage / "HEAD.json").write_text(json.dumps(before, sort_keys=True), encoding="utf-8")
 
 
@@ -385,6 +436,7 @@ def extract(payload, out):
                 "config",
                 "logs",
                 "metadata",
+                "control",
                 "HEAD.json",
                 "RECOVERY_MANIFEST.txt",
             ),
@@ -392,7 +444,8 @@ def extract(payload, out):
         )
         check(
             Path(name).name
-            not in ("bot.env", ".env", "prod-admission.json", "prod-experiment-admission.json"),
+            not in ("bot.env", ".env", "prod-admission.json", "prod-experiment-admission.json",
+                    "prod-long-once-admission.json"),
             "unexpected secret/admission",
         )
         path = out / name
@@ -462,7 +515,7 @@ def rehearse(archive, expected, trusted):
                 "unmanifested release content",
             )
             check(
-                {p.name for p in (out / "config").iterdir()} == set(CONFIG),
+                {p.name for p in (out / "config").iterdir()} == set(config_names(out / "config")),
                 "unexpected or missing effective policy",
             )
             check(
@@ -470,7 +523,14 @@ def rehearse(archive, expected, trusted):
                 and b"format_version=2" in small_bytes(out / "RECOVERY_MANIFEST.txt").splitlines(),
                 "incomplete archive",
             )
-            calculated = head(app, out / "config", out / "state")
+            control = out / "control" / "prod-long-once"
+            calculated = head(app, out / "config", out / "state", control=control)
+            if (out / "control").exists():
+                check({p.relative_to(out / "control").as_posix()
+                       for p in (out / "control").rglob("*") if p.is_file()} ==
+                      {"prod-long-once/" + n
+                       for n in calculated.get("control", {}).get("files", {})},
+                      "unexpected control evidence")
             check(
                 calculated == independent == json.loads(small_bytes(out / "HEAD.json")),
                 "divergent/stale journal, release or policy versus trusted external head",
@@ -489,6 +549,7 @@ def main():
         sub.add_argument("--app", type=Path, default=Path("/opt/moex-tinvest-bot"))
         sub.add_argument("--config", type=Path, default=Path("/etc/moex-tinvest-bot"))
         sub.add_argument("--state", type=Path, default=Path(STATE))
+        sub.add_argument("--control", type=Path, default=CONTROL)
         sub.add_argument(
             "--checkout",
             type=Path,
@@ -503,6 +564,8 @@ def main():
     sub.add_argument("--trusted-head", type=Path, required=True)
     sub.add_argument("--rehearse", action="store_true", required=True)
     args = parser.parse_args()
+    # Import only this trusted checker installation, never archive-provided Python.
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
     if args.command == "rehearse":
         out = rehearse(args.backup, args.expected_sha256, args.trusted_head)
         print(f"QUARANTINE ONLY: {out}\nNO install, credentials, live promotion or activation.")
@@ -513,10 +576,11 @@ def main():
 
     with production_session():
         if args.command == "snapshot":
-            snapshot(args.app, args.config, args.state, args.stage, args.checkout)
+            snapshot(args.app, args.config, args.state, args.stage, args.checkout, args.control)
         else:
             print(
-                json.dumps(head(args.app, args.config, args.state, args.checkout), sort_keys=True)
+                json.dumps(head(args.app, args.config, args.state, args.checkout, args.control),
+                           sort_keys=True)
             )
 
 

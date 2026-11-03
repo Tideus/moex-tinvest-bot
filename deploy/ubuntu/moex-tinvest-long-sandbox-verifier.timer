@@ -1,0 +1,11 @@
+[Unit]
+Description=Check first LONG Sandbox signal independently of the laptop
+
+[Timer]
+OnBootSec=1min
+OnUnitActiveSec=5min
+AccuracySec=5s
+Unit=moex-tinvest-long-sandbox-verifier.service
+
+[Install]
+WantedBy=timers.target

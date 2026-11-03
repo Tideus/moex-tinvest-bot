@@ -1,0 +1,25 @@
+[Unit]
+Description=Read-only first LONG Sandbox signal BUY and stop verification
+Wants=network-online.target
+After=network-online.target moex-tinvest-long-once-sandbox.service
+ConditionPathExists=/etc/moex-tinvest-bot/sandbox-long-once.owner
+
+[Service]
+Type=oneshot
+User=moexbot
+Group=moexbot
+WorkingDirectory=/opt/moex-tinvest-bot
+EnvironmentFile=/etc/moex-tinvest-bot/bot.env
+UnsetEnvironment=T_INVEST_PROD_TOKEN T_INVEST_READONLY_TOKEN T_INVEST_SANDBOX_ACCOUNT_ID
+Environment=SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
+Environment=PYTHONDONTWRITEBYTECODE=1
+ExecStart=/opt/moex-tinvest-bot/.venv/bin/python -m moex_bot.long_sandbox_verifier
+TimeoutStartSec=3min
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+ReadWritePaths=/var/lib/moex-tinvest-bot/artifacts /var/lib/moex-tinvest-bot/data
+InaccessiblePaths=-/etc/moex-tinvest-bot/bot.env -/var/lib/moex-tinvest-bot/execution -/etc/moex-tinvest-bot/prod-long-once-admission.json
+UMask=0077

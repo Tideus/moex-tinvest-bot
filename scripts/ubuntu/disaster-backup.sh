@@ -57,7 +57,7 @@ services=(
 )
 active_timers=()
 stage_dir=""
-for unit in moex-tinvest-calendar moex-observer; do
+for unit in moex-tinvest-calendar moex-observer moex-tinvest-long-sandbox-verifier; do
   for suffix in timer service; do
     load="$(systemctl show "${unit}.${suffix}" --property=LoadState --value)"
     case "${load}" in

@@ -83,6 +83,9 @@ ensure_long_anchor_dir "${CONTROL_DIR}" "${SERVICE_USER}" \
   "${CONFIG_DIR}/sandbox-long-once.owner" "${STATE_DIR}/long-once/sandbox.sqlite3"
 
 restart_timers() {
+  if [[ "${WAS_VERIFIER_ACTIVE:-0}" -eq 1 ]]; then
+    systemctl start moex-tinvest-long-sandbox-verifier.timer || true
+  fi
   if [[ "${WAS_CALENDAR_ACTIVE:-0}" -eq 1 ]]; then
     systemctl start moex-tinvest-calendar.timer || true
   fi
@@ -113,6 +116,8 @@ WAS_MAINTENANCE_ACTIVE=0
 WAS_PROD_OBSERVER_ACTIVE=0
 WAS_CALENDAR_ACTIVE=0
 WAS_LONG_ONCE_ACTIVE=0
+WAS_VERIFIER_ACTIVE=0
+systemctl is-active --quiet moex-tinvest-long-sandbox-verifier.timer && WAS_VERIFIER_ACTIVE=1
 systemctl is-active --quiet moex-tinvest-long-once-sandbox.timer && WAS_LONG_ONCE_ACTIVE=1
 systemctl is-active --quiet moex-tinvest-calendar.timer && WAS_CALENDAR_ACTIVE=1
 systemctl is-active --quiet moex-tinvest-shadow.timer && WAS_SHADOW_ACTIVE=1
@@ -140,6 +145,10 @@ stop_timer_if_installed moex-tinvest-intraday.timer
 stop_timer_if_installed moex-tinvest-maintenance.timer
 stop_timer_if_installed moex-tinvest-prod-long-observer.timer
 stop_timer_if_installed moex-tinvest-long-once-sandbox.timer
+stop_timer_if_installed moex-tinvest-long-sandbox-verifier.timer
+if systemctl cat moex-tinvest-long-sandbox-verifier.service >/dev/null 2>&1; then
+  systemctl stop moex-tinvest-long-sandbox-verifier.service
+fi
 # A release-bound PROD admission must be reviewed again. Never auto-resume it.
 # production_session flock above ensures no BUY -> stop is interrupted here.
 if systemctl cat moex-tinvest-long-once-prod.timer >/dev/null 2>&1; then

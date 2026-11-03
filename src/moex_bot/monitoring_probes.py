@@ -129,6 +129,7 @@ def collect_services(app: Path, state: Path, settings: dict[str, Any],
         # Preserve all other service checks, but never silently declare PROD disabled.
         checks["timer:long-once-prod"] = "FAIL: PROD evidence or read-only API unavailable"
     if once:
+        units.append("long-sandbox-verifier")
         active = systemd("moex-tinvest-shadow.timer", "ActiveState")
         enabled = systemd("moex-tinvest-shadow.timer", "UnitFileState")
         checks["timer:legacy-long-excluded"] = (

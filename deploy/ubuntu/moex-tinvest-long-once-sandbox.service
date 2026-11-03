@@ -3,6 +3,8 @@ Description=Single-use LONG strategy (dedicated T-Invest Sandbox account only)
 Wants=network-online.target
 After=network-online.target
 ConditionPathExists=/etc/moex-tinvest-bot/sandbox-long-once.owner
+OnSuccess=moex-tinvest-long-sandbox-verifier.service
+OnFailure=moex-tinvest-long-sandbox-verifier.service
 
 [Service]
 Type=oneshot
