@@ -26,6 +26,22 @@ def test_waiting_quiet_no_api(saved):
     assert not transport.posts
 
 
+def test_waiting_timer_never_takes_entry_writer_lock(saved, monkeypatch):
+    from unittest.mock import Mock
+
+    c, state, anchor, _, _, _ = saved
+    monkeypatch.setattr(verifier, "STATE", state)
+    monkeypatch.setattr(verifier, "ANCHOR", anchor)
+    monkeypatch.setattr(verifier, "_scope", lambda _: None)
+    monkeypatch.setattr(verifier, "_working_account", lambda: c.account_id)
+    lock = Mock(side_effect=AssertionError("must not compete with entry"))
+    monkeypatch.setattr(verifier, "writer_lock", lock)
+    monkeypatch.setattr("sys.argv", ["verifier"])
+    monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
+    assert verifier.main() == 0
+    lock.assert_not_called()
+
+
 def test_actual_readback_and_deduplication(saved, tmp_path):
     c, state, anchor, broker, transport, now = saved
     assert run_sandbox_candidate(c, state, broker, clock=lambda: now,

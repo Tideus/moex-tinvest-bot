@@ -185,10 +185,17 @@ def main() -> int:
     try:
         _scope(argparse.Namespace(state=STATE))
         account = _working_account()
-        with writer_lock():
-            result = verify(STATE, ANCHOR, account, SandboxLongBroker(
-                os.environ["T_INVEST_SANDBOX_TOKEN"], account,
-                transport=ReadOnlySandboxTransport()), now)
+        try:
+            waiting = ReadOnlyLedger(STATE, account, anchor=ANCHOR).status() == "WAITING"
+        except Exception:
+            waiting = False  # Recheck under lock before treating inconsistent evidence as failure.
+        if not waiting:
+            # Never compete with the one scheduled entry window merely to poll WAITING.
+            # OnSuccess/OnFailure handles the transition that happens after this fast read.
+            with writer_lock():
+                result = verify(STATE, ANCHOR, account, SandboxLongBroker(
+                    os.environ["T_INVEST_SANDBOX_TOKEN"], account,
+                    transport=ReadOnlySandboxTransport()), now)
     except Exception as exc:
         if isinstance(exc.__cause__, BlockingIOError):
             print("WAITING: LONG writer still active; no broker retry or notification")
