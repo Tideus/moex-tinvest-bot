@@ -80,6 +80,7 @@ def test_disabled_by_default_and_excludes_legacy_and_deployment():
         "",
         "status",
         "consumed",
+        "missing-flow",
         "session-check",
         "geo-refresh",
         "hourly-shadow",
@@ -104,6 +105,9 @@ def test_shell_computes_same_run_plan_or_aborts(tmp_path, fail):
     cli.write_bytes(b"""#!/usr/bin/env bash
 printf '%s\\n' "$*" >> calls
 if [[ "${FAIL_AT:-}" == consumed && " $* " == *" --waiting-only "* ]]; then exit 3; fi
+if [[ "${FAIL_AT:-}" == missing-flow && " $* " == *" --distinguish-missing-flow "* ]]; then
+  exit 4
+fi
 if [[ -n "${FAIL_AT:-}" && " $* " == *" ${FAIL_AT} "* ]]; then exit 2; fi
 while [[ $# -gt 1 ]]; do
   if [[ "$1" == "--output" ]]; then printf '{}\\n' > "$2"; break; fi
@@ -132,7 +136,9 @@ done
             pytest.skip("Git Bash kernel IPC not available in restricted Windows environment")
         pytest.fail(f"isolated bash fixture did not run: {result.stderr}")
     assert "sandbox-execute" not in calls and "sandbox-reconcile" not in calls
-    if fail == "consumed":
+    if fail == "missing-flow":
+        assert result.returncode == 0 and "hourly-shadow" in calls and "sandbox-cycle" not in calls
+    elif fail == "consumed":
         assert (
             result.returncode == 0
             and "portfolio-snapshot" not in calls

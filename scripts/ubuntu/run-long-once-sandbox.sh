@@ -38,7 +38,11 @@ run="$(mktemp -d "${base}/run-$(date -u +%Y%m%dT%H%M%SZ).XXXXXXXX")"
 "${python}" -I -B -m moex_bot.cli hourly-shadow \
   --config "${app}/config/shadow.json" --universe "${app}/config/universe.json" \
   --portfolio "${run}/portfolio.json" --geo "${run}/geo.json" \
-  --require-token --report-environment SANDBOX --output "${run}/plan.json"
+  --require-token --report-environment SANDBOX --distinguish-missing-flow \
+  --output "${run}/plan.json" || status=$?
+# Completed no-entry decision, not a failed service. Never fall through to sandbox-cycle.
+if [[ "${status}" == 4 ]]; then exit 0; fi
+if [[ "${status}" != 0 ]]; then exit "${status}"; fi
 context
 "${python}" -I -B -m moex_bot.cli session-check
 exec "${python}" -I -B -m moex_bot.long_auto_operator sandbox-cycle \

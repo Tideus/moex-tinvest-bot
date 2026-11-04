@@ -37,6 +37,7 @@ def main() -> int:
         checks = collect(args.app, args.state, settings, now)
     except Exception as exc:
         checks = {"monitor:collector": f"FAIL: {type(exc).__name__}; inspect configuration/storage"}
+    long_flow = checks.pop("observation:long_flow", "")
     if args.collect_only:
         failures = sum(value != "OK" for value in checks.values())
     else:
@@ -46,6 +47,8 @@ def main() -> int:
     output.parent.mkdir(parents=True, exist_ok=True)
     temporary = output.with_name(f".{output.name}.{uuid4().hex}.tmp")
     observations = {"intraday_execution": intraday_execution_note(args.state, now)}
+    if long_flow:
+        observations["long_flow"] = long_flow
     try:
         temporary.write_text(json.dumps({"schema_version": 1, "observed_at": now.isoformat(),
                                          "checks": checks, "observations": observations},
@@ -55,8 +58,9 @@ def main() -> int:
         temporary.unlink(missing_ok=True)
     for key, value in checks.items():
         print(f"{key}: {value}")
-    if observations["intraday_execution"]:
-        print("INFO: " + observations["intraday_execution"])
+    for note in observations.values():
+        if note:
+            print("INFO: " + note)
     return 2 if failures else 0
 
 

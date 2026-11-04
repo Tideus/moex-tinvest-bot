@@ -21,7 +21,8 @@ ROOT = Path(__file__).resolve().parents[1]
 NOW = datetime(2026, 10, 30, 7, 5, tzinfo=UTC)
 
 
-@pytest.mark.parametrize("passed,safe", [(True, False), (False, False), (False, True)])
+@pytest.mark.parametrize("passed,safe,skip", [(True, False, False), (False, False, False),
+                                               (False, True, False), (False, False, True)])
 @pytest.mark.parametrize("notify", [True, False])
 @pytest.mark.parametrize("allowed_policy", [True, False])
 def test_hourly_shadow_orchestrates_flow_quality_and_notifications(
@@ -29,6 +30,7 @@ def test_hourly_shadow_orchestrates_flow_quality_and_notifications(
     monkeypatch: pytest.MonkeyPatch,
     passed: bool,
     safe: bool,
+    skip: bool,
     notify: bool,
     allowed_policy: bool,
 ) -> None:
@@ -42,7 +44,7 @@ def test_hourly_shadow_orchestrates_flow_quality_and_notifications(
     monkeypatch.setattr(cli, "load_config", lambda path: config)
     result = SimpleNamespace(
         run_id="test",
-        quality=SimpleNamespace(passed=passed),
+        quality=SimpleNamespace(passed=passed, errors=("missing long flow for AFLT",)),
         geo=SimpleNamespace(level=SimpleNamespace(value="normal")),
         targets=(),
         orders=(),
@@ -65,11 +67,12 @@ def test_hourly_shadow_orchestrates_flow_quality_and_notifications(
         require_token=False,
         outbox_path=tmp_path / "outbox.sqlite3",
         notifications_path=ROOT / "config/notifications.json",
-        report_environment="PROD OBSERVER",
+        report_environment="SANDBOX" if skip else "PROD OBSERVER",
+        distinguish_missing_flow=skip,
         allowed_secids_policy_path=ROOT / "config/prod_long.json" if allowed_policy else None,
         quality_block_is_safe=safe,
     )
-    assert result_code == (0 if passed or safe else 2)
+    assert result_code == (0 if passed or safe else 4 if skip else 2)
     assert outbox.enqueue.call_count == int(notify)
     flow.latest.assert_called_once()
 

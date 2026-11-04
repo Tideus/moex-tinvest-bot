@@ -229,6 +229,19 @@ def test_zero_disk(settings):
     assert p.disk_status(0,0,settings).startswith('CRITICAL')
 
 
+@pytest.mark.parametrize("api", ["OK", "FAIL: HTTP 503"])
+def test_historical_observation_cannot_mask_current_outage(tmp_path, monkeypatch, api):
+    monkeypatch.setattr(sys, "argv", ["monitoring", "--app", str(ROOT), "--state",
+                                      str(tmp_path), "--collect-only"])
+    monkeypatch.setattr(monitoring, "collect", lambda *args: {
+        "quality:long": "OK", "observation:long_flow": "historical skip",
+        "api:algopack_obstats": api})
+    assert monitoring.main() == (0 if api == "OK" else 2)
+    raw = json.loads((tmp_path/"artifacts/monitoring-latest.json").read_bytes())
+    assert raw["observations"]["long_flow"] == "historical skip"
+    assert "observation:long_flow" not in raw["checks"]
+
+
 def test_module_entrypoint(tmp_path, monkeypatch):
     monkeypatch.setattr(sys, 'argv', ['monitoring', '--app', str(ROOT), '--state',
                                      str(tmp_path), '--collect-only'])

@@ -11,6 +11,7 @@ from zoneinfo import ZoneInfo
 
 from .long_auto_once import OnceLedger
 from .long_auto_operator import ANCHOR, MARKER, TERMINAL
+from .long_flow_health import UNCONFIRMED, first_receipt, missing_only
 
 
 def enrolled(state: Path) -> bool:
@@ -60,6 +61,19 @@ def evidence(state: Path, now: datetime) -> dict[str, str]:
                 and due <= at <= now
                 and at <= due + timedelta(minutes=20)
             ):
+                q = raw["quality"]
+                symbols = missing_only(q["passed"], q.get("errors"),
+                                       raw.get("orders"), raw.get("targets"))
+                if symbols:
+                    received = first_receipt(state / "artifacts", at, now, symbols)
+                    note = (f"LONG sandbox {at.astimezone(local.tzinfo):%Y-%m-%d %H:%M} МСК: "
+                            f"вход пропущен, нет полного потока ALGOPACK: "
+                            f"{', '.join(sorted(symbols))}. План без заявок.")
+                    if received is not None:
+                        clock = received.astimezone(local.tzinfo)
+                        note += f" Полный поток получен в {clock:%H:%M} МСК."
+                    return {"data:long": "OK", "quality:long": "OK" if received else UNCONFIRMED,
+                            "observation:long_flow": note}
                 return {
                     "data:long": "OK",
                     "quality:long": "OK"

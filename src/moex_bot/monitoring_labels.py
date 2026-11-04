@@ -80,6 +80,8 @@ INACTIVE = "FAIL: active=inactive, no schedule"
 def safe_reason(value: str) -> str:
     """Only known templates; never echo arbitrary collector errors to Kuma or Telegram."""
     long_reasons = {
+        "FAIL: LONG flow recovery not confirmed": (
+            "LONG sandbox: нет полного потока ALGOPACK; восстановление по бумагам не подтверждено"),
         "FAIL: PROD admission requires operator check": "LONG ИИС: требуется проверка допуска",
         "FAIL: PROD attempt needs review": "LONG ИИС: зарезервированную попытку нужно сверить",
         "FAIL: PROD position or stop unverified": "LONG ИИС: лот/защитный стоп не подтверждён",

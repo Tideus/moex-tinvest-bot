@@ -110,6 +110,46 @@ def test_start_does_not_resume_or_force_the_one_shot():
     assert "start moex-tinvest-long-once-sandbox.service" not in block
 
 
+@pytest.mark.parametrize("case", ["good", "partial", "invalid", "stale", "future",
+                                  "wrong-day", "cached", "bad-json", "mixed", "orders"])
+def test_missing_flow_requires_same_session_receipt(enrolled, case):
+    os.utime(once.MARKER, (1, 1))
+    plan = enrolled / "long-once/run-20261102T070501Z.12345678/plan.json"
+    plan.parent.mkdir()
+    errors = ["missing long flow for AFLT", "missing long flow for X5"]
+    if case == "mixed":
+        errors.append("invalid market snapshot")
+    plan.write_text(json.dumps(dict(run_id="shadow-2026-11-02T07:05:04+00:00",
+        quality=dict(passed=False, errors=errors), orders=[{}] if case == "orders" else [],
+        targets=[])))
+    original = plan.read_bytes()
+    artifact = enrolled / "artifacts/intraday-plan-20261102T074500Z.json"
+    artifact.parent.mkdir()
+    stamp = "2026-11-02T07:45:00+00:00"
+    receipt = {"as_of": stamp, "market_data_received_at": "2026-11-02T07:45:10+00:00",
+               "supercandles": [{"secid": s, "observed_at": stamp} for s in ("AFLT", "X5")]}
+    if case == "partial":
+        receipt["supercandles"].pop()
+    if case == "invalid":
+        receipt["invalid_bars"] = [{"secid": "AFLT"}]
+    if case == "stale":
+        receipt["supercandles"][0]["observed_at"] = "2026-11-02T07:29:00+00:00"
+    if case == "future":
+        receipt["market_data_received_at"] = "2026-11-02T11:00:00+00:00"
+    if case == "wrong-day":
+        receipt["market_data_received_at"] = "2026-11-03T07:45:10+00:00"
+    if case == "cached":
+        receipt["history_used"] = receipt.pop("supercandles")
+    artifact.write_text("{" if case == "bad-json" else json.dumps({"analysis_input": receipt}))
+    checks = once.evidence(enrolled, NOW)
+    assert (checks["quality:long"] == "OK") == (case == "good")
+    if case not in {"mixed", "orders"}:
+        assert "AFLT, X5" in checks["observation:long_flow"]
+    if case == "good":
+        assert "10:45 МСК" in checks["observation:long_flow"]
+    assert plan.read_bytes() == original
+
+
 def test_inaccessible_prod_settings_does_not_hide_other_timers(enrolled, monkeypatch):
     original = Path.exists
 

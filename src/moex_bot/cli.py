@@ -53,6 +53,7 @@ from .intraday_performance import (
     summarize_intraday_performance,
 )
 from .live_operator import live_operator
+from .long_flow_health import missing_only
 from .notification_policy import load_notification_policy, should_send_long_morning
 from .notifications import SQLiteOutbox, TelegramBotApiSender, deliver_pending
 from .ownership import load_ownership_disclosures, render_ownership_report
@@ -682,6 +683,7 @@ def hourly_shadow(
     report_environment: str = "SANDBOX",
     allowed_secids_policy_path: Path | None = None,
     quality_block_is_safe: bool = False,
+    distinguish_missing_flow: bool = False,
     failure_outbox_path: Path | None = None,
 ) -> int:
     try:
@@ -769,6 +771,11 @@ def hourly_shadow(
     print(f"result={output_path}")
     if result.quality.passed:
         return 0
+    if distinguish_missing_flow and report_environment == "SANDBOX" and missing_only(
+        result.quality.passed, result.quality.errors, result.orders, result.targets
+    ):
+        print("SKIPPED: missing LONG flow; no orders; stop this sandbox cycle")
+        return 4  # Never return success to an executor for a blocked plan.
     if quality_block_is_safe:
         print("SAFE: quality gate blocked all orders; observer completed without execution")
         return 0
@@ -2040,6 +2047,8 @@ def build_parser() -> argparse.ArgumentParser:
     shadow_parser.add_argument("--as-of", type=datetime.fromisoformat)
     shadow_parser.add_argument("--require-token", action="store_true")
     shadow_parser.add_argument("--outbox", type=Path)
+    shadow_parser.add_argument("--distinguish-missing-flow", action="store_true",
+                               help="Sandbox: return 4 for a completed no-order missing-flow skip")
     shadow_parser.add_argument("--failure-outbox", type=Path,
                                help="Technical alerts only; does not enable trading reports")
     shadow_parser.add_argument(
@@ -2495,6 +2504,7 @@ def main() -> int:
             report_environment=args.report_environment,
             allowed_secids_policy_path=args.allowed_secids_policy,
             quality_block_is_safe=args.quality_block_is_safe,
+            distinguish_missing_flow=args.distinguish_missing_flow,
             failure_outbox_path=args.failure_outbox,
         )
     if args.command == "sandbox-execute":
