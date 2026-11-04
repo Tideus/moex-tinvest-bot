@@ -8,6 +8,7 @@ import json
 import os
 import re
 from collections.abc import Callable, Mapping
+from contextlib import contextmanager
 from datetime import UTC, date, datetime, time, timedelta
 from decimal import Decimal
 from pathlib import Path
@@ -23,6 +24,38 @@ from moex_bot.notifications import SQLiteOutbox
 from moex_bot.scheduler import MOSCOW
 
 BASE = Path("/var/lib/moex-long-flow-shadow")
+OUTBOX = Path("/var/lib/moex-tinvest-bot/data/notifications.sqlite3")
+STAGES = {
+    "history": "чтение истории эксперимента",
+    "account": "проверка отдельного sandbox-счёта и журнала входа",
+    "positions": "чтение позиций, заявок и стопов T-Invest Sandbox",
+    "morning_plan": "чтение и проверка утреннего плана LONG",
+    "binding": "проверка SHA, источника и привязки утреннего портфеля",
+    "strategy": "проверка соответствия стратегии протоколу",
+    "candidates": "чтение списка бумаг и ранжирование кандидатов",
+    "algopack": "получение данных ALGOPACK",
+    "evaluate": "проверка интервалов и метрик ALGOPACK",
+    "write": "сохранение результата shadow",
+    "collect": "запуск наблюдения",
+    "report": "подготовка вечернего отчёта",
+}
+
+
+class StageError(ValueError):
+    def __init__(self, stage, error):
+        self.stage = stage
+        self.error = error
+        super().__init__(stage)
+
+
+@contextmanager
+def stage(name):
+    try:
+        yield
+    except StageError:
+        raise
+    except Exception as exc:
+        raise StageError(name, type(exc).__name__) from exc
 APP = Path("/opt/moex-tinvest-bot")
 DATASETS = ("tradestats", "orderstats", "obstats")
 VARIANTS = ("current", "book_mean_3", "book_mean_6")
@@ -205,10 +238,8 @@ def morning_plan(account: str, now: datetime) -> tuple[dict[str, Any], str]:
         or state.get("account_id") != account
         or plan["portfolio_input"].get("account_id") != account
         or state.get("source") != "t_invest_sandbox"
-        or plan["quality"]["passed"] is not True
-        or plan["geo"]["level"] != "normal"
     ):
-        raise ValueError("morning plan binding/quality/georisk not eligible")
+        raise StageError("binding", "ValueError")
     strategy = plan["config_snapshot"]["strategy"]
     expected = {
         "top_n": 5,
@@ -224,7 +255,7 @@ def morning_plan(account: str, now: datetime) -> tuple[dict[str, Any], str]:
         "require_above_trend": True,
     }
     if any(strategy.get(k) != v for k, v in expected.items()):
-        raise ValueError("strategy changed: new protocol review required")
+        raise StageError("strategy", "ValueError")
     return plan, hashlib.sha256(path.read_bytes()).hexdigest()
 
 
@@ -264,37 +295,61 @@ def collect(
     }
     if local.weekday() >= 5 or not time(11, 5) <= local.time() < time(11, 20):
         return result | {"reason": "outside 11:05-11:20 MSK weekday research window"}
-    completed = [
-        p for p in (BASE / "decisions").glob("*.json") if read_json(p)["state"] == "EVALUATED"
-    ]
+    with stage("history"):
+        completed = [
+            p for p in (BASE / "decisions").glob("*.json") if read_json(p)["state"] == "EVALUATED"
+        ]
     if len(completed) >= 40:
         return result | {"reason": "40 sessions complete: manual review required"}
-    account = _working_account()
-    ledger = ReadOnlyLedger(STATE, account, anchor=ANCHOR)
-    if ledger.status() != "WAITING":
+    with stage("account"):
+        account = _working_account()
+        ledger = ReadOnlyLedger(STATE, account, anchor=ANCHOR)
+        waiting = ledger.status() == "WAITING"
+    if not waiting:
         return result | {"reason": "morning entry attempted or completed; no retry research"}
-    if not empty_account(account):
+    with stage("positions"):
+        empty = empty_account(account)
+    if not empty:
         return result | {"reason": "position, active order or stop exists"}
-    plan, digest = morning_plan(account, now)
-    universe = {r["secid"] for r in read_json(APP / "config/universe.json")}
-    top = sorted(
-        (r for r in plan["signal_diagnostics"] if r["eligible"]),
-        key=lambda r: (-number(r["momentum"]), r["secid"]),
-    )[:5]
+    with stage("morning_plan"):
+        plan, digest = morning_plan(account, now)
+        passed = plan["quality"]["passed"]
+        if type(passed) is not bool:
+            raise ValueError("invalid quality flag")
+        if not passed:
+            # Forward only controlled symbols, never arbitrary upstream text.
+            missing = sorted({m[1] for s in plan["quality"].get("errors", [])
+                              if (m := re.fullmatch(r"missing long flow for ([A-Z0-9]{1,12})", s))})
+            return result | {"state": "DATA_MISSING", "stage": "morning_plan",
+                             "reason": "Утренний план не прошёл контроль качества данных."
+                             + (" Нет LONG flow: " + ", ".join(missing) if missing else ""),
+                             "missing_flow": missing, "morning_plan_sha256": digest}
+        if plan["geo"]["level"] != "normal":
+            return result | {"reason": "Утренний геориск не normal; наблюдение пропущено.",
+                             "morning_plan_sha256": digest}
+    with stage("candidates"):
+        universe = {r["secid"] for r in read_json(APP / "config/universe.json")}
+        top = sorted(
+            (r for r in plan["signal_diagnostics"] if r["eligible"]),
+            key=lambda r: (-number(r["momentum"]), r["secid"]),
+        )[:5]
     cutoff = now  # Fixed before requests, not after seeing later data.
     rows = []
     for rank, candidate in enumerate(top, 1):
         secid = candidate["secid"]
         if secid not in universe or not re.fullmatch("[A-Z0-9]{1,12}", secid):
-            raise ValueError("invalid security")
-        evaluation = evaluate(flow_rows(secid, local.date()), cutoff)
+            raise StageError("candidates", "ValueError")
+        with stage("algopack"):
+            blocks = flow_rows(secid, local.date())
+        with stage("evaluate"):
+            evaluation = evaluate(blocks, cutoff)
         rows.append({"ticker": secid, "rank": rank, "morning_signal": candidate, **evaluation})
     done = clock()
-    if (
-        done.astimezone(MOSCOW).time() >= time(11, 20)
-        or ledger.status() != "WAITING"
-        or not empty_account(account)
-    ):
+    with stage("account"):
+        expired = done.astimezone(MOSCOW).time() >= time(11, 20) or ledger.status() != "WAITING"
+    with stage("positions"):
+        changed = expired or not empty_account(account)
+    if changed:
         return result | {"reason": "collection expired or account changed during observation"}
     if any(r["state"] != "EVALUATED" for r in rows):
         return result | {
@@ -482,15 +537,54 @@ def render(result: dict[str, Any], day: date) -> str:
     return "\n".join(lines)
 
 
+def queue_alert(day):
+    # Separate non-trading unit: no broker credentials; no raw exception forwarded.
+    for folder in ("failures", "decisions"):
+        path = BASE / folder / f"{day}.json"
+        if not path.exists():
+            continue
+        item = read_json(path)
+        if (item["protocol"] != PROTOCOL or item["execution_allowed"] is not False
+                or item["date"] != str(day)):
+            raise ValueError("untrusted receipt")
+        state = item["state"]
+        if state not in {"ERROR", "DATA_MISSING"}:
+            return
+        label = STAGES[item.get("stage", "evaluate")]
+        body = f"LONG · SANDBOX SHADOW · {day} · 11:05 МСК\nЭтап: {label}.\n"
+        if state == "ERROR":
+            body += "Ошибка сбора. Проверьте журнал moex-long-flow-shadow.service."
+        else:
+            body += "Недостаточно данных для сравнения фильтров."
+            symbols = [s for s in item.get("missing_flow", []) if re.fullmatch("[A-Z0-9]{1,12}", s)]
+            if symbols:
+                body += " Нет LONG flow: " + ", ".join(symbols[:25]) + "."
+        SQLiteOutbox(OUTBOX).enqueue(kind="health_failure", dedupe_key=f"long-flow-alert:{day}",
+                                     body=body + " Заявки не отправляются.", now=datetime.now(UTC))
+        return
+    if os.getenv("MONITOR_SERVICE_RESULT") not in (None, "success"):
+        SQLiteOutbox(OUTBOX).enqueue(
+            kind="health_failure", dedupe_key=f"long-flow-alert:{day}",
+            body=f"LONG · SANDBOX SHADOW · {day}: служба завершилась со сбоем до записи "
+                 "диагностики. Проверьте журнал moex-long-flow-shadow.service.",
+            now=datetime.now(UTC),
+        )
+
+
 def main() -> int:
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument("action", choices=("collect", "report"))
+    p.add_argument("action", choices=("collect", "report", "alert"))
     args = p.parse_args()
     now = datetime.now(UTC)
     day = now.astimezone(MOSCOW).date()
     try:
-        if args.action == "collect":
+        if args.action == "alert":
+            queue_alert(day)
+        elif args.action == "collect":
             path = BASE / "decisions" / f"{day}.json"
+            if (BASE / "failures" / f"{day}.json").exists():
+                print("FAILED_PREVIOUSLY: preserved failure; no retrospective collection")
+                return 2
             if path.exists():
                 read_json(path)  # A broken receipt must not silently count as done.
                 print("ALREADY_RECORDED: never overwrite or cherry-pick")
@@ -499,7 +593,8 @@ def main() -> int:
             if result.get("reason", "").startswith("outside"):
                 print("SKIPPED: outside research window")
                 return 0
-            immutable(path, result)
+            with stage("write"):
+                immutable(path, result)
             print(result["state"], result.get("reason", "research decisions persisted"))
         else:
             result = report(now)
@@ -519,7 +614,16 @@ def main() -> int:
         return 0
     except Exception as exc:
         # Never leak tokens, account IDs or full HTTP bodies into journalctl.
-        print("FAILED: LONG shadow research", type(exc).__name__)
+        where = exc.stage if isinstance(exc, StageError) else args.action
+        error = exc.error if isinstance(exc, StageError) else type(exc).__name__
+        print(f"FAILED: LONG SANDBOX SHADOW stage={where} error={error}")
+        if args.action == "collect":
+            failure = {"date": str(day), "protocol": PROTOCOL, "execution_allowed": False,
+                       "state": "ERROR", "stage": where, "error": error, "at": now.isoformat()}
+            try:
+                immutable(BASE / "failures" / f"{day}.json", failure)
+            except OSError:
+                print("Failure receipt unavailable; see journal stage above.")
         return 2
 
 

@@ -1,0 +1,16 @@
+[Unit]
+Description=Send a deduplicated LONG shadow data/collection diagnostic to the alert outbox
+
+[Service]
+Type=oneshot
+User=moexbot
+Group=moexbot
+ExecStart=/opt/moex-tinvest-bot/.venv/bin/python -IB /opt/moex-long-flow-shadow/long_flow_forward.py alert
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateNetwork=true
+PrivateTmp=true
+ReadWritePaths=/var/lib/moex-tinvest-bot/data
+InaccessiblePaths=-/etc/moex-tinvest-bot -/var/lib/moex-tinvest-control -/var/lib/moex-tinvest-bot/execution
+UMask=0077

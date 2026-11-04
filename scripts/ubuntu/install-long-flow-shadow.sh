@@ -27,10 +27,13 @@ for kind in service timer; do
       "${stage}/etc/systemd/system/${name}.${kind}"
   done
 done
+install -m 0644 "${project}/deploy/ubuntu/moex-long-flow-shadow-alert.service" \
+  "${stage}/etc/systemd/system/moex-long-flow-shadow-alert.service"
 if [[ -n "${stage}" ]]; then exit 0; fi
 chown -R root:root /opt/moex-long-flow-shadow
 install -d -o moexbot -g moexbot -m 0700 /var/lib/moex-long-flow-shadow
 systemctl daemon-reload
-systemd-analyze verify /etc/systemd/system/moex-long-flow-shadow{,-report}.{service,timer}
+systemd-analyze verify /etc/systemd/system/moex-long-flow-shadow{,-report}.{service,timer} \
+  /etc/systemd/system/moex-long-flow-shadow-alert.service
 printf 'INSTALLED_DISABLED: standalone shadow only; trading app/config/journals untouched.\n'
 printf 'Enable: sudo systemctl enable --now moex-long-flow-shadow.timer moex-long-flow-shadow-report.timer\n'

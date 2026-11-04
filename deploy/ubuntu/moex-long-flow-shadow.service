@@ -2,6 +2,8 @@
 Description=Read-only LONG 11:05 retry and book persistence experiment
 After=network-online.target
 Wants=network-online.target
+OnSuccess=moex-long-flow-shadow-alert.service
+OnFailure=moex-long-flow-shadow-alert.service
 
 [Service]
 Type=oneshot

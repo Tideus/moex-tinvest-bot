@@ -104,6 +104,7 @@ def collect_env(monkeypatch, tmp_path, now):
     monkeypatch.setattr(f, "empty_account", snapshot)
     plan = {
         "signal_diagnostics": [{"secid": "SBER", "momentum": "0.1", "eligible": True}],
+        "quality": {"passed": True}, "geo": {"level": "normal"},
         "config_snapshot": {"strategy": {}},
         "flow_diagnostics": [],
     }
@@ -236,3 +237,52 @@ def test_deployment_is_separate_and_nonmutating():
         "run_sandbox_candidate",
     ):
         assert forbidden not in source
+
+
+def test_quality_failure_is_auditable_and_never_fetches_candidates(now, collect_env, monkeypatch):
+    digest = "a" * 64
+    plan = {"quality": {"passed": False, "errors": [
+        "missing long flow for X5", "missing long flow for T", "private raw message",
+    ]}}
+    monkeypatch.setattr(f, "morning_plan", lambda *_: (plan, digest))
+    flow = Mock(side_effect=AssertionError)
+    monkeypatch.setattr(f, "flow_rows", flow)
+    result = f.collect(now)
+    assert result["state"] == "DATA_MISSING" and not result["execution_allowed"]
+    assert result["missing_flow"] == ["T", "X5"]
+    assert result["morning_plan_sha256"] == digest
+    assert "selected" not in result and "private" not in str(result)
+    flow.assert_not_called()
+    f.immutable(f.BASE / "decisions" / f"{now.date()}.json", result)
+    monkeypatch.setattr(f, "OUTBOX", f.BASE / "outbox.db")
+    f.queue_alert(now.date())
+    f.queue_alert(now.date())
+    messages = f.SQLiteOutbox(f.OUTBOX).claim(now=datetime.now(f.UTC) + timedelta(seconds=2))
+    assert len(messages) == 1 and messages[0].kind == "health_failure"
+    assert "проверка утреннего плана" in messages[0].body and "T, X5" in messages[0].body
+
+
+def test_failure_alert_is_redacted_and_prevents_replay(tmp_path, monkeypatch, capsys):
+    import sys
+
+    monkeypatch.setattr(f, "BASE", tmp_path)
+    monkeypatch.setattr(f, "OUTBOX", tmp_path / "outbox.db")
+    monkeypatch.setattr(sys, "argv", ["long-flow", "collect"])
+
+    def fail(_now):
+        with f.stage("positions"):
+            raise ValueError("do-not-forward")
+
+    collector = Mock(side_effect=fail)
+    monkeypatch.setattr(f, "collect", collector)
+    assert f.main() == 2
+    assert f.main() == 2
+    collector.assert_called_once()
+    day = datetime.now(f.MOSCOW).date()
+    assert not (tmp_path / "decisions").exists()
+    assert "do-not-forward" not in (tmp_path / "failures" / f"{day}.json").read_text()
+    log = capsys.readouterr().out
+    assert "stage=positions" in log and "do-not-forward" not in log
+    f.queue_alert(day)
+    msg, = f.SQLiteOutbox(f.OUTBOX).claim(now=datetime.now(f.UTC) + timedelta(seconds=2))
+    assert "T-Invest Sandbox" in msg.body and "do-not-forward" not in msg.body
