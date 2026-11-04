@@ -31,6 +31,12 @@ def test_private_relay_deduplicates_and_does_not_forward_raw_secrets(tmp_path, m
         for _ in range(2):
             with urlopen(Request(url, data=data), timeout=3) as response:
                 assert response.status == 202
+        for title in module.SUMMARY_NAMES:
+            for state in (0, 1):
+                payload = json.dumps({"monitor": {"id": 9, "name": title},
+                                      "heartbeat": {"id": 90, "status": state}}).encode()
+                with urlopen(Request(url, data=payload), timeout=3) as response:
+                    assert response.status == 202
         messages = module.OUTBOX.claim(now=datetime.now(UTC))
         assert len(messages) == 1
         assert "Resources" in messages[0].body
@@ -45,3 +51,28 @@ def test_private_relay_deduplicates_and_does_not_forward_raw_secrets(tmp_path, m
         server.shutdown()
         server.server_close()
         thread.join(timeout=3)
+
+
+def test_geo_alerts_while_aggregate_stays_down(tmp_path):
+    from datetime import timedelta
+
+    path = Path(__file__).resolve().parents[1] / "scripts/ubuntu/kuma-telegram-relay.py"
+    spec = importlib.util.spec_from_file_location("geo_relay_test", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    outbox = SQLiteOutbox(tmp_path / "out.db")
+    base = datetime.now(UTC)
+    snap = tmp_path / "snapshot.json"
+    a, b = module.GEO_KEYS
+    for i, checks in enumerate([{a: "OK", b: "OK"}, {a: "FAIL: HTTP 502", b: "OK"},
+                                {a: "FAIL: HTTP 502", b: "secret-value"}, {b: "secret-value"},
+                                {a: "OK", b: "secret-value"}, {a: "OK", b: "OK"}]):
+        at = base + timedelta(minutes=5*i)
+        snap.write_text(json.dumps({"observed_at": at.isoformat(), "checks": checks}))
+        for _ in range(2):
+            module.geo_transitions(snap, tmp_path / "geo.db", outbox, at)
+    messages = outbox.claim(now=at)
+    assert len(messages) == 4
+    assert all("secret-value" not in msg.body for msg in messages)
+    assert sum("HTTP 502" in msg.body for msg in messages) == 1
+    assert sum("ВОССТАНОВЛЕНО" in msg.body for msg in messages) == 2
