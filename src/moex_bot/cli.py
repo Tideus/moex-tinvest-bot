@@ -33,7 +33,7 @@ from .geo_feed import refresh_geo_feed
 from .harness import TradingHarness
 from .integration_health import probe_algopack
 from .integrations.algopack_flow import AlgoPackFlowAdapter
-from .integrations.algopack_intraday import AlgoPackIntradayAdapter
+from .integrations.algopack_intraday import AlgoPackIntradayAdapter, InvalidBar
 from .integrations.moexalgo_data import MoexAlgoReadOnlyAdapter
 from .integrations.read_failure import MarketDataReadError
 from .integrations.tinvest_sandbox import (
@@ -1005,13 +1005,19 @@ def intraday_plan(
         raw_portfolio = json.loads(portfolio_path.read_text(encoding="utf-8"))
         if not isinstance(raw_portfolio, dict):
             raise ValueError("intraday portfolio snapshot must be an object")
+        invalid: list[InvalidBar] = []
         try:
             bars = AlgoPackIntradayAdapter.from_environment().history(
                 secids=tuple(instruments), as_of=as_of, bars_per_secid=config.history_bars,
+                invalid=invalid,
             )
         except (OSError, RuntimeError, ValueError):
             print("WARN: ALGOPACK unavailable; entries blocked, broker-based exits remain active")
             bars = ()
+        for issue in invalid:
+            print(f"WARN: INTRADAY SANDBOX ALGOPACK {issue.dataset}.{issue.field} "
+                  f"{issue.reason}; {issue.secid} {issue.observed_at.isoformat()}; entry blocked")
+        invalid_symbols = frozenset(issue.secid for issue in invalid)
         received_at = datetime.now(UTC)
         store = IntradayStateStore(state_path)
         plan = build_intraday_plan(
@@ -1022,6 +1028,7 @@ def intraday_plan(
             bars=bars,
             as_of=as_of,
             received_at=received_at,
+            invalid_symbols=invalid_symbols,
         )
         plan.write(
             output_path,
@@ -1032,10 +1039,13 @@ def intraday_plan(
                 "portfolio_input": raw_portfolio,
                 "supercandles": [asdict(bar) for bar in bars],
                 "market_data_received_at": received_at,
+                "invalid_bars": [asdict(issue) for issue in invalid],
                 "history_policy": "current-session-common-window-v1; insert-only",
-                "history_used": [asdict(bar) for secid in instruments for bar in
-                                 store.recent(secid, config.history_bars, as_of=as_of,
-                                              available_at=received_at)],
+                "history_used": [
+                    asdict(bar) for secid in instruments if secid not in invalid_symbols
+                    for bar in store.recent(secid, config.history_bars, as_of=as_of,
+                                            available_at=received_at)
+                ],
                 "signal_formula": {
                     "price_move": "last_close / first_close - 1",
                     "trade_imbalance": "sum(val_b-val_s) / sum(val_b+val_s)",

@@ -236,6 +236,7 @@ def build_intraday_plan(
     bars: tuple[IntradaySuperCandle, ...],
     as_of: datetime,
     received_at: datetime | None = None,
+    invalid_symbols: frozenset[str] = frozenset(),
 ) -> IntradayPlan:
     if as_of.tzinfo is None:
         raise ValueError("as_of must be timezone-aware")
@@ -245,6 +246,8 @@ def build_intraday_plan(
                          b.observed_at.astimezone(MOSCOW).date() == local.date()),
                         key=lambda b: (b.secid, b.observed_at)))
     store.add(bars, received_at=received_at)
+    # Retain genuine backfill, but never price/enter from a quarantined symbol's cache.
+    bars = tuple(bar for bar in bars if bar.secid not in invalid_symbols)
     quality_errors = () if bars else ("no completed TradeStats/OrderStats/OBStats",)
     positions = _positions(portfolio)
     equity = Decimal(str(portfolio.get("reported_equity", "0")))
@@ -316,6 +319,10 @@ def build_intraday_plan(
     decisions = {}
     passed = []
     for secid in instruments:
+        if secid in invalid_symbols:
+            gate_counts["invalid_algopack_metric"] += 1
+            decisions[secid] = SignalDecision(secid, "not_evaluated", ("invalid_algopack_metric",))
+            continue
         candidate, reasons = evaluate_candidate(
             config, secid, store.recent(secid, config.history_bars, as_of=as_of,
                                        available_at=received_at), as_of, gate_counts

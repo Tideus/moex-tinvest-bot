@@ -191,3 +191,73 @@ def test_cli_records_actual_cached_window_and_receipt_time(tmp_path, monkeypatch
     assert len(raw["analysis_input"]["history_used"]) == 3
     assert raw["analysis_input"]["market_data_received_at"]
     assert "insert-only" in raw["analysis_input"]["history_policy"]
+
+
+@pytest.mark.parametrize(("bad", "reason"), [
+    (None, "null"), ("", "not_numeric"), ("malformed", "not_numeric"),
+    ("NaN", "nonfinite"), (float("inf"), "nonfinite"), (False, "not_numeric"),
+])
+def test_bad_obstats_spread_is_not_zero_and_does_not_poison_other_symbols(monkeypatch, bad, reason):
+    adapter = adapter_with_rows(monkeypatch)
+    original = adapter._day_rows
+
+    def mixed(dataset, day, wanted):
+        rows = original(dataset, day, wanted)
+        rows.update({("MOEX", at): row | {"spread_bbo": 0}
+                     for (_, at), row in list(rows.items())})
+        if dataset == "obstats":
+            rows["SBER", AT]["spread_bbo"] = bad
+        return rows
+
+    monkeypatch.setattr(adapter, "_day_rows", mixed)
+    issues = []
+    bars = adapter.history(secids=("SBER", "MOEX"), as_of=AT, bars_per_secid=3, invalid=issues)
+    issue, = issues
+    assert (issue.secid, issue.observed_at, issue.dataset, issue.field, issue.reason) == (
+        "SBER", AT, "obstats", "spread_bbo", reason)
+    assert not any(b.secid == "SBER" and b.observed_at == AT for b in bars)
+    assert any(b.secid == "MOEX" and b.observed_at == AT and b.spread_bbo == 0 for b in bars)
+    with pytest.raises(ValueError, match="spread_bbo"):
+        adapter.latest(secids=("SBER",), as_of=AT)
+
+
+def test_invalid_obstats_window_cannot_enter_from_cached_signal(tmp_path):
+    store = IntradayStateStore(tmp_path / "intraday.sqlite3")
+    bars = _bars(AT - timedelta(minutes=10))
+    store.add(bars)
+    plan = build_intraday_plan(config=load_intraday_config(ROOT / "config/intraday.json"),
+                              instruments={"SBER": _instrument()}, portfolio=_portfolio(),
+                              store=store, bars=bars[:-1], as_of=AT,
+                              invalid_symbols=frozenset({"SBER"}))
+    assert not plan.orders and not plan.signals
+    assert plan.decisions[0].reasons == ("invalid_algopack_metric",)
+
+
+def test_cli_bad_spread_writes_failed_quality_plan_not_traceback(tmp_path, monkeypatch, capsys):
+    adapter = adapter_with_rows(monkeypatch)
+    original = adapter._day_rows
+
+    def invalid_latest(dataset, day, wanted):
+        rows = original(dataset, day, wanted)
+        if dataset == "obstats":
+            del rows["SBER", AT]["spread_bbo"]
+        return rows
+
+    monkeypatch.setattr(adapter, "_day_rows", invalid_latest)
+    monkeypatch.setattr(cli.AlgoPackIntradayAdapter, "from_environment", lambda: adapter)
+    monkeypatch.setattr(cli, "_verified_instruments_by_secid", lambda _: {"SBER": _instrument()})
+    portfolio = tmp_path / "portfolio.json"
+    portfolio.write_text(json.dumps(_portfolio()))
+    output = tmp_path / "plan.json"
+    assert cli.intraday_plan(config_path=ROOT / "config/intraday.json",
+                             universe_path=ROOT / "config/universe.json", portfolio_path=portfolio,
+                             state_path=tmp_path / "state.db", output_path=output, as_of=AT,
+                             outbox_path=None) == 2
+    plan = json.loads(output.read_text())
+    assert not plan["quality"]["passed"] and not plan["orders"]
+    assert plan["analysis_input"]["history_used"] == []
+    assert plan["analysis_input"]["invalid_bars"] == [
+        {"secid": "SBER", "observed_at": str(AT), "dataset": "obstats",
+         "field": "spread_bbo", "reason": "missing"},
+    ]
+    assert "obstats.spread_bbo missing; SBER" in capsys.readouterr().out

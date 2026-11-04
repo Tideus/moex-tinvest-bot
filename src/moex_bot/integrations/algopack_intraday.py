@@ -6,7 +6,7 @@ import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from typing import Protocol
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
@@ -79,6 +79,7 @@ class AlgoPackIntradayAdapter:
 
     def history(
         self, *, secids: Sequence[str], as_of: datetime, bars_per_secid: int,
+        invalid: list[InvalidBar] | None = None,
     ) -> tuple[IntradaySuperCandle, ...]:
         """Recover only a current-day decision window, never synthesize missing bars."""
         if as_of.tzinfo is None:
@@ -107,8 +108,8 @@ class AlgoPackIntradayAdapter:
             trade = blocks["tradestats"][key]
             order = blocks["orderstats"][key]
             book = blocks["obstats"][key]
-            complete.append(
-                IntradaySuperCandle(
+            try:
+                bar = IntradaySuperCandle(
                     secid=key[0],
                     observed_at=key[1],
                     close=_decimal(trade, "pr_close"),
@@ -122,7 +123,15 @@ class AlgoPackIntradayAdapter:
                     spread_bbo=abs(_decimal(book, "spread_bbo")),
                     book_imbalance=_decimal(book, "imbalance_val"),
                 )
-            )
+            except NumericFieldError as exc:
+                if invalid is None:
+                    raise
+                dataset = ("obstats" if exc.field in {"spread_bbo", "imbalance_val"}
+                           else "orderstats" if exc.field.startswith(("put_", "cancel_"))
+                           else "tradestats")
+                invalid.append(InvalidBar(key[0], key[1], dataset, exc.field, exc.reason))
+                continue
+            complete.append(bar)
         return tuple(complete)
 
     def _day_rows(
@@ -191,9 +200,30 @@ def _moment(row: Mapping[str, object]) -> datetime:
     return result.replace(tzinfo=MOSCOW) if result.tzinfo is None else result.astimezone(MOSCOW)
 
 
+@dataclass(frozen=True, slots=True)
+class InvalidBar:
+    secid: str
+    observed_at: datetime
+    dataset: str
+    field: str
+    reason: str
+
+
+class NumericFieldError(ValueError):
+    def __init__(self, field: str, reason: str) -> None:
+        super().__init__(f"ALGOPACK {field}: {reason}")
+        self.field = field
+        self.reason = reason
+
+
 def _decimal(row: Mapping[str, object], field: str) -> Decimal:
     value = row.get(field)
-    result = Decimal(str(value))
+    if value is None:
+        raise NumericFieldError(field, "null" if field in row else "missing")
+    try:
+        result = Decimal(str(value))
+    except InvalidOperation:
+        raise NumericFieldError(field, "not_numeric") from None
     if not result.is_finite():
-        raise ValueError(f"ALGOPACK {field} must be finite")
+        raise NumericFieldError(field, "nonfinite")
     return result
