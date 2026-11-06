@@ -79,6 +79,15 @@ INACTIVE = "FAIL: active=inactive, no schedule"
 
 def safe_reason(value: str) -> str:
     """Only known templates; never echo arbitrary collector errors to Kuma or Telegram."""
+    intraday_read = re.fullmatch(
+        r"FAIL: intraday read ALGOPACK/(tradestats|orderstats|obstats) "
+        r"(IncompleteRead|RemoteDisconnected|TimeoutError|URLError|HTTPError|ConnectionResetError)",
+        value,
+    )
+    if intraday_read:
+        return (f"INTRADAY SANDBOX: в последнем цикле не прочитан ALGOPACK/{intraday_read[1]} "
+                f"({intraday_read[2]}); входы заблокированы, выходы по данным брокера сохранены. "
+                "Это ошибка цикла, не подтверждение текущей недоступности API.")
     long_reasons = {
         "FAIL: LONG flow recovery not confirmed": (
             "LONG sandbox: нет полного потока ALGOPACK; восстановление по бумагам не подтверждено"),
@@ -112,6 +121,18 @@ def safe_reason(value: str) -> str:
     if re.fullmatch(r"(CRITICAL|WARNING): free=[0-9.]+ GiB \([0-9.]+%\)", value):
         return value
     return "сбой; подробности в diagnose"
+
+
+def intraday_read_failure(value: object) -> str | None:
+    """Extract only a known read-failure template, never arbitrary artifact text."""
+    if not isinstance(value, str):
+        return None
+    match = re.fullmatch(
+        r"api=ALGOPACK/shared stage=(tradestats|orderstats|obstats) page=[0-9]+ "
+        r"error=(IncompleteRead|RemoteDisconnected|TimeoutError|URLError|HTTPError|"
+        r"ConnectionResetError); read failed; entries blocked", value,
+    )
+    return f"FAIL: intraday read ALGOPACK/{match[1]} {match[2]}" if match else None
 
 
 def compact_checks(checks: dict[str, str]) -> str:

@@ -7,8 +7,10 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import ROUND_DOWN, Decimal
+from http.client import IncompleteRead, RemoteDisconnected
 from typing import Any, Protocol
 from urllib.error import HTTPError, URLError
+from urllib.parse import urlsplit
 from urllib.request import Request, urlopen
 from uuid import UUID
 
@@ -45,6 +47,20 @@ GET_ORDERS_PATH = f"{ORDERS_SERVICE_PATH}/GetOrders"
 SANDBOX_PAY_IN_PATH = f"{SANDBOX_SERVICE_PATH}/SandboxPayIn"
 MAX_SANDBOX_PAY_IN_RUB = Decimal("30000000")
 
+# POST is also used for reads by this API. Retry only exact audited read methods,
+# never a name prefix (Get*) or mutations with unknown delivery state.
+RETRYABLE_READ_PATHS = frozenset({
+    GET_SANDBOX_ACCOUNTS_PATH, GET_SANDBOX_STOP_ORDERS_PATH,
+    GET_SANDBOX_WITHDRAW_LIMITS_PATH, GET_SANDBOX_PORTFOLIO_PATH,
+    GET_SANDBOX_POSITIONS_PATH, GET_SANDBOX_ORDERS_PATH,
+    GET_SANDBOX_ORDER_STATE_PATH, GET_SANDBOX_OPERATIONS_BY_CURSOR_PATH,
+    GET_PORTFOLIO_PATH, GET_POSITIONS_PATH, GET_OPERATIONS_BY_CURSOR_PATH,
+    GET_ORDERS_PATH, GET_ORDER_STATE_PATH, GET_INSTRUMENT_PATH,
+    "/tinkoff.public.invest.api.contract.v1.StopOrdersService/GetStopOrders",
+    "/tinkoff.public.invest.api.contract.v1.MarketDataService/GetOrderBook",
+    "/tinkoff.public.invest.api.contract.v1.MarketDataService/GetTradingStatus",
+})
+
 
 class JsonPostTransport(Protocol):
     def post(
@@ -72,8 +88,36 @@ class UrlLibJsonTransport:
             headers=dict(headers),
             method="POST",
         )
-        with urlopen(request, timeout=timeout_seconds) as response:  # noqa: S310
-            decoded = json.loads(response.read().decode("utf-8"))
+        parsed = urlsplit(url)
+        path = parsed.path.removeprefix("/rest")
+        host = parsed.hostname
+        trusted = host in {"sandbox-invest-public-api.tbank.ru", "invest-public-api.tbank.ru"}
+        readonly = trusted and path in RETRYABLE_READ_PATHS
+        attempts = 3 if readonly else 1
+        for attempt in range(1, attempts + 1):
+            try:
+                with urlopen(request, timeout=timeout_seconds) as response:  # noqa: S310
+                    decoded = json.loads(response.read().decode("utf-8"))
+                break
+            except (OSError, IncompleteRead, RemoteDisconnected) as exc:
+                retry = isinstance(exc, (TimeoutError, ConnectionError, IncompleteRead))
+                if isinstance(exc, HTTPError):
+                    retry = exc.code in {429, 500, 502, 503, 504}
+                elif isinstance(exc, URLError):
+                    retry = isinstance(exc.reason, (TimeoutError, ConnectionError))
+                if readonly and retry and attempt < attempts:
+                    time.sleep(0.5 * attempt)
+                    continue
+                if not readonly and not isinstance(exc, (IncompleteRead, RemoteDisconnected)):
+                    raise
+                contour = ("sandbox" if host == "sandbox-invest-public-api.tbank.ru"
+                           else "prod" if trusted else "unknown")
+                stage = path.rsplit("/", 1)[-1] if path in RETRYABLE_READ_PATHS else "request"
+                raise URLError(
+                    f"api=T-Invest/{contour} stage={stage} error={type(exc).__name__} "
+                    f"attempts={attempt}; "
+                    + ("read failed" if readonly else "delivery unknown; reconcile before retry")
+                ) from None
         if not isinstance(decoded, dict):
             raise ValueError("unexpected T-Invest response")
         return decoded

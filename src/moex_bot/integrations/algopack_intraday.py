@@ -7,6 +7,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal, InvalidOperation
+from http.client import IncompleteRead, RemoteDisconnected
 from typing import Protocol
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
@@ -15,6 +16,10 @@ from zoneinfo import ZoneInfo
 
 MOSCOW = ZoneInfo("Europe/Moscow")
 BASE_URL = "https://apim.moex.com/iss/datashop/algopack/eq"
+
+
+class AlgoPackReadError(RuntimeError):
+    """Sanitized source/stage evidence after a failed read."""
 
 
 class JsonGetTransport(Protocol):
@@ -142,7 +147,14 @@ class AlgoPackIntradayAdapter:
         page_size = 1000
         while True:
             query = urlencode({"date": day, "start": start, "limit": page_size})
-            payload = self._get_with_retry(f"{BASE_URL}/{dataset}.json?{query}")
+            try:
+                payload = self._get_with_retry(f"{BASE_URL}/{dataset}.json?{query}")
+            except (OSError, IncompleteRead) as exc:
+                # No URL, response fragment or credential may enter logs/alerts.
+                raise AlgoPackReadError(
+                    f"api=ALGOPACK/shared stage={dataset} page={start} "
+                    f"error={type(exc).__name__}; read failed; entries blocked"
+                ) from None
             rows = _normalize(payload)
             if not rows:
                 break
@@ -168,7 +180,7 @@ class AlgoPackIntradayAdapter:
             except HTTPError as exc:
                 if exc.code not in {429, 500, 502, 503, 504} or attempt == self.retry_attempts:
                     raise
-            except (TimeoutError, URLError):
+            except (TimeoutError, URLError, ConnectionError, IncompleteRead, RemoteDisconnected):
                 if attempt == self.retry_attempts:
                     raise
             self.sleeper(self.retry_backoff * attempt)

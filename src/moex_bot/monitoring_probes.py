@@ -17,6 +17,7 @@ from xml.etree import ElementTree
 from zoneinfo import ZoneInfo
 
 from . import monitoring_long_once
+from .monitoring_labels import intraday_read_failure
 
 
 def read_calendar_health(path: Path, now: datetime) -> str:
@@ -248,9 +249,15 @@ def collect_artifacts(app: Path, state: Path, settings: dict[str, Any],
             if files:
                 try:
                     latest_plan = max(files, key=lambda path: path.stat().st_mtime)
-                    quality = json.loads(latest_plan.read_text()).get("quality", {})
+                    plan = json.loads(latest_plan.read_text())
+                    quality = plan.get("quality", {})
                     checks[f"quality:{kind}"] = (
                         "OK" if quality.get("passed") is True else "FAIL: quality gate blocked")
+                    if kind == "intraday" and quality.get("passed") is not True:
+                        failure = intraday_read_failure(
+                            plan.get("analysis_input", {}).get("read_failure"))
+                        if failure:
+                            checks[f"quality:{kind}"] = failure
                 except Exception:
                     checks[f"quality:{kind}"] = "FAIL: artifact read/schema error"
     portfolios = list((state / "artifacts").glob("intraday-portfolio-*.json"))
