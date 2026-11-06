@@ -12,6 +12,7 @@ from zoneinfo import ZoneInfo
 from .long_auto_once import OnceLedger
 from .long_auto_operator import ANCHOR, MARKER, TERMINAL
 from .long_flow_health import UNCONFIRMED, first_receipt, missing_only
+from .long_sandbox_retry import resolve
 
 
 def enrolled(state: Path) -> bool:
@@ -22,6 +23,14 @@ def enrolled(state: Path) -> bool:
 
 
 class ReadOnlyLedger(OnceLedger):
+    def __init__(self, path: Path, account_id: str, *, anchor: Path | None = None) -> None:
+        # Existing separately deployed read-only research scripts still pass the
+        # canonical original path. They must observe the active admission too.
+        if path.name == "sandbox.sqlite3" and anchor is not None:
+            binding = resolve(path, anchor, account_id)
+            path, anchor = binding.state, binding.anchor
+        super().__init__(path, account_id, anchor=anchor)
+
     def connect(self) -> sqlite3.Connection:
         return sqlite3.connect(self.path.as_uri() + "?mode=ro", uri=True)
 
@@ -31,9 +40,9 @@ def evidence(state: Path, now: datetime) -> dict[str, str]:
         if MARKER.is_symlink() or MARKER.read_bytes() != b"sandbox-long-once/v1\n":
             raise ValueError("invalid enrollment")
         base = state / "long-once"
-        status = ReadOnlyLedger(
-            base / "sandbox.sqlite3", os.environ["T_INVEST_SANDBOX_LONG_ACCOUNT_ID"], anchor=ANCHOR
-        ).status()
+        account = os.environ["T_INVEST_SANDBOX_LONG_ACCOUNT_ID"]
+        binding = resolve(base / "sandbox.sqlite3", ANCHOR, account)
+        status = ReadOnlyLedger(binding.state, account, anchor=binding.anchor).status()
         if status in TERMINAL:
             return {"data:long": "OK"}  # A spent attempt must not produce new plans.
         if status != "WAITING":
@@ -45,6 +54,8 @@ def evidence(state: Path, now: datetime) -> dict[str, str]:
             due -= timedelta(days=1)
         while due.weekday() >= 5:
             due -= timedelta(days=1)
+        if binding.admitted_at is not None and binding.admitted_at > due:
+            return {"data:long": "OK"}  # No retroactive decision required after re-admission.
         if MARKER.stat().st_mtime > due.timestamp():
             return {"data:long": "OK"}  # First scheduled run is still ahead.
         # Use the decision's timestamp, not merely a copied file's modification time.

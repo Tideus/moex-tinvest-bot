@@ -18,6 +18,7 @@ from urllib.request import Request, build_opener
 
 from moex_bot.long_auto_operator import ANCHOR, STATE, _working_account
 from moex_bot.long_auto_sandbox import SandboxLongBroker, _NoRedirect, _rows
+from moex_bot.long_sandbox_retry import resolve
 from moex_bot.long_sandbox_verifier import ReadOnlySandboxTransport
 from moex_bot.monitoring_long_once import ReadOnlyLedger
 from moex_bot.notifications import SQLiteOutbox
@@ -303,7 +304,8 @@ def collect(
         return result | {"reason": "40 sessions complete: manual review required"}
     with stage("account"):
         account = _working_account()
-        ledger = ReadOnlyLedger(STATE, account, anchor=ANCHOR)
+        binding = resolve(STATE, ANCHOR, account)
+        ledger = ReadOnlyLedger(binding.state, account, anchor=binding.anchor)
         waiting = ledger.status() == "WAITING"
     if not waiting:
         return result | {"reason": "morning entry attempted or completed; no retry research"}

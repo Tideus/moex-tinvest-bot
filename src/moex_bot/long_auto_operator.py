@@ -14,6 +14,7 @@ from .long_auto_control import writer_lock
 from .long_auto_once import OnceLedger, init, run_sandbox_candidate
 from .long_auto_sandbox import SandboxLongBroker
 from .long_auto_signal import select_candidate
+from .long_sandbox_retry import authorize, require_empty, resolve
 from .runtime_config import load_runtime_config
 
 BASE = Path("/var/lib/moex-tinvest-bot/long-once")
@@ -78,16 +79,29 @@ def operate(args: argparse.Namespace) -> int:
             init(STATE, account, anchor=ANCHOR)
             print("WAITING: working long sandbox enrolled; no broker request")
             return 0
-        status = OnceLedger(STATE, account, anchor=ANCHOR).status()
+        if args.action == "admit-second-sandbox":
+            from .long_sandbox_verifier import ReadOnlySandboxTransport
+
+            _entry_gate(args, account)
+            binding = authorize(STATE, ANCHOR, account, SandboxLongBroker(
+                os.environ["T_INVEST_SANDBOX_TOKEN"], account,
+                transport=ReadOnlySandboxTransport()), now)
+            print("ADMITTED: sandbox LONG attempt 2; new signal only; 1 lot <=10000 RUB; "
+                  "original ledger preserved; no broker mutation; PROD unchanged")
+            print("Active attempt:",
+                  OnceLedger(binding.state, account, anchor=binding.anchor).status())
+            return 0
+        binding = resolve(STATE, ANCHOR, account)
+        status = OnceLedger(binding.state, account, anchor=binding.anchor).status()
         print("SANDBOX LONG one-shot:", status)
         if args.action == "reconcile":
             from .long_auto_once import reconcile_sandbox_once
 
             observed = reconcile_sandbox_once(
-                STATE,
+                binding.state,
                 account,
                 SandboxLongBroker(os.environ["T_INVEST_SANDBOX_TOKEN"], account),
-                anchor=ANCHOR,
+                anchor=binding.anchor,
             )
             print(
                 "READ_ONLY: correlated parent",
@@ -101,9 +115,9 @@ def operate(args: argparse.Namespace) -> int:
         if args.action == "recover-stop":
             from .long_auto_once import load_saved_candidate, recover_sandbox_protection
 
-            saved = load_saved_candidate(STATE, account, anchor=ANCHOR)
+            saved = load_saved_candidate(binding.state, account, anchor=binding.anchor)
             broker = SandboxLongBroker(os.environ["T_INVEST_SANDBOX_TOKEN"], account)
-            result = recover_sandbox_protection(saved, STATE, broker, anchor=ANCHOR)
+            result = recover_sandbox_protection(saved, binding.state, broker, anchor=binding.anchor)
             print(result)
             return 0 if result == "FILLED_PROTECTED" else 2
         if status not in TERMINAL | {"WAITING"}:
@@ -160,11 +174,22 @@ def operate(args: argparse.Namespace) -> int:
             )
         )
     _entry_gate(args, account)
+    binding.check_candidate(candidate, now)
+
+    def entry_gate() -> None:
+        _entry_gate(args, account)
+        current = resolve(STATE, ANCHOR, account)
+        if current != binding:
+            raise ValueError("sandbox attempt binding changed; entry forbidden")
+        current.check_candidate(candidate, datetime.now(UTC))
+        if current.admitted_at is not None:
+            require_empty(broker, account)
+
     broker = SandboxLongBroker(
-        os.environ["T_INVEST_SANDBOX_TOKEN"], account, entry_gate=lambda: _entry_gate(args, account)
+        os.environ["T_INVEST_SANDBOX_TOKEN"], account, entry_gate=entry_gate
     )
-    result = run_sandbox_candidate(candidate, STATE, broker, anchor=ANCHOR)
-    status = OnceLedger(STATE, account, anchor=ANCHOR).status()
+    result = run_sandbox_candidate(candidate, binding.state, broker, anchor=binding.anchor)
+    status = OnceLedger(binding.state, account, anchor=binding.anchor).status()
     critical = status not in TERMINAL
     print(
         f"SANDBOX LONG {candidate.instrument.secid} · 1 lot · limit {candidate.limit_price}"
@@ -178,6 +203,7 @@ def main(argv: list[str] | None = None) -> int:
     commands = parser.add_subparsers(dest="action", required=True)
     for name in (
         "init-sandbox",
+        "admit-second-sandbox",
         "status",
         "reconcile",
         "recover-stop",
@@ -197,7 +223,7 @@ def main(argv: list[str] | None = None) -> int:
             sub.add_argument("--output", type=Path, required=True)
     args = parser.parse_args(argv)
     try:
-        if args.action in {"init-sandbox", "sandbox-cycle", "recover-stop"}:
+        if args.action in {"init-sandbox", "admit-second-sandbox", "sandbox-cycle", "recover-stop"}:
             with writer_lock():
                 return operate(args)
         return operate(args)

@@ -36,6 +36,7 @@ Usage:
   sudo moex-botctl stop
   sudo moex-botctl sandbox-enable --confirm-sandbox
   sudo moex-botctl sandbox-disable
+  sudo moex-botctl long-sandbox-admit-second --confirm-second-sandbox
   sudo moex-botctl diagnose [--once|--watch] [--interval SECONDS]
   sudo moex-botctl status
   sudo moex-botctl version [--remote]
@@ -501,6 +502,21 @@ timers_are_stopped() {
       return 2
     fi
   done
+}
+
+admit_second_sandbox() {
+  if [[ $# -ne 1 || "$1" != --confirm-second-sandbox ]]; then
+    printf 'Usage: sudo moex-botctl long-sandbox-admit-second --confirm-second-sandbox\n' >&2
+    return 2
+  fi
+  load_secrets || return 2
+  version_status || return 2
+  systemctl is-active --quiet moex-tinvest-long-once-sandbox.timer || return 2
+  systemctl is-active --quiet moex-tinvest-long-sandbox-verifier.timer || return 2
+  systemctl is-active --quiet moex-tinvest-daily-report.timer || return 2
+  # Root-owned append-only admission; broker transport allows reads only.
+  # Does not start a trading service, reset an old journal or enable PROD.
+  "${PYTHON_BIN}" -I -B -m moex_bot.long_auto_operator admit-second-sandbox
 }
 
 enable_prod_long_once() {
@@ -1017,6 +1033,7 @@ case "${command}" in
   portfolio) show_portfolio ;;
   prod-observe) prod_observe ;;
   prod-long-once-enable) enable_prod_long_once "$@" ;;
+  long-sandbox-admit-second) admit_second_sandbox "$@" ;;
   decisions) show_decisions "$@" ;;
   backtest) historical_backtest "$@" ;;
   collect-report) collect_report "$@" ;;

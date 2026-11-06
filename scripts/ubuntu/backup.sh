@@ -65,4 +65,15 @@ if [[ -d /var/lib/moex-tinvest-control/prod-long-once ]]; then
     --directory /var/lib/moex-tinvest-control prod-long-once
   (cd "${BACKUP_DIR}" && sha256sum "$(basename "${control_archive}")") >"${control_archive}.sha256"
 fi
+if [[ -d /var/lib/moex-tinvest-control/long-once-sandbox ]]; then
+  sandbox_control_archive="${archive%.tar.gz}.sandbox-control.tar.gz"
+  sandbox_control_items=(long-once-sandbox)
+  if [[ -e /var/lib/moex-tinvest-control/sandbox-long-retry-2.json ]]; then
+    sandbox_control_items+=(sandbox-long-retry-2.json)
+  fi
+  tar --create --gzip --file "${sandbox_control_archive}" \
+    --directory /var/lib/moex-tinvest-control "${sandbox_control_items[@]}"
+  (cd "${BACKUP_DIR}" && sha256sum "$(basename "${sandbox_control_archive}")") \
+    >"${sandbox_control_archive}.sha256"
+fi
 printf '%s\n' "${archive}"

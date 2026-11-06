@@ -15,6 +15,7 @@ from .domain import OrderIntent, OrderRecord, OrderStatus, Side
 from .long_auto_control import writer_lock
 from .long_auto_operator import ANCHOR, STATE, _scope, _working_account
 from .long_auto_sandbox import SandboxLongBroker, SandboxOnlyTransport, _rows
+from .long_sandbox_retry import resolve
 from .monitoring_long_once import ReadOnlyLedger
 from .notifications import SQLiteOutbox, TelegramBotApiSender, deliver_pending
 from .prod_once_observer import candidate_from_claim
@@ -41,7 +42,9 @@ def verify(state: Path, anchor: Path, account: str, broker: SandboxLongBroker,
     """Caller holds shared LONG writer lock; SQLite opened read-only, never repaired."""
     if broker.account_id != account or broker.environment != "sandbox" or now.tzinfo is None:
         raise ValueError("exact sandbox account and aware time required")
-    ledger = ReadOnlyLedger(state, account, anchor=anchor)
+    binding = resolve(state, anchor, account)
+    anchor = binding.anchor
+    ledger = ReadOnlyLedger(binding.state, account, anchor=anchor)
     status = ledger.status()
     if status == "WAITING":
         return None  # No signal: no API traffic and no repeated Telegram message.
@@ -86,6 +89,7 @@ def verify(state: Path, anchor: Path, account: str, broker: SandboxLongBroker,
         "lots": 1, "lot_size": candidate.instrument.lot_size,
         "limit_price": str(candidate.limit_price), "stop_trigger": str(candidate.stop_trigger),
         "ledger_state": status, "broker_status": actual.status.value,
+        "attempt": 2 if binding.admitted_at is not None else 1,
         "filled_lots": actual.filled_lots, "buy_verified": False, "stop_verified": False,
         "state": "REQUIRES_REVIEW", "read_only": True,
         "ledger_candidate_sha256": hashlib.sha256(row[0].encode()).hexdigest(),
@@ -129,7 +133,7 @@ def render(result: dict[str, Any]) -> str:
                "POSITION_CLOSED": "ℹ️ Позиции больше нет; причина закрытия не установлена",
                "UNAVAILABLE": "🚨 Не удалось проверить LONG: журнал или sandbox API недоступен"}
     observed = datetime.fromisoformat(result["observed_at"]).astimezone(MOSCOW)
-    lines = ["🧪 LONG SANDBOX · первый сигнал", heading[state],
+    lines = [f"🧪 LONG SANDBOX · попытка {result.get('attempt', 1)}", heading[state],
              "Сверка: " + observed.strftime("%d.%m.%Y · %H:%M МСК")]
     if "secid" in result:
         lines += [f"{result['secid']} · 1 лот = {result['lot_size']} шт.",
@@ -226,7 +230,9 @@ def main() -> int:
         _scope(argparse.Namespace(state=STATE))
         account = _working_account()
         try:
-            waiting = ReadOnlyLedger(STATE, account, anchor=ANCHOR).status() == "WAITING"
+            binding = resolve(STATE, ANCHOR, account)
+            waiting = ReadOnlyLedger(
+                binding.state, account, anchor=binding.anchor).status() == "WAITING"
         except Exception:
             waiting = False  # Recheck under lock before treating inconsistent evidence as failure.
         if not waiting:

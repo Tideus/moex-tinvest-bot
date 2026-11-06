@@ -19,6 +19,7 @@ from .cli import _verified_instruments
 from .integrations.tinvest_sandbox import TInvestSandboxAccountService
 from .long_auto_operator import ANCHOR
 from .long_auto_sandbox import SandboxOnlyTransport
+from .long_sandbox_retry import resolve
 from .monitoring_long_once import ReadOnlyLedger
 from .notification_policy import load_notification_policy
 from .notifications import SQLiteOutbox
@@ -240,7 +241,8 @@ def generate(args: argparse.Namespace, now: datetime) -> int:
         or account == os.getenv("T_INVEST_PROD_ACCOUNT_ID", "").strip()
     ):
         raise ValueError("dedicated LONG sandbox account required")
-    ledger = ReadOnlyLedger(args.base / "sandbox.sqlite3", account, anchor=args.anchor)
+    binding = resolve(args.base / "sandbox.sqlite3", args.anchor, account)
+    ledger = ReadOnlyLedger(binding.state, account, anchor=binding.anchor)
     status = ledger.status()
     instruments = _verified_instruments(load_universe(args.universe))
     service = TInvestSandboxAccountService(os.environ["T_INVEST_SANDBOX_TOKEN"], ReportTransport())
