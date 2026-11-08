@@ -94,6 +94,10 @@ def test_immutable_receipt(tmp_path):
 def collect_env(monkeypatch, tmp_path, now):
     monkeypatch.setattr(f, "BASE", tmp_path)
     monkeypatch.setattr(f, "APP", tmp_path)
+    # resolve() performs real existence checks before the mocked ledger is opened.
+    # Bind BOTH journal and independent control evidence to this test's filesystem.
+    monkeypatch.setattr(f, "STATE", tmp_path / "long-once/sandbox.sqlite3")
+    monkeypatch.setattr(f, "ANCHOR", tmp_path / "control/long-once-sandbox/entry.claim")
     (tmp_path / "config").mkdir()
     f.immutable(tmp_path / "config/universe.json", [{"secid": "SBER"}])
     ledger = Mock()
@@ -111,6 +115,22 @@ def collect_env(monkeypatch, tmp_path, now):
     monkeypatch.setattr(f, "morning_plan", lambda *args: (plan, "a" * 64))
     monkeypatch.setattr(f, "flow_rows", lambda *args: blocks(now))
     return ledger, snapshot
+
+
+def test_collect_never_reads_deployed_paths(now, collect_env, tmp_path, monkeypatch):
+    native_stat = Path.stat
+    checked = []
+
+    def isolated_stat(path, *args, **kwargs):
+        assert not path.as_posix().startswith(("/var/lib/moex-", "/etc/moex-", "/opt/moex-"))
+        checked.append(path)
+        return native_stat(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "stat", isolated_stat)
+    assert f.STATE.is_relative_to(tmp_path) and f.ANCHOR.is_relative_to(tmp_path)
+    assert f.collect(now, clock=lambda: now)["state"] == "EVALUATED"
+    assert tmp_path / "long-once/sandbox-retry-2.sqlite3" in checked
+    assert tmp_path / "control/sandbox-long-retry-2.json" in checked
 
 
 def test_collect_shadow_only_bound_account_redacted(now, collect_env):
