@@ -5,7 +5,7 @@ import os
 import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import ROUND_DOWN, Decimal
 from http.client import IncompleteRead, RemoteDisconnected
 from typing import Any, Protocol
@@ -688,6 +688,12 @@ class TInvestSandboxExecutionAdapter:
             )
         status = _status(response.get("executionReportStatus"))
         filled = int(response.get("lotsExecuted", 0))
+        if filled == intent.lots * intent.instrument.lot_size and filled > intent.lots:
+            # PostOrder is not retried. Recover via the same request UUID and
+            # independent operations evidence; missing evidence stays unresolved.
+            return self.lookup(OrderRecord(intent, OrderStatus.UNKNOWN,
+                                           broker_order_id=str(response.get("orderId") or
+                                                               intent.order_request_id)))
         if status is OrderStatus.FILLED and filled != intent.lots:
             raise ValueError("filled order state has inconsistent lotsExecuted")
         if not 0 <= filled <= intent.lots:
@@ -718,12 +724,11 @@ class TInvestSandboxExecutionAdapter:
         except (TimeoutError, HTTPError, URLError) as exc:
             return OrderRecord(record.intent, OrderStatus.UNKNOWN, record.filled_lots,
                                record.broker_order_id, self._error_detail(exc))
-        filled = int(state.get("lotsExecuted", 0))
+        return self._state_record(record, state)
+
+    def _state_record(self, record: OrderRecord, state: Mapping[str, Any]) -> OrderRecord:
+        filled = int(state.get("lotsExecuted", record.filled_lots))
         status = _status(state.get("executionReportStatus"))
-        if not 0 <= filled <= record.intent.lots:
-            raise ValueError("sandbox order state has invalid lotsExecuted")
-        if status is OrderStatus.FILLED and filled != record.intent.lots:
-            raise ValueError("filled order state has inconsistent lotsExecuted")
         for field, expected in (
             ("instrumentUid", record.intent.instrument.uid),
             ("orderRequestId", record.intent.order_request_id),
@@ -732,9 +737,101 @@ class TInvestSandboxExecutionAdapter:
                 raise ValueError(f"sandbox order state has mismatched {field}")
         if "lotsRequested" in state and int(state["lotsRequested"]) != record.intent.lots:
             raise ValueError("sandbox order state has mismatched lotsRequested")
+        detail = None
+        if filled > record.intent.lots:
+            filled = self._confirmed_share_quantity(record, state, filled)
+            detail = "sandbox_units_reconciled_with_operations"
+        if not 0 <= filled <= record.intent.lots:
+            raise ValueError("sandbox order state has invalid lotsExecuted")
+        if status is OrderStatus.FILLED and filled != record.intent.lots:
+            raise ValueError("filled order state has inconsistent lotsExecuted")
+        if filled < record.filled_lots:
+            raise ValueError("sandbox order state has regressed lotsExecuted")
         return OrderRecord(record.intent, status, filled,
                            str(state.get("orderId") or record.broker_order_id or
-                               record.intent.order_request_id))
+                               record.intent.order_request_id), detail)
+
+    def _confirmed_share_quantity(
+        self, record: OrderRecord, state: Mapping[str, Any], shares: int
+    ) -> int:
+        """Narrow sandbox full-fill anomaly, never a general divide-by-lot fallback.
+
+        Sandbox may omit order IDs/stages in operations. Require a unique exact
+        execution timestamp/instrument/side fingerprint AND quantity/price/cash
+        evidence. Delayed, partial or ambiguous evidence keeps the journal locked.
+        No position-based inference and no mutations are permitted here.
+        """
+        intent = record.intent
+        error = (f"sandbox lotsExecuted evidence mismatch: {intent.instrument.secid}; "
+                 "stage=order_operations_reconciliation (journal remains unresolved)")
+        expected_side = "BUY" if intent.side is Side.BUY else "SELL"
+        if not (
+            intent.instrument.asset_class == "share" and intent.instrument.lot_size > 1
+            and shares == intent.lots * intent.instrument.lot_size
+            and state.get("executionReportStatus") == "EXECUTION_REPORT_STATUS_FILL"
+            and state.get("instrumentUid") == intent.instrument.uid
+            and state.get("orderRequestId") == intent.order_request_id
+            and str(state.get("lotsRequested")) == str(intent.lots)
+            and state.get("direction") == f"ORDER_DIRECTION_{expected_side}"
+            and state.get("orderId")
+            and (not record.broker_order_id
+                 or record.broker_order_id == intent.order_request_id
+                 or record.broker_order_id == state["orderId"])
+        ):
+            raise ValueError(error)
+        try:
+            at = datetime.fromisoformat(str(state["orderDate"]).replace("Z", "+00:00"))
+            if at.tzinfo is None:
+                raise ValueError(error)
+            response = self.transport.post(
+                SANDBOX_BASE_URL + GET_SANDBOX_OPERATIONS_BY_CURSOR_PATH,
+                headers=self._headers(), timeout_seconds=self.timeout_seconds,
+                payload={"accountId": self.account_id, "instrumentId": intent.instrument.uid,
+                         "from": (at - timedelta(seconds=1)).isoformat(),
+                         "to": (at + timedelta(seconds=1)).isoformat(), "limit": 1000,
+                         "state": "OPERATION_STATE_EXECUTED", "withoutTrades": False},
+            )
+            items = response.get("items")
+            if response.get("hasNext") is not False or not isinstance(items, list):
+                raise ValueError(error)
+            candidates = [x for x in items if isinstance(x, Mapping)
+                          and x.get("instrumentUid") == intent.instrument.uid
+                          and x.get("type") == f"OPERATION_TYPE_{expected_side}"
+                          and datetime.fromisoformat(str(x.get("date")).replace("Z", "+00:00"))
+                          == at]
+            if len(candidates) != 1:
+                raise ValueError(error)
+            op = candidates[0]
+            if not (op.get("brokerAccountId") == self.account_id
+                    and op.get("state") == "OPERATION_STATE_EXECUTED"
+                    and int(op["quantity"]) == shares
+                    and int(op["quantityDone"]) == shares and int(op["quantityRest"]) == 0):
+                raise ValueError(error)
+            def money(raw: Any) -> Decimal:
+                if not isinstance(raw, Mapping) or str(raw.get("currency")).upper() != "RUB":
+                    raise ValueError(error)
+                value = money_value_to_decimal(raw)
+                if not value.is_finite():
+                    raise ValueError(error)
+                return value
+
+            price = money(op["price"])
+            total = price * shares
+            sign = -1 if intent.side is Side.BUY else 1
+            trades = op.get("tradesInfo", {}).get("trades", [])
+            if not (price > 0 and money(op["payment"]) == sign * total
+                    and money(state["totalOrderAmount"]) == total
+                    and money(state["initialSecurityPrice"]) == price
+                    and isinstance(trades, list) and len(trades) == 1):
+                raise ValueError(error)
+            trade = trades[0]
+            if not (trade.get("num") and int(trade["quantity"]) == shares
+                    and money(trade["price"]) == price
+                    and datetime.fromisoformat(str(trade["date"]).replace("Z", "+00:00")) == at):
+                raise ValueError(error)
+        except (KeyError, TypeError, AttributeError, ValueError) as exc:
+            raise ValueError(error) from exc
+        return intent.lots
 
     def settle(
         self, records: tuple[OrderRecord, ...], *, ttl_seconds: int
@@ -775,18 +872,8 @@ class TInvestSandboxExecutionAdapter:
                         status_detail=self._error_detail(exc),
                     )
                     continue
-                status = _status(state.get("executionReportStatus"))
-                filled = int(state.get("lotsExecuted", record.filled_lots))
-                if status is OrderStatus.FILLED and filled != record.intent.lots:
-                    raise ValueError("filled order state has inconsistent lotsExecuted")
-                if not 0 <= filled <= record.intent.lots:
-                    raise ValueError("sandbox order state has invalid lotsExecuted")
-                settled[index] = OrderRecord(
-                    intent=record.intent,
-                    status=status,
-                    filled_lots=filled,
-                    broker_order_id=record.broker_order_id,
-                )
+                settled[index] = self._state_record(record, state)
+                status = settled[index].status
                 if status in {
                     OrderStatus.FILLED,
                     OrderStatus.REJECTED,
@@ -842,12 +929,9 @@ class TInvestSandboxExecutionAdapter:
                         status_detail=f"cancel_verify:{self._error_detail(exc)}",
                     )
                 else:
-                    final_status = _status(final_state.get("executionReportStatus"))
-                    final_filled = int(final_state.get("lotsExecuted", record.filled_lots))
-                    if not 0 <= final_filled <= record.intent.lots:
-                        raise ValueError("sandbox order state has invalid lotsExecuted")
-                    if final_status is OrderStatus.FILLED and final_filled != record.intent.lots:
-                        raise ValueError("filled order state has inconsistent lotsExecuted")
+                    verified = self._state_record(record, final_state)
+                    final_status = verified.status
+                    final_filled = verified.filled_lots
                     terminal = final_status in {
                         OrderStatus.FILLED,
                         OrderStatus.REJECTED,
@@ -861,7 +945,7 @@ class TInvestSandboxExecutionAdapter:
                         status_detail=(
                             "ttl_expired"
                             if final_status is OrderStatus.CANCELLED
-                            else None if terminal else "cancel_not_final"
+                            else verified.status_detail if terminal else "cancel_not_final"
                         ),
                     )
         return tuple(settled)
