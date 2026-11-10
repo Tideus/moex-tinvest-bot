@@ -59,6 +59,7 @@ from .notifications import SQLiteOutbox, TelegramBotApiSender, deliver_pending
 from .ownership import load_ownership_disclosures, render_ownership_report
 from .performance import render_performance_report, summarize_performance
 from .prod_long import load_prod_long_policy, write_prod_long_sleeve
+from .protected_observer import ProtectedObserverTransport
 from .reporting import (
     render_flow_report,
     render_persisted_shadow_decisions,
@@ -1290,6 +1291,7 @@ def broker_portfolio_snapshot(
     runtime_path: Path,
     services_path: Path,
     account_id_env: str | None = None,
+    observer_policy_path: Path | None = None,
 ) -> int:
     try:
         runtime_config = load_runtime_config(runtime_path)
@@ -1304,6 +1306,20 @@ def broker_portfolio_snapshot(
         universe = load_universe(universe_path)
         instruments = _verified_instruments(universe)
         service = TInvestSandboxAccountService(broker.token, transport=UrlLibJsonTransport())
+        observer_transport = None
+        if observer_policy_path is not None:
+            policy = load_prod_long_policy(observer_policy_path)
+            if (
+                broker.environment is not TInvestEnvironment.PROD
+                or policy.execution_stage != "observer"
+            ):
+                raise ValueError("protected external projection is production observer only")
+            if any(item.uid in instruments for item in policy.protected_external_instruments):
+                raise ValueError("protected external instruments must not enter trading universe")
+            observer_transport = ProtectedObserverTransport(
+                service.transport, policy.protected_external_instruments, broker.account_id,
+            )
+            service.transport = observer_transport
         method_paths = (
             {}
             if broker.environment is TInvestEnvironment.SANDBOX
@@ -1346,6 +1362,8 @@ def broker_portfolio_snapshot(
         portfolio_payload["observed_at"] = now.isoformat()
         portfolio_payload["snapshot_started_at"] = snapshot_started_at.isoformat()
         portfolio_payload["executed_operations"] = [asdict(item) for item in operations]
+        if observer_transport is not None:
+            observer_transport.annotate(portfolio_payload)
         output_path.write_text(
             json.dumps(portfolio_payload, ensure_ascii=False, indent=2, default=str),
             encoding="utf-8",
@@ -1896,6 +1914,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--universe", type=Path, default=Path("config/universe.json")
     )
     broker_snapshot_parser.add_argument("--output", type=Path, required=True)
+    broker_snapshot_parser.add_argument("--observer-policy", type=Path)
     broker_snapshot_parser.add_argument(
         "--runtime", type=Path, default=Path("config/runtime.json")
     )
@@ -2273,6 +2292,7 @@ def main() -> int:
             runtime_path=args.runtime,
             services_path=args.services,
             account_id_env=args.account_id_env,
+            observer_policy_path=args.observer_policy,
         )
     if args.command == "intraday-reconcile":
         return intraday_reconcile(accounts_path=args.accounts, outbox_path=args.outbox)

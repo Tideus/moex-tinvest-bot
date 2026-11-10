@@ -92,7 +92,10 @@ def validate_project_configs(root: Path) -> tuple[str, ...]:
         | prod_policy.managed_secids
         | prod_policy.allowed_secids
     )
-    if not configured_prod_secids <= universe_secids:
+    external_secids = {item.secid for item in prod_policy.protected_external_instruments}
+    if external_secids & universe_secids:
+        raise ValueError("protected external instruments must not enter trading universe")
+    if not (configured_prod_secids - external_secids) <= universe_secids:
         raise ValueError("prod observer SECIDs must belong to verified universe")
     checks.append("config/prod_long.json")
     load_backtest_settings(root / "config" / "backtest.json")

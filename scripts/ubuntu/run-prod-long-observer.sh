@@ -41,6 +41,7 @@ fi
 if [[ "${session_status}" -ne 0 ]]; then exit "${session_status}"; fi
 
 "${PYTHON_BIN}" -m moex_bot.cli broker-portfolio-snapshot \
+  --observer-policy "${APP_DIR}/config/prod_long.json" \
   --universe "${APP_DIR}/config/universe.json" \
   --runtime "${APP_DIR}/config/prod_runtime.json" \
   --services "${APP_DIR}/config/services.json" \

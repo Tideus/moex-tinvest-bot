@@ -11,6 +11,8 @@ from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 from xml.etree import ElementTree
 
+from .probe_errors import failure_kind, is_feed_root
+
 ALLOWED_HOSTS = frozenset({"cbr.ru", "www.cbr.ru", "moex.com", "www.moex.com"})
 
 
@@ -92,6 +94,8 @@ def _published(value: str) -> datetime:
 
 def parse_feed(source: GeoSource, content: bytes) -> tuple[FeedItem, ...]:
     root = ElementTree.fromstring(content)
+    if not is_feed_root(root.tag):
+        raise ValueError("geo response is not an RSS/Atom feed")
     nodes = list(root.findall(".//item"))
     if not nodes:
         nodes = list(root.findall(".//{*}entry"))
@@ -157,11 +161,13 @@ def build_geo_payload(
     cutoff = as_of - timedelta(hours=lookback_hours)
     items: list[FeedItem] = []
     failed: list[str] = []
+    failures: dict[str, str] = {}
     for source in sources:
         try:
             items.extend(parse_feed(source, fetch(source.url)))
-        except (OSError, ValueError, ElementTree.ParseError):
+        except (OSError, ValueError, ElementTree.ParseError) as exc:
             failed.append(source.source_id)
+            failures[source.source_id] = failure_kind(exc)
     deduplicated: dict[str, FeedItem] = {}
     for item in items:
         if cutoff <= item.published_at.astimezone(as_of.tzinfo) <= as_of:
@@ -191,6 +197,7 @@ def build_geo_payload(
         "feed_observed_at": as_of.isoformat() if healthy else None,
         "all_sources_healthy": healthy,
         "failed_sources": failed,
+        "source_failures": failures,
         "source_count": len(sources),
         "events": events,
     }

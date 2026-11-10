@@ -27,7 +27,7 @@ def settings():
 
 @pytest.mark.parametrize("raw,expected", [
     (b'{}', 'OK'), (b'[]', 'response schema'), (b'{"ok":false}', 'rejected'),
-    (b'invalid', 'transport/schema'), (b'<rss/>', 'OK'),
+    (b'invalid', 'probe schema'), (b'<rss/>', 'OK'),
     (b'<feed/>', 'OK'), (b'<html/>', 'RSS schema'),
 ])
 def test_network_schema(monkeypatch, raw, expected):

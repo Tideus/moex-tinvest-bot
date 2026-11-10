@@ -4,7 +4,10 @@
   "account_id_env": "T_INVEST_PROD_ACCOUNT_ID",
   "account_type": "ACCOUNT_TYPE_TINKOFF_IIS",
   "manual_position_policy": "protect",
-  "protected_secids": ["GAZP", "LKOH", "RAGR", "TATNP"],
+  "protected_secids": ["GAZP", "LKOH", "RAGR", "TATNP", "KCG7"],
+  "protected_external_instruments": [
+    {"uid": "f870b159-01c1-4dd4-ab17-bbdeeff51717", "secid": "KCG7", "instrument_type": "futures"}
+  ],
   "managed_secids": [],
   "allowed_secids": [
     "SBER", "T", "MOEX", "NVTK", "GMKN", "PLZL", "PHOR", "CHMF", "YDEX", "X5",

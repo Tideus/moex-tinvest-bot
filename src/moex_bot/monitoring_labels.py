@@ -79,6 +79,19 @@ INACTIVE = "FAIL: active=inactive, no schedule"
 
 def safe_reason(value: str) -> str:
     """Only known templates; never echo arbitrary collector errors to Kuma or Telegram."""
+    probe = re.fullmatch(
+        r"FAIL: probe (timeout|dns|tls|schema|connection|unknown) \(([0-9]+\.[0-9])s\)", value,
+    )
+    if probe:
+        labels = {"timeout": "источник не ответил до таймаута",
+                  "dns": "не удалось разрешить DNS-имя источника",
+                  "tls": "ошибка TLS/сертификата",
+                  "schema": "ответ получен, но формат данных некорректен",
+                  "connection": "сбой сетевого соединения",
+                  "unknown": "неопределённая ошибка проверки"}
+        return f"{labels[probe[1]]}; проверка {probe[2]} с"
+    if value == "FAIL: RSS schema":
+        return "ответ получен, но это не RSS/Atom"
     intraday_read = re.fullmatch(
         r"FAIL: intraday read ALGOPACK/(tradestats|orderstats|obstats) "
         r"(IncompleteRead|RemoteDisconnected|TimeoutError|URLError|HTTPError|ConnectionResetError)",

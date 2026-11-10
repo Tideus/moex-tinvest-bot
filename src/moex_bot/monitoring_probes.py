@@ -18,6 +18,7 @@ from zoneinfo import ZoneInfo
 
 from . import monitoring_long_once
 from .monitoring_labels import intraday_read_failure
+from .probe_errors import failure_kind, is_feed_root
 
 
 def read_calendar_health(path: Path, now: datetime) -> str:
@@ -68,7 +69,7 @@ def request_probe(url: str, *, token: str = "", payload: dict[str, object] | Non
             data = response.read(4 * 1024 * 1024)
         if xml:
             root = ElementTree.fromstring(data)
-            return "OK" if root.tag.lower() in {"rss", "feed"} else "FAIL: RSS schema"
+            return "OK" if is_feed_root(root.tag) else "FAIL: RSS schema"
         raw = json.loads(data)
         if not isinstance(raw, dict) or (block and block not in raw):
             return "FAIL: response schema"
@@ -77,9 +78,9 @@ def request_probe(url: str, *, token: str = "", payload: dict[str, object] | Non
         return "OK"
     except HTTPError as exc:
         return f"FAIL: HTTP {exc.code}"
-    except Exception:
+    except Exception as exc:
         # Never include URL/exception: Telegram URL contains a secret.
-        return f"FAIL: transport/schema ({monotonic() - started:.1f}s)"
+        return f"FAIL: probe {failure_kind(exc)} ({monotonic() - started:.1f}s)"
 
 
 def systemd(unit: str, property_name: str) -> str:

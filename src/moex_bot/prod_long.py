@@ -6,6 +6,9 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from decimal import Decimal
 from pathlib import Path
+from uuid import UUID
+
+from .protected_observer import ProtectedExternalInstrument
 
 _ENV_NAME = re.compile(r"^[A-Z][A-Z0-9_]*$")
 _SECID = re.compile(r"^[A-Z0-9]{1,16}$")
@@ -33,6 +36,7 @@ class ProdLongPolicy:
     managed_secids: frozenset[str]
     allowed_secids: frozenset[str]
     canary: ProdLongCanary
+    protected_external_instruments: tuple[ProtectedExternalInstrument, ...] = ()
 
 
 def load_prod_long_policy(path: Path) -> ProdLongPolicy:
@@ -51,6 +55,7 @@ def load_prod_long_policy(path: Path) -> ProdLongPolicy:
         protected_secids=_secids(raw.get("protected_secids"), "protected_secids"),
         managed_secids=_secids(raw.get("managed_secids"), "managed_secids"),
         allowed_secids=_secids(raw.get("allowed_secids"), "allowed_secids"),
+        protected_external_instruments=_external(raw.get("protected_external_instruments", [])),
         canary=ProdLongCanary(
             capital_limit_rub=_decimal(
                 canary_raw.get("capital_limit_rub"), "capital_limit_rub"
@@ -86,8 +91,9 @@ def prepare_prod_long_sleeve(
 ) -> dict[str, object]:
     if policy.execution_stage != "observer":
         raise ValueError("this build permits prod long observer stage only")
-    if broker_snapshot.get("source") != "t_invest_prod":
+    if broker_snapshot.get("source") not in {"t_invest_prod", "t_invest_prod_observer_raw"}:
         raise ValueError("prod long observer requires a production broker snapshot")
+    external = _external_snapshot(policy, broker_snapshot)
     account_id = str(broker_snapshot.get("account_id", "")).strip()
     if not account_id or account_id != expected_account_id.strip():
         raise ValueError("production snapshot account does not match configured IIS")
@@ -134,6 +140,11 @@ def prepare_prod_long_sleeve(
             "allowed_secids": sorted(policy.allowed_secids),
         },
     }
+    if external:
+        result["source"] = "t_invest_prod_observer_external"
+        result["protected_external"] = external
+        result["account_reported_equity"] = broker_snapshot.get("reported_equity")
+        result["execution_allowed"] = False
     return result
 
 
@@ -160,6 +171,14 @@ def write_prod_long_sleeve(
 
 
 def validate_prod_long_policy(policy: ProdLongPolicy) -> None:
+    external = policy.protected_external_instruments
+    if len({item.uid for item in external}) != len(external) or len(
+        {item.secid for item in external}
+    ) != len(external):
+        raise ValueError("protected external instruments must be unique")
+    for item in external:
+        if item.secid not in policy.protected_secids or item.instrument_type != "futures":
+            raise ValueError("external futures must be explicitly protected, never tradable")
     if policy.version != 1:
         raise ValueError("prod long policy version must be 1")
     if policy.execution_stage not in {"observer", "canary"}:
@@ -214,6 +233,48 @@ def _secids(value: object, label: str) -> frozenset[str]:
     if len(set(values)) != len(values) or any(not _SECID.fullmatch(item) for item in values):
         raise ValueError(f"{label} must contain unique uppercase SECIDs")
     return frozenset(values)
+
+
+def _external(value: object) -> tuple[ProtectedExternalInstrument, ...]:
+    if not isinstance(value, list):
+        raise ValueError("protected_external_instruments must be a list")
+    result = []
+    for item in value:
+        if not isinstance(item, dict) or set(item) != {"uid", "secid", "instrument_type"}:
+            raise ValueError("invalid protected external instrument descriptor")
+        uid = str(item["uid"])
+        if str(UUID(uid)) != uid or not _SECID.fullmatch(str(item["secid"])):
+            raise ValueError("invalid protected external identity")
+        result.append(ProtectedExternalInstrument(uid, str(item["secid"]),
+                                                  str(item["instrument_type"])))
+    return tuple(result)
+
+
+def _external_snapshot(policy: ProdLongPolicy, snapshot: Mapping[str, object]) -> dict[str, object]:
+    if snapshot.get("source") != "t_invest_prod_observer_raw":
+        if (snapshot.get("protected_external_positions")
+                or snapshot.get("protected_external_operations")):
+            raise ValueError("external holdings require observer-only snapshot")
+        return {}
+    if snapshot.get("execution_allowed") is not False:
+        raise ValueError("external holdings cannot be execution input")
+    allowed = {(item.uid, item.secid, item.instrument_type)
+               for item in policy.protected_external_instruments}
+    result: dict[str, object] = {}
+    for key in ("protected_external_positions", "protected_external_operations"):
+        rows = snapshot.get(key)
+        if not isinstance(rows, list):
+            raise ValueError("protected external snapshot records missing")
+        for row in rows:
+            if not isinstance(row, dict):
+                raise ValueError("unclassified external instrument in observer snapshot")
+            if ((
+                row.get("instrument_uid"), row.get("secid"), row.get("instrument_type")
+            ) not in allowed or row.get("protected") is not True
+                    or row.get("execution_allowed") is not False):
+                raise ValueError("unclassified external instrument in observer snapshot")
+        result[key] = rows
+    return result
 
 
 def _strings(value: object, label: str) -> tuple[str, ...]:
