@@ -1,0 +1,24 @@
+[Unit]
+Description=MOEX ISS news evidence only - no trading credentials or decisions
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=moexbot
+Group=moexbot
+WorkingDirectory=/opt/moex-tinvest-bot
+ExecStart=/opt/moex-tinvest-bot/.venv/bin/python -m moex_bot.news_observer
+StateDirectory=moex-news-observer
+StateDirectoryMode=0750
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
+TimeoutStartSec=150
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+InaccessiblePaths=/etc/moex-tinvest-bot /var/lib/moex-tinvest-bot
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+UMask=0077
+

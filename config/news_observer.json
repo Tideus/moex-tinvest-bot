@@ -1,0 +1,8 @@
+{
+  "mode": "observation_only",
+  "execution_allowed": false,
+  "lookback_hours": 48,
+  "max_pages": 40,
+  "timeout_seconds": 10,
+  "budget_seconds": 90
+}

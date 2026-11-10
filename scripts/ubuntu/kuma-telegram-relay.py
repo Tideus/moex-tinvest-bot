@@ -20,6 +20,12 @@ SUMMARY_NAMES = {"MOEX Trading", "MOEX Trading / All API sources (aggregate)",
 GEO_KEYS = ("api:geo_cbr_press", "api:geo_moex_risk")
 
 
+def transition_owned_elsewhere(title, status):
+    # Dedicated RSS panel shares the existing geo transition channel. No duplicate.
+    return status in (0, 1) and (title in SUMMARY_NAMES or any(
+        title.endswith("[" + key + "]") or title == "MOEX / " + key for key in GEO_KEYS))
+
+
 def geo_transitions(path, database, outbox, now):
     snapshot = json.loads(path.read_bytes())
     at = datetime.fromisoformat(snapshot["observed_at"])
@@ -74,7 +80,7 @@ class Handler(BaseHTTPRequestHandler):
             # Never forward raw msg/URL: these can include Push tokens or response data.
             title = str(monitor.get("name", "Проверка канала Kuma"))[:160]
             title = " ".join(title.split())
-            if title in SUMMARY_NAMES and status in (0, 1):
+            if transition_owned_elsewhere(title, status):
                 self.send_response(202)
                 self.end_headers()
                 self.wfile.write(b'{"ok":true}')

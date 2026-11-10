@@ -7,6 +7,8 @@ from pathlib import Path
 from uuid import uuid4
 
 TARGETS = {
+    "api:news_iss_observer": "MOEX ISS news — observation only",
+    "api:geo_moex_risk": "MOEX RSS risk parameters — independent source",
     "api:tinvest_sandbox": "T-Invest SANDBOX — account API",
     "api:tinvest_prod": "T-Invest PROD — IIS account API",
     "api:moex_iss": "MOEX ISS — public market data",

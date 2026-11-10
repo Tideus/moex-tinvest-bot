@@ -7,6 +7,8 @@ from typing import Any
 
 def load_settings(path: Path) -> dict[str, Any]:
     raw: dict[str, Any] = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(raw.get("news_observer_enabled", False), bool):
+        raise ValueError("news_observer_enabled must be boolean")
     for key in ("disk_warn_pct", "disk_critical_pct", "disk_min_free_gib", "failures_to_alert",
                 "timeout_seconds", "repeat_hours", "intraday_max_age_seconds",
                 "long_max_age_seconds", "backup_max_age_hours"):

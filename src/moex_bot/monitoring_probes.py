@@ -289,4 +289,11 @@ def collect(app: Path, state: Path, settings: dict[str, Any], now: datetime) -> 
             checks.update(collector(app, state, settings, now))
         except Exception as exc:
             checks[f"collector:{name}"] = f"FAIL: {type(exc).__name__}; inspect collector logs"
+    if settings.get("news_observer_enabled", False):
+        from .news_observer import evidence
+
+        checks.update(evidence(Path("/var/lib/moex-news-observer"), datetime.now(UTC)))
+        checks["timer:news-observer"] = (
+            "OK" if systemd("moex-news-observer.timer", "ActiveState") == "active"
+            else "FAIL: news observer timer inactive")
     return checks

@@ -1,4 +1,5 @@
 {
+  "news_observer_enabled": true,
   "calendar_required": true,
   "required_tinvest_environments": ["sandbox", "prod"],
   "disk_warn_pct": 15,

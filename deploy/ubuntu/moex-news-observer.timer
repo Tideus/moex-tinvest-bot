@@ -1,0 +1,11 @@
+[Unit]
+Description=Observe MOEX site news every five minutes without affecting trading
+
+[Timer]
+OnCalendar=*-*-* *:00/5:45 Europe/Moscow
+Persistent=true
+AccuracySec=1s
+Unit=moex-news-observer.service
+
+[Install]
+WantedBy=timers.target

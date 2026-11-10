@@ -14,6 +14,7 @@ from .geo_feed import load_sources
 from .intraday_config import load_intraday_config
 from .live_operator import load_live_settings
 from .monitoring import load_settings
+from .news_observer import load_settings as load_news_observer_settings
 from .notification_policy import load_notification_policy
 from .ownership import load_ownership_disclosures
 from .prod_experiment import load_experiment_settings
@@ -29,6 +30,8 @@ def validate_project_configs(root: Path) -> tuple[str, ...]:
     checks: list[str] = []
     load_settings(root / "config/monitoring.json")
     checks.append("config/monitoring.json")
+    load_news_observer_settings(root / "config/news_observer.json")
+    checks.append("config/news_observer.json")
     load_calendar_config(root / "config" / "event_calendar.json")
     checks.append("config/event_calendar.json")
     replay = load_config(root / "config" / "replay.json")

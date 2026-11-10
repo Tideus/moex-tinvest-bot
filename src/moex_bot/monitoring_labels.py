@@ -8,6 +8,8 @@ from pathlib import Path
 
 # Keys remain stable for existing incident databases; labels are presentation only.
 API_LABELS = {
+    "api:news_iss_observer": ("MOEX ISS · новости · ТОЛЬКО НАБЛЮДЕНИЕ", "iss.moex.com"),
+    "api:geo_moex_risk": ("MOEX RSS · риск-параметры · текущий геоисточник", "www.moex.com"),
     "api:tinvest_sandbox": ("T-Invest · SANDBOX", "sandbox-invest-public-api.tbank.ru"),
     "api:tinvest_prod": ("T-Invest · PROD", "invest-public-api.tbank.ru"),
     "api:moex_iss": ("MOEX ISS · публичные рыночные данные", "iss.moex.com"),
@@ -35,6 +37,8 @@ def check_description(key: str) -> str:
 
 
 def check_action(key: str) -> str:
+    if key == "api:news_iss_observer":
+        return "Проверить moex-news-observer; ISS не заменяет RSS и не влияет на сделки."
     if key.startswith("api:tinvest_"):
         environment = "SANDBOX" if key.endswith("sandbox") else "PROD"
         return f"Проверить сеть, сертификаты и токен именно {environment}; не повторять заявки."
@@ -72,6 +76,7 @@ def monitor_description(name: str) -> str:
 
 
 UNITS = {"shadow", "intraday", "health", "daily-report", "maintenance", "prod-long-observer",
+         "news-observer",
          "calendar", "long-once-sandbox", "long-once-prod", "long-sandbox-verifier",
          "legacy-long-excluded"}
 INACTIVE = "FAIL: active=inactive, no schedule"
@@ -79,6 +84,14 @@ INACTIVE = "FAIL: active=inactive, no schedule"
 
 def safe_reason(value: str) -> str:
     """Only known templates; never echo arbitrary collector errors to Kuma or Telegram."""
+    if value == "FAIL: news observer stale or missing":
+        return "ISS-наблюдение: нет свежего отчёта; состояние источника неизвестно"
+    if value == "FAIL: news observer timer inactive":
+        return "таймер наблюдения новостей ISS выключен"
+    news = re.fullmatch(
+        r"FAIL: news observer (timeout|dns|tls|connection|schema|http|unknown)", value)
+    if news:
+        return "ISS-наблюдение новостей: " + news[1] + "; торговые решения не меняются"
     probe = re.fullmatch(
         r"FAIL: probe (timeout|dns|tls|schema|connection|unknown) \(([0-9]+\.[0-9])s\)", value,
     )
@@ -156,7 +169,8 @@ def compact_checks(checks: dict[str, str]) -> str:
          "data:intraday", "data:prod-long-observer", "data:prod-long-protection",
          "quality:long", "quality:intraday",
          "quality:prod-long-observer", "backup:age", "telegram:outbox", "memory:available",
-         "intraday:overnight_exposure", "monitor:collector", "collector:resources",
+         "data:news-observer", "intraday:overnight_exposure", "monitor:collector",
+         "collector:resources",
          "collector:services", "collector:integrations", "collector:artifacts"}
     for mount in ("/", "/var/lib/moex-tinvest-bot", "/var/log/moex-tinvest-bot"):
         known.update(("disk:" + mount, "inodes:" + mount))

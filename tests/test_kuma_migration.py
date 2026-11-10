@@ -40,15 +40,15 @@ def database(tmp_path, request):
 def test_offline_migration_preserves_and_is_idempotent(migration, database, tmp_path, monkeypatch):
     monkeypatch.setattr(migration.subprocess, "check_output", lambda *a, **k: "false\n")
     before = database.read_bytes()
-    assert len(migration.migrate(database, tmp_path / "dry.db")) == 16
+    assert len(migration.migrate(database, tmp_path / "dry.db")) == 18
     assert database.read_bytes() == before
     assert not (tmp_path / "dry.db").exists()
     actions = migration.migrate(database, tmp_path / "backup.db", apply=True)
-    assert len(actions) == 16
+    assert len(actions) == 18
     with sqlite3.connect(database) as db:
-        assert db.execute("SELECT count(*) FROM monitor").fetchone()[0] == 16
+        assert db.execute("SELECT count(*) FROM monitor").fetchone()[0] == 18
         assert db.execute("SELECT push_token FROM monitor WHERE id=1").fetchone()[0] == "PRIVATE"
-        assert db.execute("SELECT count(*) FROM monitor_notification").fetchone()[0] == 10
+        assert db.execute("SELECT count(*) FROM monitor_notification").fetchone()[0] == 12
         assert db.execute("SELECT parent FROM monitor WHERE id=3").fetchone()[0] is not None
         assert db.execute("SELECT name FROM monitor WHERE id=3").fetchone()[0] == (
             "Infrastructure / Syncthing GUI"
