@@ -125,15 +125,20 @@ for stream in catalog["streams"]:
     if full["trades"]:
         sample = full["trades"][-1]
         at = sample["closed_at"]
+        anchor = {"kind": "closed", "at": at,
+                  **{k: sample[k] for k in ("opened_at", "quantity", "entry", "exit")}}
     elif full["operations"]:
         sample = full["operations"][-1]
         at = sample["at"]
+        anchor = {"kind": "operation", "at": at,
+                  **{k: sample[k] for k in ("quantity", "side")}}
     else:
         continue
     from datetime import datetime
     from zoneinfo import ZoneInfo
     day = datetime.fromisoformat(at).astimezone(ZoneInfo("Europe/Moscow")).date().isoformat()
-    detail_params = params | {"period": day, "symbol": sample["symbol"]}
+    detail_params = params | {"period": day, "symbol": sample["symbol"],
+                              "anchor": json.dumps(anchor)}
     started = time.monotonic()
     status, raw, _ = get("api/detail?" + urlencode(detail_params), True)
     assert status == 200, status
