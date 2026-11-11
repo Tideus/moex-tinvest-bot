@@ -1,8 +1,10 @@
+import base64
 import hashlib
 import json
 import os
 import sqlite3
 from copy import deepcopy
+from datetime import UTC, datetime
 from urllib.parse import urlencode
 
 import pytest
@@ -233,3 +235,70 @@ def test_rejected_projection_does_not_replace_good_data(projection):
     with pytest.raises(ValueError):
         publish(report, path)
     assert path.read_bytes() == old
+
+
+def test_operations_filter_total_symbols_and_cursor_scope(projection):
+    path, report, params = projection
+    stream = report["streams"][0]
+    stream["operations"].append({**stream["operations"][-1], "symbol": "OTHER"})
+    params["generation"] = publish(report, path)
+    bundle = query(path, "summary", params)
+    assert bundle["operation_symbols"] == ["OTHER", "SBER"]
+    assert bundle["operation_quality"]["legacy"] == 0
+    page = query(path, "operations", params | {"symbol": "SBER", "limit": "1"})
+    assert page["total"] == 2 and page["period_total"] == 3
+    assert page["items"][0]["symbol"] == "SBER"
+    with pytest.raises(QueryError, match="cursor"):
+        query(path, "operations", params | {"symbol": "OTHER", "cursor": page["next_cursor"]})
+    assert query(path, "operations", params | {"symbol": "' OR 1=1 --"})["total"] == 0
+
+
+@pytest.mark.parametrize("seq", [2**63, 10**40, -1, True])
+def test_wsgi_oversized_or_invalid_cursor_returns_400(projection, monkeypatch, seq):
+    path, _, params = projection
+    page = query(path, "signals", params | {"limit": "1"})
+    raw = json.loads(base64.urlsafe_b64decode(page["next_cursor"]))
+    raw["seq"] = seq
+    cursor = base64.urlsafe_b64encode(json.dumps(raw).encode()).decode()
+    monkeypatch.setenv("JOURNAL_READMODEL", str(path))
+    statuses = []
+    application({"REQUEST_METHOD": "GET", "PATH_INFO": "/journal/api/signals",
+                 "QUERY_STRING": urlencode(params | {"cursor": cursor})},
+                lambda status, _: statuses.append(status))
+    assert statuses == ["400 Bad Request"]
+
+
+def test_health_separates_fresh_build_from_stale_missing_and_fresh_sources(projection, monkeypatch):
+    path, report, _ = projection
+    health = query(path, "health", {})
+    assert health["build_status"] == "ok" and health["source_status"] == "stale"
+    assert health["status"] == "source_stale"
+    monkeypatch.setenv("JOURNAL_READMODEL", str(path))
+    statuses = []
+    application({"REQUEST_METHOD": "GET", "PATH_INFO": "/journal/api/health"},
+                lambda status, _: statuses.append(status))
+    assert statuses == ["503 Service Unavailable"]
+    for stream in report["streams"]:
+        stream["observed_at"] = datetime.now(UTC).isoformat()
+    publish(report, path)
+    assert query(path, "health", {})["status"] == "ok"
+    report["streams"][0]["observed_at"] = None
+    publish(report, path)
+    assert query(path, "health", {})["source_status"] == "missing"
+    report["streams"] = []
+    publish(report, path)
+    assert query(path, "health", {})["status"] == "source_missing"
+
+
+def test_legacy_normalized_report_still_has_exact_projection_parity(projection):
+    path, report, _ = projection
+    for stream in report["streams"]:
+        stream.pop("trade_history_coverage")
+        stream.pop("order_diagnostics")
+        for stats in stream["periods"].values():
+            stats.pop("trade_history_coverage")
+        for row in stream["operations"]:
+            for field in ("price", "price_source", "commission_source"):
+                row.pop(field)
+    publish(report, path)
+    assert compare(report, path)["streams"] == 2

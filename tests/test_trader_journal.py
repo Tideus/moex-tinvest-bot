@@ -44,6 +44,9 @@ def operation(identity="one", at=T1, side="BUY", qty="10", gross="3000", fee="3"
         "quantity": qty,
         "gross": gross,
         "commission": fee,
+        # This synthetic broker fixture explicitly supplies the fee, including zero.
+        # Legacy receipts without provenance are covered by separate regression cases.
+        "journal_commission_source": "broker_reported" if fee is not None else "broker_missing",
         "external_cashflow": external,
     }
 

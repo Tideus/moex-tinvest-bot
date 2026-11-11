@@ -46,6 +46,7 @@ for path in ("", "journal.js", "journal-model.js", "journal-loader.js", "journal
     )
     assert headers.get_content_type() == expected_type, path
     assert headers["X-Content-Type-Options"] == "nosniff"
+    assert headers.get("Connection") == "close"
     print("PASS: authenticated HTTPS:", path or "index")
     if path == "data.json":
         report = json.loads(data)
@@ -106,7 +107,7 @@ for stream in catalog["streams"]:
         "generation": catalog["generation"],
     }
     sizes = {}
-    for endpoint in ("summary", "trades", "signals"):
+    for endpoint in ("summary", "trades", "signals", "operations"):
         status, body, _ = get("api/" + endpoint + "?" + urlencode(params), True)
         assert status == 200
         data = json.loads(body)
@@ -114,6 +115,8 @@ for stream in catalog["streams"]:
         sizes[endpoint] = len(body)
         if endpoint != "summary":
             assert len(data["items"]) <= 50
+        else:
+            assert isinstance(data["operation_symbols"], list)
     assert get("api/trades?" + urlencode(params | {"limit": "101"}), True)[0] == 400
     assert get("api/trades?" + urlencode(params | {"generation": "old"}), True)[0] == 409
     print("PASS: API summary/pages/limits/snapshot binding:", stream["strategy"], sizes)

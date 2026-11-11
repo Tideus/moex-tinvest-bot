@@ -42,6 +42,18 @@ test('presentation preserves unknown reason, CSV quotes and formula guards', () 
   for(const x of [null,undefined,'NaN','Infinity','',false,'   ',[],{}])assert.equal(M.numeric(x),null);
   assert.equal(M.numeric('0'),0);
 });
+test('numeric CSV cells retain losses and reject non-numeric formulas',()=>{
+  assert.equal(M.csvNumber('-2'),'"-2"');assert.equal(M.csvNumber('-0.002'),'"-0.002"');
+  assert.equal(M.csvNumber('12345678901234567890.01'),'"12345678901234567890.01"');
+  assert.equal(M.csvNumber(null),'""');assert.equal(M.csvNumber('=1+1'),'""');assert.equal(M.csvNumber('-2+cmd'),'""');
+  assert.match(M.csvCell('-2+cmd'),/^"'/);
+});
+test('operation prices distinguish explicit unknown from calculated legacy average',()=>{
+  assert.equal(M.operationPrice({price:'12.3456'}),12.3456);
+  assert.equal(M.operationPrice({price:null,gross:'-100',quantity:'2'}),null);
+  assert.equal(M.operationPrice({gross:'-100',quantity:'2'}),50);
+  assert.equal(M.operationPrice({gross:'100',quantity:'0'}),null);
+});
 
 test('large history constructs one date formatter, not one per signal', () => {
   const vm=require('node:vm'), fs=require('node:fs');

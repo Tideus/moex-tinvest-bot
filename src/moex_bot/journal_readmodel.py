@@ -23,6 +23,7 @@ from .trader_journal import MSK, SCHEMA, digest, encoded, number, timestamp
 API_SCHEMA = "trader-journal-api-v1"
 KINDS = ("trades", "signals", "operations", "orders", "equity")
 STREAM_FIELDS = ("id", "strategy", "environment", "dates", "warnings", "positions", "observed_at")
+OPTIONAL_STREAM_FIELDS = ("trade_history_coverage", "order_diagnostics")
 
 
 class QueryError(ValueError):
@@ -66,7 +67,8 @@ def publish(report: dict[str, Any], path: Path) -> str:
                 key = stream["id"]
                 db.execute(
                     "INSERT INTO streams VALUES (?,?)",
-                    (key, encoded({k: stream[k] for k in STREAM_FIELDS})),
+                    (key, encoded({k: stream[k] for k in (*STREAM_FIELDS, *OPTIONAL_STREAM_FIELDS)
+                                   if k in stream})),
                 )
                 db.executemany(
                     "INSERT INTO summaries VALUES (?,?,?)",
@@ -131,7 +133,8 @@ def _cursor(value: str, scope: str) -> int:
         return -1
     try:
         raw = json.loads(base64.b64decode(value, altchars=b"-_", validate=True))
-        if raw["scope"] != scope or type(raw["seq"]) is not int or raw["seq"] < 0:
+        if (raw["scope"] != scope or type(raw["seq"]) is not int
+                or not 0 <= raw["seq"] <= 2**63 - 1):
             raise ValueError
         return int(raw["seq"])
     except (ValueError, KeyError, TypeError):
@@ -144,6 +147,9 @@ def _page(db: sqlite3.Connection, kind: str, params: dict[str, str]) -> dict[str
     base = f"stream=? AND kind=? AND {column}=?"
     values: list[Any] = [stream, kind, period]
     filters = ""
+    if kind == "operations" and params.get("symbol"):
+        filters += " AND symbol=?"
+        values.append(params["symbol"])
     if kind == "trades":
         for key in ("symbol", "direction"):
             if params.get(key):
@@ -190,6 +196,8 @@ def query(path: Path, route: str, params: dict[str, str]) -> dict[str, Any]:
         allowed |= {"cursor", "limit"}
         if route == "trades":
             allowed |= {"symbol", "direction", "outcome", "cost"}
+        elif route == "operations":
+            allowed.add("symbol")
     elif route not in {"catalog", "summary", "health"}:
         raise QueryError("not found", 404)
     if set(params) - allowed or any(len(v) > 512 for v in params.values()):
@@ -211,22 +219,39 @@ def query(path: Path, route: str, params: dict[str, str]) -> dict[str, Any]:
         metadata = _one(db, "SELECT payload FROM metadata WHERE key='report'")
         if not metadata or metadata.get("schema") != API_SCHEMA:
             raise QueryError("projection unavailable", 503)
+        streams = [
+            json.loads(r[0]) for r in db.execute("SELECT payload FROM streams ORDER BY stream")
+        ]
         if route == "health":
-            age = (datetime.now(UTC) - timestamp(metadata["generated_at"])).total_seconds()
+            now = datetime.now(UTC)
+            age = (now - timestamp(metadata["generated_at"])).total_seconds()
+            build_status = "stale" if age > 1200 or age < -60 else "ok"
+            sources = []
+            for stream in streams:
+                observed = stream.get("observed_at")
+                source_age = (now - timestamp(observed)).total_seconds() if observed else None
+                sources.append({
+                    "id": stream["id"], "observed_at": observed,
+                    "age_seconds": round(source_age) if source_age is not None else None,
+                    "status": "missing" if source_age is None else
+                    "stale" if source_age > 1200 or source_age < -60 else "ok",
+                })
+            source_status = (
+                "missing" if not sources or any(s["status"] == "missing" for s in sources)
+                else "stale" if any(s["status"] == "stale" for s in sources) else "ok"
+            )
             return {
                 "schema": API_SCHEMA,
                 "generation": metadata["generation"],
                 "generated_at": metadata["generated_at"],
-                "status": "stale"
-                if age > 1200 or age < -60
-                else "import_error"
-                if metadata.get("import", {}).get("errors")
-                else "ok",
+                "status": "stale" if build_status != "ok" else "import_error"
+                if metadata.get("import", {}).get("errors") else
+                "source_" + source_status if source_status != "ok" else "ok",
                 "age_seconds": round(age),
+                "build_status": build_status,
+                "source_status": source_status,
+                "sources": sources,
             }
-        streams = [
-            json.loads(r[0]) for r in db.execute("SELECT payload FROM streams ORDER BY stream")
-        ]
         if route == "catalog":
             return {
                 **metadata,
@@ -277,11 +302,14 @@ def query(path: Path, route: str, params: dict[str, str]) -> dict[str, Any]:
             **metadata,
             "stream": {**stream, "periods": periods},
             "overview": overview,
+            "operation_symbols": sorted({o["symbol"] for o in operations if o.get("symbol")}),
             "operation_quality": {
                 "missing": sum(o["commission"] is None for o in operations),
                 "zero": sum(
                     o["commission"] is not None and number(o["commission"]) == 0 for o in operations
                 ),
+                "legacy": sum(o.get("commission_source", "legacy_unverified") ==
+                              "legacy_unverified" for o in operations),
             },
         }
 
@@ -299,6 +327,9 @@ def compare(report: dict[str, Any], path: Path) -> dict[str, int]:
             assert bundle["stream"]["periods"][period] == expected
             for field in STREAM_FIELDS:
                 assert bundle["stream"][field] == stream[field]
+            for field in OPTIONAL_STREAM_FIELDS:
+                if field in stream:
+                    assert bundle["stream"][field] == stream[field]
             counts["periods"] += 1
             # A daily and monthly projection must both match; do not sum percentages.
             for kind in KINDS:

@@ -2,6 +2,7 @@
 
 import base64
 import gzip
+import http.client
 import json
 import os
 import socket
@@ -53,7 +54,7 @@ def main():
                     "periods": {"2026-11": {}},
                     "positions": {},
                     "warnings": [],
-                    "observed_at": None,
+                    "observed_at": datetime.now(UTC).isoformat(),
                     "trades": [],
                     "operations": [],
                     "orders": [],
@@ -151,6 +152,21 @@ def main():
                     break
                 time.sleep(0.05)
             assert get("api/health")[0] == 200
+            # A client asking for reuse still receives an explicit end of the
+            # connection; every next request is independent of a stalled peer.
+            connection = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+            try:
+                for _ in range(8):
+                    connection.request("GET", "/journal/api/catalog", headers={
+                        "Authorization": auth, "Connection": "keep-alive",
+                    })
+                    response = connection.getresponse()
+                    assert response.status == 200
+                    assert response.getheader("Connection") == "close"
+                    assert json.loads(response.read())["generation"] == generation
+                    assert connection.sock is None
+            finally:
+                connection.close()
             assert get("api/health", request_id='invalid"private-header')[0] == 200
             assert get("api/catalog", authenticated=False)[0] == 401
             assert get("api/catalog", method="POST")[0] == 403
@@ -188,6 +204,7 @@ def main():
                 assert len(packed) < len(plain)
                 assert "accept-encoding" in headers.get("Vary", "").lower()
                 assert "no-store" in headers["Cache-Control"]
+                assert headers.get("Connection") == "close"
                 assert headers["X-Content-Type-Options"] == "nosniff"
                 print("PASS: authenticated complete gzip", name, len(packed), "/", len(plain))
             assert get("data.json")[1] == payload
@@ -205,12 +222,14 @@ def main():
         assert any(e["request_id"] == "test-001" and e["upstream_status"] == "200" for e in events)
         assert any(e["request_id"] == "invalid" for e in events)
         assert all("request_s" in e and "upstream_s" in e for e in events)
+        assert all(e["connection_requests"] == 1 for e in events)
         assert all("?" not in e["path"] for e in events)
         assert all(
             value not in log
             for value in ["private-header", "test:demo", auth, "127.0.0.1", "stream="]
         )
         print("PASS: correlated API timing log excludes credentials, account query and IP")
+        print("PASS: journal-only client connection close; repeated complete responses")
 
 
 if __name__ == "__main__":

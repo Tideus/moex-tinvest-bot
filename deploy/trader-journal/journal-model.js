@@ -4,7 +4,7 @@
   // Reuse ICU state: rebuilding this for each signal can consume hundreds of MB.
   const dayFormatter = new Intl.DateTimeFormat('sv-SE',{timeZone:'Europe/Moscow',year:'numeric',month:'2-digit',day:'2-digit'});
   const statuses = {planned:'Включён в план',filter_passed:'Фильтр пройден',filter_rejected:'Не прошёл фильтр',entry_rejected:'Вход отклонён',not_evaluated:'Вход не оценивался',filled:'Исполнено',accepted:'Принято брокером',cancelled:'Отменено',rejected:'Отклонено брокером',partial:'Частично исполнено'};
-  const reasons = {price_move:'Недостаточный импульс цены',trade_imbalance:'Нет подтверждения потоком сделок',order_flow:'Нет подтверждения потоком заявок',book_imbalance:'Не подходит дисбаланс стакана',cost_edge:'Ожидаемый эффект ниже порога после расходов',spread_bbo:'Слишком широкий спред',daily_entry_limit:'Достигнут дневной лимит входов',position_limit:'Достигнут лимит позиций',force_flat:'Окно обязательного закрытия',cash:'Недостаточно свободных средств',existing_position:'Позиция уже открыта',short_disabled:'Шорт запрещён настройками',outside_entry_window:'Вне времени новых входов',duplicate_signal:'Повторный сигнал',missing_history:'Не хватает истории',stale_history:'История устарела',ttl_expired:'Истёк срок лимитной заявки — штатная отмена'};
+  const reasons = {price_move:'Недостаточный импульс цены',trade_imbalance:'Нет подтверждения потоком сделок',order_flow:'Нет подтверждения потоком заявок',book_imbalance:'Не подходит дисбаланс стакана',cost_edge:'Ожидаемый эффект ниже порога после расходов',spread_bbo:'Слишком широкий спред',daily_entry_limit:'Достигнут дневной лимит входов',position_limit:'Достигнут лимит позиций',force_flat:'Окно обязательного закрытия',cash:'Недостаточно свободных средств',existing_position:'Позиция уже открыта',short_disabled:'Шорт запрещён настройками',outside_entry_window:'Вне времени новых входов',duplicate_signal:'Повторный сигнал',missing_history:'Не хватает истории',stale_history:'История устарела',ttl_expired:'Истёк срок лимитной заявки — штатная отмена',operation_coverage_missing:'Нет подтверждённого полного диапазона брокерских операций',baseline_missing:'Нет подтверждённой начальной базы',operation_coverage_gap:'Есть пробелы в покрытии истории операций',broker_operation_range:'Диапазон операций подтверждён брокерской выгрузкой'};
   function numeric(value) {
     if (!['string','number'].includes(typeof value) || String(value).trim() === '') return null;
     const result = Number(value); return Number.isFinite(result) ? result : null;
@@ -42,6 +42,16 @@
     return {min,max,start:valid[0].at,end:valid.at(-1).at,points:valid.map(p=>[10+580*(Date.parse(p.at)-start)/(end-start),max===min?85:150-130*(Number(p.equity)-min)/(max-min)])};
   }
   function csvCell(value) { return '"'+String(value??'').replace(/^[\s]*[=+@-]/,"'$&").replaceAll('"','""')+'"'; }
-  const api={numeric,localDay,inPeriod,tradePercent,selectTrades,changePeriod,movePeriod,equityCoordinates,csvCell,status:value=>statuses[value]||value||'Неизвестно',reason:value=>reasons[value]||'Причина: '+value};
+  // Numeric columns are validated separately: a loss must remain a number in CSV.
+  function csvNumber(value) {
+    const text=String(value??'').trim().replace(/^\+/,'');
+    return numeric(value)!==null && /^-?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?$/.test(text) ? '"'+text+'"' : '""';
+  }
+  function operationPrice(operation) {
+    if(operation.price!==undefined)return numeric(operation.price);
+    const gross=numeric(operation.gross),quantity=numeric(operation.quantity);
+    return gross!==null&&quantity>0?Math.abs(gross)/quantity:null;
+  }
+  const api={numeric,localDay,inPeriod,tradePercent,selectTrades,changePeriod,movePeriod,equityCoordinates,csvCell,csvNumber,operationPrice,status:value=>statuses[value]||value||'Неизвестно',reason:value=>reasons[value]||'Причина: '+value};
   if(typeof module!=='undefined'&&module.exports)module.exports=api; else root.JournalModel=api;
 })(globalThis);

@@ -7,7 +7,7 @@ import json
 import sqlite3
 from collections import defaultdict, deque
 from contextlib import closing
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any
@@ -95,6 +95,21 @@ class Journal:
             return [json.loads(row[0]) for row in rows]
 
 
+def analytical_commission(operation: dict[str, Any]) -> Decimal | None:
+    """Legacy zero may be an adapter default, not evidence of a free execution.
+
+    Keep the source operation untouched. Positive legacy costs remain recorded
+    amounts; only an explicitly reported broker zero establishes a known zero.
+    """
+    source = operation.get("commission_source", "legacy_unverified")
+    if operation.get("commission") is None or source in {"broker_missing", "broker_invalid"}:
+        return None
+    fee = number(operation["commission"])
+    if fee == 0 and source != "broker_reported":
+        return None
+    return fee
+
+
 def match_trades(
     operations: list[dict[str, Any]],
     baseline: dict[str, Any] | None,
@@ -130,7 +145,8 @@ def match_trades(
             warnings.append(f"{symbol}: неполные количество/стоимость исполнения")
             continue
         price = gross / qty
-        fee = None if op["commission"] is None else number(op["commission"]) / qty
+        commission = analytical_commission(op)
+        fee = None if commission is None else commission / qty
         sign = 1 if op["side"] == "BUY" else -1
         remaining = qty
         queue = queues[symbol]
@@ -192,8 +208,9 @@ def period_result(
     ops = [o for o in operations if a < timestamp(o["at"]) <= b]
     flows = sum((number(o["external"]) for o in ops), ZERO)
     net = number(last["equity"]) - number(first["equity"]) - flows
-    fees_complete = all(o["commission"] is not None for o in ops)
-    fees = sum((number(o["commission"]) for o in ops if o["commission"] is not None), ZERO)
+    observed_fees = [analytical_commission(o) for o in ops]
+    fees_complete = all(fee is not None for fee in observed_fees)
+    fees = sum((fee for fee in observed_fees if fee is not None), ZERO)
     duration = Decimal(str((b - a).total_seconds()))
     if duration <= 0:
         raise ValueError("non-positive valuation window")
@@ -253,6 +270,77 @@ def closed_summary(trades: list[dict[str, Any]], *, complete: bool) -> dict[str,
     return result
 
 
+def trade_history_coverage(
+    snapshots: list[dict[str, Any]],
+    operations: list[dict[str, Any]],
+    warnings: list[str],
+    period: str | None = None,
+) -> dict[str, Any]:
+    """Coverage of reconstruction, not equity valuation or a claim about a whole month.
+
+    A single baseline suffices: no second equity valuation is required. A verified
+    interval must cover the FIFO path from that baseline to the observed endpoint.
+    Missing coverage does not invalidate the arithmetic of known closures.
+    """
+    start = timestamp(snapshots[0]["at"]) if snapshots else None
+    observed = [timestamp(p["at"]) for p in snapshots] + [
+        timestamp(o["at"]) for o in operations
+    ]
+    end = max(observed) if observed else None
+    if period and end is not None:
+        local = datetime.fromisoformat(period if len(period) == 10 else period + "-01")
+        if len(period) == 10:
+            boundary = local + timedelta(days=1)
+        else:
+            boundary = local.replace(year=local.year + (local.month == 12),
+                                     month=local.month % 12 + 1)
+        end = min(end, boundary.replace(tzinfo=MSK).astimezone(UTC))
+    result: dict[str, Any] = {
+        "status": "unverified",
+        "from": start.isoformat() if start else None,
+        "through": end.isoformat() if end else None,
+        "reason": "operation_coverage_missing",
+    }
+    if start is None or end is None or end < start:
+        result["reason"] = "baseline_missing"
+        return result
+    if warnings:
+        return {**result, "status": "incomplete", "reason": "reconstruction_warning"}
+    intervals = sorted(
+        (timestamp(p["coverage_from"]), timestamp(p["coverage_to"]))
+        for p in snapshots if p.get("coverage_from") and p.get("coverage_to")
+    )
+    reached = start
+    anchored = False
+    for left, right in intervals:
+        if right < left:
+            continue
+        if left <= reached <= right:
+            anchored = True
+            reached = max(reached, right)
+    if anchored and reached >= end:
+        return {**result, "status": "verified", "reason": "broker_operation_range"}
+    if intervals:
+        return {**result, "status": "incomplete", "reason": "operation_coverage_gap"}
+    return result
+
+
+def operation_display(operation: dict[str, Any]) -> dict[str, Any]:
+    """Add display provenance without rewriting legacy normalized source events."""
+    row = {k: operation[k] for k in (
+        "at", "symbol", "side", "quantity", "gross", "commission", "granularity"
+    )}
+    price = operation.get("price")
+    source = "broker" if price is not None else "unknown"
+    if price is None and number(operation["quantity"]) > 0 and number(operation["gross"]) > 0:
+        price = str(number(operation["gross"]) / number(operation["quantity"]))
+        source = "calculated_vwap"
+    return {
+        **row, "price": price, "price_source": source,
+        "commission_source": operation.get("commission_source", "legacy_unverified"),
+    }
+
+
 def build_report(events: list[dict[str, Any]]) -> dict[str, Any]:
     streams: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for event in events:
@@ -301,6 +389,9 @@ def build_report(events: list[dict[str, Any]]) -> dict[str, Any]:
                 "closures": len(selected),
                 "wins": sum(number(t["gross"]) > 0 for t in selected),
                 "account": period_result(snapshots, operations, period),
+                "trade_history_coverage": trade_history_coverage(
+                    snapshots, operations, warnings, period
+                ),
                 "summary": closed_summary(selected, complete=not warnings),
                 "by_symbol": [
                     {
@@ -336,19 +427,14 @@ def build_report(events: list[dict[str, Any]]) -> dict[str, Any]:
                 "periods": stats,
                 "trades": trades,
                 "warnings": warnings,
+                "trade_history_coverage": trade_history_coverage(snapshots, operations, warnings),
+                "order_diagnostics": {
+                    "unknown_time": sum(
+                        r["kind"] == "order" and r.get("time_status") != "known" for r in rows
+                    ),
+                },
                 "operations": [
-                    {
-                        k: o[k]
-                        for k in (
-                            "at",
-                            "symbol",
-                            "side",
-                            "quantity",
-                            "gross",
-                            "commission",
-                            "granularity",
-                        )
-                    }
+                    operation_display(o)
                     for o in operations
                     if o["side"] in {"BUY", "SELL"}
                 ],
@@ -358,9 +444,9 @@ def build_report(events: list[dict[str, Any]]) -> dict[str, Any]:
                     if r["kind"] == "signal"
                 ],
                 "orders": [
-                    {k: r.get(k) for k in ("at", "symbol", "status", "filled_lots")}
+                    {k: r.get(k) for k in ("at", "symbol", "status", "filled_lots", "time_status")}
                     for r in rows
-                    if r["kind"] == "order"
+                    if r["kind"] == "order" and r.get("time_status") == "known"
                 ],
                 "equity": [{"at": p["at"], "equity": p["equity"]} for p in snapshots],
                 "positions": positions,

@@ -8,6 +8,7 @@ import json
 import os
 from dataclasses import asdict
 from datetime import UTC, datetime
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
@@ -98,6 +99,24 @@ def portfolio_events(
                 "granularity": "broker_operation_vwap",
             }
         )
+        # Only new journal receipts carry these fields. Keeping old event bytes
+        # unchanged preserves append-only revision identities during re-import.
+        if "journal_commission_source" in op:
+            source = op["journal_commission_source"]
+            if source not in {"broker_reported", "broker_missing", "broker_invalid"}:
+                raise ValueError("invalid commission provenance")
+            result[-1]["commission_source"] = source
+        raw_checksum = op.get("journal_raw_operation_sha256")
+        if raw_checksum is not None:
+            if (not isinstance(raw_checksum, str) or len(raw_checksum) != 64
+                    or any(char not in "0123456789abcdef" for char in raw_checksum)):
+                raise ValueError("invalid raw operation checksum")
+            result[-1]["raw_operation_sha256"] = raw_checksum
+        if op.get("journal_price") is not None:
+            price = number(op["journal_price"])
+            if price <= 0:
+                raise ValueError("invalid broker operation price")
+            result[-1]["price"] = str(price)
     return result
 
 
@@ -140,7 +159,7 @@ def plan_events(raw: dict[str, Any], common: dict[str, Any]) -> list[dict[str, A
 def import_artifacts(config: dict[str, Any], journal: Journal) -> dict[str, Any]:
     root = Path(config["artifact_root"]).resolve()
     instruments = {r["secid"]: r for r in json.loads(Path(config["universe"]).read_bytes())}
-    count, errors = 0, []
+    count, errors, omitted_orders = 0, [], 0
     for profile in config["profiles"]:
         paths: set[Path] = set()
         for pattern in profile["portfolio_globs"]:
@@ -162,13 +181,30 @@ def import_artifacts(config: dict[str, Any], journal: Journal) -> dict[str, Any]
                     events.extend(plan_events(json.loads(plan_path.read_bytes()), events[0]))
                 execution_path = path.with_name(path.name.replace("-portfolio-", "-execution-"))
                 if execution_path != path and execution_path.exists():
-                    execution = json.loads(execution_path.read_bytes())
+                    execution_bytes = execution_path.read_bytes()
+                    execution = json.loads(execution_bytes)
                     for i, row in enumerate(execution.get("submitted", [])):
+                        occurred = row.get("occurred_at") or row.get("submitted_at")
+                        if not occurred:
+                            omitted_orders += 1
+                            continue
+                        at = timestamp(occurred).isoformat()
+                        receipts = (row.get("known_at"), execution.get("completed_at"),
+                                    execution.get("observed_at"))
+                        known = next((timestamp(value).isoformat() for value in receipts
+                                      if value and timestamp(value) >= timestamp(at)), None)
+                        if known is None:
+                            omitted_orders += 1
+                            continue
                         events.append(
                             {
-                                **events[0],
+                                **{k: events[0][k] for k in ("stream", "strategy", "environment")},
                                 "kind": "order",
                                 "identity": execution["run_id"] + ":" + str(i),
+                                "at": at,
+                                "known_at": known,
+                                "time_status": "known",
+                                "source_sha256": hashlib.sha256(execution_bytes).hexdigest(),
                                 "symbol": row["intent"]["instrument"]["secid"],
                                 "status": row["status"],
                                 "filled_lots": row["filled_lots"],
@@ -177,7 +213,40 @@ def import_artifacts(config: dict[str, Any], journal: Journal) -> dict[str, Any]
                 count += journal.ingest(events)
             except (OSError, ValueError, KeyError, TypeError):
                 errors.append(f"{profile['id']}: {path.name}: invalid/incomplete artifact")
-    return {"inserted_revisions": count, "errors": errors}
+    return {
+        "inserted_revisions": count, "errors": errors,
+        "diagnostics": [f"orders: {omitted_orders} omitted: execution/receipt timestamp missing"]
+        if omitted_orders else [],
+        "unknown_order_times": omitted_orders,
+    }
+
+
+def broker_operation_fields(raw: dict[str, Any]) -> dict[str, Any]:
+    """Journal-only evidence; hash is canonical decoded item, not HTTP response bytes."""
+    def money(value: Any) -> Decimal | None:
+        if not isinstance(value, dict) or not {"units", "nano"}.intersection(value):
+            return None
+        if str(value.get("currency", "rub")).lower() != "rub":
+            return None
+        try:
+            units, nano = number(value.get("units", "0")), number(value.get("nano", 0))
+            if units != units.to_integral_value() or nano != nano.to_integral_value():
+                return None
+            if abs(nano) >= 1_000_000_000:
+                return None
+            return units + nano / 1_000_000_000
+        except ValueError:
+            return None
+
+    commission = money(raw.get("commission"))
+    price = money(raw.get("price"))
+    return {
+        "commission": str(abs(commission)) if commission is not None else None,
+        "journal_commission_source": "broker_reported" if commission is not None else
+        "broker_missing" if raw.get("commission") is None else "broker_invalid",
+        "journal_price": str(price) if price is not None and price > 0 else None,
+        "journal_raw_operation_sha256": digest(raw) if raw else None,
+    }
 
 
 def collect(config: dict[str, Any]) -> None:
@@ -187,6 +256,9 @@ def collect(config: dict[str, Any]) -> None:
     from .service_config import SANDBOX_REST
 
     class ReadOnlyTransport(UrlLibJsonTransport):
+        def __init__(self) -> None:
+            self.operation_fields: dict[str, dict[str, Any]] = {}
+
         def post(self, url: str, **kwargs: Any) -> Any:
             allowed = {
                 "GetSandboxPortfolio",
@@ -196,7 +268,15 @@ def collect(config: dict[str, Any]) -> None:
             }
             if not url.startswith(SANDBOX_REST + "/") or url.rsplit("/", 1)[-1] not in allowed:
                 raise ValueError("journal broker writes and production forbidden")
-            return super().post(url, **kwargs)
+            response = super().post(url, **kwargs)
+            if url.rsplit("/", 1)[-1] == "GetSandboxOperationsByCursor":
+                for operation in response.get("items", []):
+                    if isinstance(operation, dict) and operation.get("id"):
+                        # The shared reader also keeps the first occurrence of an ID.
+                        self.operation_fields.setdefault(
+                            str(operation["id"]), broker_operation_fields(operation)
+                        )
+            return response
 
     raw = json.loads(Path(config["universe"]).read_bytes())
     instruments = {
@@ -205,9 +285,8 @@ def collect(config: dict[str, Any]) -> None:
         )
         for r in raw
     }
-    service = TInvestSandboxAccountService(
-        os.environ["T_INVEST_SANDBOX_TOKEN"], ReadOnlyTransport()
-    )
+    transport = ReadOnlyTransport()
+    service = TInvestSandboxAccountService(os.environ["T_INVEST_SANDBOX_TOKEN"], transport)
     accounts = [os.environ[p["account_env"]] for p in config["profiles"]]
     if len(set(accounts)) != len(accounts):
         raise ValueError("strategies must use distinct accounts")
@@ -220,6 +299,7 @@ def collect(config: dict[str, Any]) -> None:
         payload = service.broker_snapshot(account, instruments).as_portfolio_payload()
         after = datetime.now(UTC)
         coverage_from = timestamp(config["history_from"])
+        transport.operation_fields.clear()
         operations = service.operations(
             account, instruments, from_time=coverage_from, to_time=after
         )
@@ -228,7 +308,11 @@ def collect(config: dict[str, Any]) -> None:
         payload.update(
             observed_at=before.isoformat(),
             journal_snapshot_completed_at=after.isoformat(),
-            executed_operations=[asdict(o) for o in operations],
+            executed_operations=[
+                {**asdict(o), **transport.operation_fields.get(o.operation_id,
+                                                             broker_operation_fields({}))}
+                for o in operations
+            ],
             journal_coverage_from=coverage_from.isoformat(),
             journal_coverage_to=before.isoformat(),
         )

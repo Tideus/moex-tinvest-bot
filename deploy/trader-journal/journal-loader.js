@@ -31,12 +31,19 @@
       const query = new URLSearchParams(params).toString();
       const response = await fetchImpl('api/'+route+(query?'?'+query:''), {cache:'no-store', credentials:'same-origin', signal:controller.signal, headers:{'X-Journal-Request-Id':requestId}});
       phase = 'response';
-      if (response.status === 409) throw new Error('История обновилась. Нажмите «Обновить», чтобы получить согласованный срез');
+      if (response.status === 409) {
+        const error = new Error('История обновилась. Нужен новый согласованный срез');
+        error.name = 'JournalSnapshotChangedError';
+        throw error;
+      }
       if (!response.ok) throw new Error(response.status===401 ? 'Вход истёк. Обновите страницу и войдите снова' : 'Ошибка получения отчёта: HTTP '+response.status);
       phase = 'body';
       if (!controller.signal.aborted) onStage('body');
       const data = await response.json();
       if (data?.schema !== 'trader-journal-api-v1' || typeof data.generation !== 'string' || (route==='catalog'&&!Array.isArray(data.streams))) throw new Error('Версия формата отчёта не поддерживается');
+      if (params.generation && data.generation !== params.generation) {
+        const error = new Error('Ответ относится к другому срезу истории');error.name='JournalSnapshotChangedError';throw error;
+      }
       return data;
     };
     try { return await Promise.race([request(), deadline, cancelled]); }

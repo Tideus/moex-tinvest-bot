@@ -100,8 +100,12 @@ test('API route allowlist and changed snapshot are explicit',async()=>{
   await assert.rejects(loadJSON('../bot.env'),/Неизвестный/);
   await assert.rejects(loadJSON('summary',{}, {fetchImpl:async()=>({status:409,ok:false})}),/История обновилась/);
   await loadJSON('signals',{stream:'long:hash',period:'2026-11',generation:'abc',limit:'50'}, {fetchImpl:async url=>{
-    assert.ok(url.startsWith('api/signals?'));assert.ok(url.includes('stream=long%3Ahash'));return response(report);
+    assert.ok(url.startsWith('api/signals?'));assert.ok(url.includes('stream=long%3Ahash'));return response({...report,generation:'abc'});
   }});
+});
+test('snapshot conflicts are typed and mismatched successful bodies are rejected',async()=>{
+  await assert.rejects(loadJSON('operations',{}, {fetchImpl:async()=>({status:409,ok:false})}),{name:'JournalSnapshotChangedError'});
+  await assert.rejects(loadJSON('operations',{generation:'old'}, {fetchImpl:async()=>response({...report,generation:'new'})}),{name:'JournalSnapshotChangedError'});
 });
 
 test('installed HTML loads loader before UI and installer includes it',()=>{
