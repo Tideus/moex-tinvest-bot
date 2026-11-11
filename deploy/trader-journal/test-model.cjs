@@ -1,4 +1,13 @@
 'use strict';
+
+// Chart interpolation must not bridge missing intervals or create synthetic fills.
+require('node:test')('trade chart splits gaps and retains exact execution markers',()=>{
+  const m=require('./journal-model.js'),assert=require('node:assert/strict');
+  const chart=m.priceCoordinates([{at:'2026-11-01T07:00Z',close:'100'},{at:'2026-11-01T07:01Z',close:'101'},{at:'2026-11-01T07:04Z',close:'102'}],[{at:'2026-11-01T07:02Z',price:'100.5',side:'BUY',label:'Вход'}],1);
+  assert.deepEqual(chart.segments.map(s=>s.length),[2,1]);assert.equal(chart.markers[0].price,'100.5');
+  assert.ok(Number.isFinite(chart.markers[0].x));assert.equal(m.priceCoordinates([],[],1),null);
+  assert.equal(m.priceCoordinates([],[{at:'2026-11-01T07:02Z',price:'100'}],1).segments.length,0);
+});
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const M = require('./journal-model.js');

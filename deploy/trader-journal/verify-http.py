@@ -89,7 +89,7 @@ for path in ("journal.sqlite3", "bot.env", "receipts/", "config.json", "htpasswd
     print("PASS: private file unavailable:", path)
 assert get("", True, "POST")[0] == 403
 print("PASS: write method forbidden")
-for endpoint in ("catalog", "health", "summary", "trades", "signals"):
+for endpoint in ("catalog", "health", "summary", "trades", "signals", "detail"):
     assert get("api/" + endpoint)[0] == 401
 assert get("api/catalog", True, "POST")[0] == 403
 assert get("api/sql", True)[0] == 404
@@ -120,3 +120,25 @@ for stream in catalog["streams"]:
     assert get("api/trades?" + urlencode(params | {"limit": "101"}), True)[0] == 400
     assert get("api/trades?" + urlencode(params | {"generation": "old"}), True)[0] == 409
     print("PASS: API summary/pages/limits/snapshot binding:", stream["strategy"], sizes)
+    # Pick a confirmed source closure or operation; publish no account/order identifiers.
+    full = next(s for s in report["streams"] if s["id"] == stream["id"])
+    if full["trades"]:
+        sample = full["trades"][-1]
+        at = sample["closed_at"]
+    elif full["operations"]:
+        sample = full["operations"][-1]
+        at = sample["at"]
+    else:
+        continue
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    day = datetime.fromisoformat(at).astimezone(ZoneInfo("Europe/Moscow")).date().isoformat()
+    detail_params = params | {"period": day, "symbol": sample["symbol"]}
+    started = time.monotonic()
+    status, raw, _ = get("api/detail?" + urlencode(detail_params), True)
+    assert status == 200, status
+    card = json.loads(raw)["card"]
+    assert card and card["symbol"] == sample["symbol"] and card["markers"]
+    assert len(card["chart"]["points"]) <= 6000
+    print("PASS: private card:", stream["strategy"], card["kind"],
+          "candles", len(card["chart"]["points"]), "seconds", round(time.monotonic()-started, 3))

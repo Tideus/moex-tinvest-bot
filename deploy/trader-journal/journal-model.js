@@ -52,6 +52,18 @@
     const gross=numeric(operation.gross),quantity=numeric(operation.quantity);
     return gross!==null&&quantity>0?Math.abs(gross)/quantity:null;
   }
-  const api={numeric,localDay,inPeriod,tradePercent,selectTrades,changePeriod,movePeriod,equityCoordinates,csvCell,csvNumber,operationPrice,status:value=>statuses[value]||value||'Неизвестно',reason:value=>reasons[value]||'Причина: '+value};
+  function priceCoordinates(points,markers,interval){
+    const valid=points.filter(p=>numeric(p.close)>0&&Number.isFinite(Date.parse(p.at))).sort((a,b)=>Date.parse(a.at)-Date.parse(b.at));
+    const fills=markers.filter(m=>numeric(m.price)>0&&Number.isFinite(Date.parse(m.at)));
+    const all=[...valid.map(p=>({at:p.at,price:p.close})),...fills];if(!all.length)return null;
+    const values=all.map(p=>Number(p.price)),min=Math.min(...values),max=Math.max(...values),span=max-min||Math.max(0.01,min*0.002);
+    let start=Math.min(...all.map(p=>Date.parse(p.at))),end=Math.max(...all.map(p=>Date.parse(p.at)));if(start===end){start-=60000;end+=60000;}
+    const xy=(at,price)=>[55+550*(Date.parse(at)-start)/(end-start),210-170*(Number(price)-min)/(span)];
+    const segments=[];let previous=null;
+    for(const p of valid){if(!previous||Date.parse(p.at)-Date.parse(previous.at)>interval*60000*1.1)segments.push([]);segments.at(-1).push(xy(p.at,p.close));previous=p;}
+    return {min,max,start:new Date(start).toISOString(),end:new Date(end).toISOString(),segments,markers:fills.map(m=>{const [x,y]=xy(m.at,m.price);return {...m,x,y};})};
+  }
+  function rationale(value){return String(value||'').replace('intraday managed exit','Закрытие intraday').replace('stop_loss:','Порог убытка: ').replace('take_profit:','Цель прибыли: ').replace('max_holding','Предельное время удержания').replace('force_flat','Обязательное закрытие перед концом сессии').replaceAll('bps',' б.п.');}
+  const api={numeric,localDay,inPeriod,tradePercent,selectTrades,changePeriod,movePeriod,equityCoordinates,priceCoordinates,csvCell,csvNumber,operationPrice,rationale,status:value=>statuses[value]||value||'Неизвестно',reason:value=>reasons[value]||'Причина: '+value};
   if(typeof module!=='undefined'&&module.exports)module.exports=api; else root.JournalModel=api;
 })(globalThis);

@@ -6,7 +6,7 @@
     for (const [controller, kind] of pending) if (!route || route === kind) controller.abort();
   }
   async function loadJSON(route, params = {}, {fetchImpl = root.fetch.bind(root), timeoutMs = 25000, onStage = () => {}} = {}) {
-    if (!['catalog','summary','trades','signals','operations','equity','orders','health'].includes(route)) throw new Error('Неизвестный раздел журнала');
+    if (!['catalog','summary','trades','signals','operations','equity','orders','health','detail'].includes(route)) throw new Error('Неизвестный раздел журнала');
     const controller = new AbortController();
     const requestId = root.crypto?.randomUUID?.() || Date.now().toString(36)+'-'+Math.random().toString(36).slice(2);
     let phase = 'headers';

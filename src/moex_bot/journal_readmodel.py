@@ -18,6 +18,7 @@ from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any
 
+from .journal_cards import chart_for, local_day, make_cards
 from .trader_journal import MSK, SCHEMA, digest, encoded, number, timestamp
 
 API_SCHEMA = "trader-journal-api-v1"
@@ -54,6 +55,10 @@ def publish(report: dict[str, Any], path: Path) -> str:
                     payload TEXT NOT NULL, PRIMARY KEY(stream,kind,seq));
                 CREATE INDEX rows_day ON rows(stream,kind,day,seq);
                 CREATE INDEX rows_month ON rows(stream,kind,month,seq);
+                CREATE TABLE cards (stream TEXT, ref TEXT, symbol TEXT, day TEXT, month TEXT,
+                    payload TEXT NOT NULL, PRIMARY KEY(stream,ref));
+                CREATE INDEX cards_period ON cards(stream,symbol,day,month);
+                CREATE TABLE charts (key TEXT PRIMARY KEY, payload TEXT NOT NULL);
             """)
             metadata = {
                 "schema": API_SCHEMA,
@@ -63,8 +68,16 @@ def publish(report: dict[str, Any], path: Path) -> str:
                 "demo": report.get("demo", False),
             }
             db.execute("INSERT INTO metadata VALUES ('report',?)", (encoded(metadata),))
+            db.executemany("INSERT INTO charts VALUES (?,?)",
+                           ((key, encoded(chart))
+                            for key, chart in report.get("charts", {}).items()))
             for stream in report["streams"]:
                 key = stream["id"]
+                for card in make_cards(stream):
+                    card_day = local_day(card["at"])
+                    db.execute("INSERT INTO cards VALUES (?,?,?,?,?,?)",
+                               (key, card["ref"], card["symbol"], card_day,
+                                card_day[:7], encoded(card)))
                 db.execute(
                     "INSERT INTO streams VALUES (?,?)",
                     (key, encoded({k: stream[k] for k in (*STREAM_FIELDS, *OPTIONAL_STREAM_FIELDS)
@@ -198,6 +211,13 @@ def query(path: Path, route: str, params: dict[str, str]) -> dict[str, Any]:
             allowed |= {"symbol", "direction", "outcome", "cost"}
         elif route == "operations":
             allowed.add("symbol")
+    elif route == "detail":
+        allowed |= {"symbol", "ref", "offset", "anchor"}
+        if (not re.fullmatch(r"[A-Z0-9]{1,16}", params.get("symbol", ""))
+                or not params.get("offset", "0").isdigit()
+                or len(params.get("offset", "0")) > 8
+                or (params.get("ref") and not re.fullmatch(r"[a-f0-9]{64}", params["ref"]))):
+            raise QueryError("invalid card parameters")
     elif route not in {"catalog", "summary", "health"}:
         raise QueryError("not found", 404)
     if set(params) - allowed or any(len(v) > 512 for v in params.values()):
@@ -266,6 +286,59 @@ def query(path: Path, route: str, params: dict[str, str]) -> dict[str, Any]:
         stream = next((s for s in streams if s["id"] == params.get("stream")), None)
         if stream is None:
             raise QueryError("stream not found", 404)
+        if route == "detail":
+            column = "day" if len(period) == 10 else "month"
+            args = (stream["id"], params["symbol"], period)
+            where = f"stream=? AND symbol=? AND {column}=?"
+            total = db.execute("SELECT COUNT(*) FROM cards WHERE " + where, args).fetchone()[0]
+            offset = int(params.get("offset", "0"))
+            options = [json.loads(row[0]) for row in db.execute(
+                "SELECT payload FROM cards WHERE " + where +
+                " ORDER BY json_extract(payload,'$.kind'),json_extract(payload,'$.at') DESC,ref"
+                " LIMIT 50 OFFSET ?", (*args, offset))]
+            if params.get("ref"):
+                card = _one(db, "SELECT payload FROM cards WHERE " + where + " AND ref=?",
+                            (*args, params["ref"]))
+                if card is None:
+                    raise QueryError("card not found in selected account and period", 404)
+            else:
+                card = options[0] if options else None
+            if params.get("anchor"):
+                try:
+                    anchor = json.loads(params["anchor"])
+                    if (not isinstance(anchor, dict) or not {"kind", "at"} <= anchor.keys()
+                            or set(anchor) - {"kind", "at", "opened_at", "quantity", "entry",
+                                              "exit", "side"}
+                            or any(not isinstance(v, str) or len(v) > 100
+                                   for v in anchor.values())):
+                        raise ValueError
+                except (ValueError, TypeError):
+                    raise QueryError("invalid card anchor") from None
+                matches = db.execute(
+                    "SELECT payload FROM cards WHERE " + where +
+                    "".join(f" AND json_extract(payload,'$.{k}')=?" for k in anchor) + " LIMIT 2",
+                    (*args, *anchor.values())).fetchall()
+                if len(matches) != 1:
+                    raise QueryError("selected row is missing or ambiguous; choose a card", 422)
+                card = json.loads(matches[0][0])
+                if all(o["ref"] != card["ref"] for o in options):
+                    options = [card, *options[:49]]
+            if card:
+                first = local_day(card.get("opened_at", card["at"]))
+                last = local_day(card["at"])
+                chart_rows = dict((key, json.loads(payload)) for key, payload in db.execute(
+                    "SELECT key,payload FROM charts WHERE key>=? AND key<=?",
+                    (params["symbol"] + ":" + first + ":", params["symbol"] + ":" + last + ":~")))
+                card["chart"] = chart_for(card, chart_rows,
+                                          1 if stream["strategy"] == "intraday" else 60)
+            return {**metadata, "card": card, "total": total, "offset": offset,
+                    "next_offset": offset + 50 if offset + 50 < total else None,
+                    "options": [{k: c[k] for k in ("ref", "kind", "at", "symbol",
+                                                   "opened_at", "quantity", "entry", "exit")
+                                 if k in c}
+                                for c in options],
+                    "position": stream["positions"].get(params["symbol"]),
+                    "observed_at": stream["observed_at"]}
         if route in KINDS:
             return {**metadata, **_page(db, route, params)}
         month = period[:7]

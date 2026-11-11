@@ -12,6 +12,7 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
+from .journal_cards import attach_charts, attach_order_context
 from .journal_readmodel import publish
 from .trader_journal import Journal, build_report, digest, encoded, number, timestamp
 
@@ -326,6 +327,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", type=Path, required=True)
     parser.add_argument("--collect", action="store_true")
+    parser.add_argument("--prices", action="store_true", help="refresh public chart prices only")
     args = parser.parse_args()
     try:
         config = json.loads(args.config.read_bytes())
@@ -335,6 +337,9 @@ def main() -> int:
         status = import_artifacts(config, journal)
         report = build_report(journal.latest())
         report["import"] = status
+        attach_order_context(report, config)
+        attach_charts(report, Path(config["output"]).parent / "prices",
+                      refresh=args.collect or args.prices)
         publish(
             report,
             Path(

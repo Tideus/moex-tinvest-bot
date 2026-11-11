@@ -20,7 +20,7 @@ function table(id, rows, highlighted = [], emptyMessage='Нет записей �
   if (!rows.length) { const td=element('td',emptyMessage,'empty'); td.colSpan=12; const tr=element('tr'); tr.append(td); body.append(tr); return; }
   for (const row of rows) {
     const tr=element('tr');
-    row.forEach((cell,i) => tr.append(element('td',cell,highlighted.includes(i)&&String(cell).startsWith('+')?'pos':highlighted.includes(i)&&String(cell).startsWith('-')?'neg':'')));
+    row.forEach((cell,i) => {const td=element('td',typeof cell==='object'?undefined:cell,highlighted.includes(i)&&String(cell).startsWith('+')?'pos':highlighted.includes(i)&&String(cell).startsWith('-')?'neg':'');if(typeof cell==='object')td.append(cell);tr.append(td);});
     body.append(tr);
   }
 }
@@ -89,7 +89,7 @@ function operationCards(operations) {
   const box=$('operationCards');box.replaceChildren();
   for(const operation of operations){
     const card=element('article',undefined,'operation-card'),header=element('div',undefined,'operation-card-head');
-    header.append(element('strong',operation.symbol),element('span',direction(operation.side)+' · '+operation.side,'operation-side'));
+    header.append(paperButton(operation.symbol,{kind:'operation',at:operation.at,side:operation.side}),element('span',direction(operation.side)+' · '+operation.side,'operation-side'));
     card.append(header,element('p',time(operation.at)+' МСК','hint'));
     const values=element('dl');
     for(const [label,value] of [['Количество',money(operation.quantity)+' шт.'],['Цена',operationPriceText(operation)+' ₽'],['Сумма',money(operation.gross)+' ₽'],['Комиссия',operationFeeText(operation,' ₽')]])values.append(element('dt',label),element('dd',value));
@@ -102,11 +102,11 @@ function detailTables(stream,period,cost) {
   shown=pages.trades?.items||[];
   $('tradeCount').textContent=pages.trades?.items?'На странице '+shown.length+' · по фильтру '+pages.trades.total+' · за период '+pages.trades.period_total+'. CSV выгружает все строки по фильтру.':'';
   $('pnlHeading').textContent='Результат ₽ · '+cost;$('pctHeading').textContent='% входа · '+cost;
-  table('trades',shown.map(t=>[t.symbol,direction(t.direction),time(t.opened_at),time(t.closed_at),money(t.quantity),money(t.entry),money(t.exit),signed(t[cost]),signed(M.tradePercent(t,cost),4)+' %']),[7,8],sectionState('trades')||'Закрытий по этому фильтру нет. Покупки и продажи смотрите в «Операциях» выше.');
+  table('trades',shown.map(t=>[paperButton(t.symbol,{kind:'closed',at:t.closed_at,opened_at:t.opened_at,quantity:t.quantity,entry:t.entry,exit:t.exit}),direction(t.direction),time(t.opened_at),time(t.closed_at),money(t.quantity),money(t.entry),money(t.exit),signed(t[cost]),signed(M.tradePercent(t,cost),4)+' %']),[7,8],sectionState('trades')||'Закрытий по этому фильтру нет. Покупки и продажи смотрите в «Операциях» выше.');
   const ops=pages.operations?.items||[];
   $('operationsTitle').textContent=($('mode').value==='month'?'Операции месяца · ':'Операции дня · ')+period;
   $('operationCount').textContent=pages.operations?.items?'На странице '+ops.length+' · по бумаге '+pages.operations.total+' · за период '+pages.operations.period_total:'';
-  table('operations',ops.map(o=>[o.symbol,direction(o.side)+' · '+o.side,time(o.at),money(o.quantity),operationPriceText(o),money(o.gross),operationFeeText(o)]),[],sectionState('operations')||'Операций по этому фильтру за выбранный период нет.');
+  table('operations',ops.map(o=>[paperButton(o.symbol,{kind:'operation',at:o.at,side:o.side}),direction(o.side)+' · '+o.side,time(o.at),money(o.quantity),operationPriceText(o),money(o.gross),operationFeeText(o)]),[],sectionState('operations')||'Операций по этому фильтру за выбранный период нет.');
   operationCards(ops);
   const signals=pages.signals?.items||[];
   table('signals',signals.map(o=>[time(o.at),o.symbol,direction(o.side),M.status(o.status),(o.reasons||[]).map(M.reason).join('; ')||'—']),[],sectionState('signals')||'Сигналов за выбранный период нет.');
@@ -137,7 +137,7 @@ function draw() {
   $('monthlyPanel').hidden=$('mode').value!=='month';const days=s.dates.filter(d=>d.startsWith(period.slice(0,7)));
   $('monthlyCoverage').textContent=days.length?'Есть записи за '+days[0]+' — '+days.at(-1)+'. Это не подтверждение полного месяца. Закрытия и доходность счёта используют разные основания расчёта.':'Нет истории за выбранный месяц.';
   table('monthlyRows',days.map(d=>{const p=s.periods[d],m=p.summary?.[cost];return[d,p.closures,(m?.wins??'—')+' / '+(m?.losses??'—')+' / '+(m?.flat??'—'),signed(p[cost]),signed(p.account?.return_pct,4)+' %',p.account?.coverage?'Подтверждено в окне':'Недостаточно данных'];}),[3,4]);
-  table('symbols',(stats?.by_symbol||[]).map(p=>[p.symbol,p.closures,p[cost].wins??'—',p[cost].losses??'—',signed(p[cost].pnl),money(p[cost].fees)]),[4]);detailTables(s,period,cost);
+  table('symbols',(stats?.by_symbol||[]).map(p=>[paperButton(p.symbol),p.closures,p[cost].wins??'—',p[cost].losses??'—',signed(p[cost].pnl),money(p[cost].fees)]),[4]);detailTables(s,period,cost);
   $('positions').replaceChildren();
   for(const [symbol,p] of Object.entries(s.positions))if(Number(p.units)){const row=element('div',undefined,'position');row.append(element('strong',symbol),element('span',money(p.units)+' шт. · оценка '+money(p.value)+' ₽'),element('span',signed(p.unrealized_gross)+' ₽ / '+signed(p.return_pct)+' %',color(p.unrealized_gross)));$('positions').append(row);}
   if(!$('positions').children.length)$('positions').append(element('p','На последнем срезе позиций нет.','empty'));
@@ -155,6 +155,7 @@ function draw() {
   $('updated').textContent='Сформировано '+time(report.generated_at)+' МСК';
 }
 function resetDetails(preserveFilters=false){
+  closeCard();
   pages={};equityLoaded=false;requestErrors={};operationSymbols=[];
   if(!preserveFilters)for(const id of ['symbol','direction','outcome','operationSymbol'])$(id).value='';
 }
@@ -312,4 +313,73 @@ async function exportRows(allowRecovery=true){
   finally{if(epoch===viewEpoch)$('download').disabled=!viewReady;}
 }
 $('loadEquity').addEventListener('click',()=>loadEquity());$('download').addEventListener('click',()=>exportRows());
+let cardState=null,cardRequest=0;
+function paperButton(symbol,anchor=null){
+  const button=element('button',symbol+' ↗','paper-link');button.setAttribute('aria-label','Карточка '+symbol);
+  button.addEventListener('click',()=>openCard(symbol,anchor));return button;
+}
+function closeCard(){++cardRequest;JournalLoader.cancelPending?.('detail');cardState=null;if($('tradeDialog').open)$('tradeDialog').close();}
+async function openCard(symbol,anchor=null){
+  cardState={symbol,anchor,offset:0,ref:'',epoch:viewEpoch,stream:$('strategy').value,period:$('date').value};
+  $('cardTitle').textContent=symbol+' · карточка сделки';$('cardScope').textContent=(report.demo?'ДЕМО · ':'')+current().strategy.toUpperCase()+' · '+current().environment.toUpperCase()+' · '+cardState.period+' · МСК';
+  if(!$('tradeDialog').open)$('tradeDialog').showModal();await loadCard();
+}
+function renderReason(box,label,reason){
+  box.append(element('h3',label),element('p','Точная причина не подтверждена связью с брокерской операцией.','hint'));
+  for(const signal of reason?.context||[])box.append(element('p','Контекст, не доказанная причина · '+time(signal.at)+' · '+M.status(signal.status)+' · '+(signal.reasons||[]).map(M.reason).join('; '),'hint'));
+  for(const order of reason?.order_context||[]){const p=element('p','Заявка соседнего цикла '+time(order.at)+' (связь с исполнением не подтверждена): '+M.rationale(order.rationale),'hint');box.append(p);}
+}
+function drawPriceChart(box,card){
+  const chart=M.priceCoordinates(card.chart?.points||[],card.markers||[],card.chart?.interval||1);
+  if(!chart){box.append(element('p','Нет подтверждённых цен для графика.','empty'));return;}
+  const ns='http://www.w3.org/2000/svg',svg=document.createElementNS(ns,'svg');svg.setAttribute('viewBox','0 0 640 260');svg.setAttribute('role','img');svg.setAttribute('aria-label','Рыночная цена '+card.symbol+' и отдельные точки брокерских операций');
+  const shape=(name,attrs)=>{const e=document.createElementNS(ns,name);for(const [key,value] of Object.entries(attrs))e.setAttribute(key,String(value));svg.append(e);return e;};
+  for(const [value,y] of [[chart.min,210],[chart.max,40]]){shape('line',{x1:55,x2:625,y1:y,y2:y,stroke:'#30403a'});const text=shape('text',{x:2,y:y-4,fill:'#a6b5aa','font-size':12});text.textContent=money(value);}
+  for(const segment of chart.segments)if(segment.length>1)shape('polyline',{points:segment.map(p=>p.join(',')).join(' '),fill:'none',stroke:'#b5e990','stroke-width':2});
+  for(const segment of chart.segments)if(segment.length===1)shape('circle',{cx:segment[0][0],cy:segment[0][1],r:2,fill:'#b5e990'});
+  for(const marker of chart.markers){const dot=shape('circle',{cx:marker.x,cy:marker.y,r:6,fill:marker.side==='BUY'?'#8bbfff':'#ffbd7d',stroke:'#101615','stroke-width':2});const title=document.createElementNS(ns,'title');title.textContent=marker.label+' · '+marker.side+' · '+time(marker.at)+' · '+money(marker.price)+' ₽';dot.append(title);const text=shape('text',{x:Math.min(570,Math.max(55,marker.x)),y:marker.y<55?marker.y+22:marker.y-12,fill:'#e6eee8','font-size':12});text.textContent=marker.label;}
+  box.append(svg,element('p',time(chart.start)+' → '+time(chart.end)+' МСК · ось цены: ₽','hint'));
+}
+function renderCard(data){
+  const box=$('cardContent');box.replaceChildren();const card=data.card;
+  if(!card){box.append(element('p','Нет операций или закрытий этой бумаги в выбранном периоде.','empty'));return;}
+  if(card.kind==='closed'){
+    box.append(element('h3',direction(card.direction)+' · закрыто '+money(card.quantity)+' шт.'));
+    const result=element('div',undefined,'card-result');result.append(element('strong',signed(card.gross)+' ₽ / '+signed(card.return_pct,4)+' %',color(card.gross)),element('p','Без комиссий · процент от стоимости входа'));
+    result.append(element('p','После комиссий: '+signed(card.net)+' ₽ / '+signed(card.net_return_pct,4)+' % · комиссии '+money(card.fees)+' ₽',color(card.net)));box.append(result);
+    box.append(element('p','Аналитическое FIFO-закрытие (возможно часть позиции). Цена входа/выхода — средняя из суммы и количества исполнения; не цена лимита.','hint'));
+  }else{
+    const op=card.operation;box.append(element('h3',direction(op.side)+' · '+money(op.quantity)+' шт.'),element('p',time(op.at)+' · цена '+operationPriceText(op)+' ₽ · сумма '+money(op.gross)+' ₽'));
+    box.append(element('p','Операция не равна закрытой сделке. Её прибыль не рассчитывается отдельно. Выберите FIFO-закрытие в списке, если оно есть.','hint'));
+  }
+  drawPriceChart(box,card);
+  for(const marker of card.markers)box.append(element('p',marker.label+' · '+direction(marker.side)+' · '+time(marker.at)+' МСК · '+money(marker.quantity)+' шт. × '+operationPriceText({price:marker.price,price_source:'broker'})+' ₽','marker-'+marker.side.toLowerCase()));
+  const sources=card.chart.sources||[],bad=sources.filter(s=>s.status!=='ok');
+  box.append(element('p',report.demo?'Синтетический пример графика и исполнений.':('Линия: закрытия '+card.chart.interval+'-минутных свечей MOEX ISS / TQBR. Публичные данные могут задерживаться. Точки: брокерские операции. Разрывы не заполняются.'),'hint'));
+  if(!card.chart.points.length||bad.length||card.chart.truncated)box.append(element('p','Рыночный график неполон: '+(bad.map(s=>s.day+' '+({pending:'ожидает сбора',empty:'источник не вернул свечи',error:'ошибка источника'}[s.status]||s.status)+(s.error?' ('+s.error+')':'')).join('; ')||'нет свечей в окне')+(card.chart.truncated?' · достигнут предел точек/истории':''),'warn'));
+  if(sources.some(s=>s.retrieved_at))box.append(element('p','Цены получены: '+sources.filter(s=>s.retrieved_at).map(s=>time(s.retrieved_at)).filter((v,i,a)=>a.indexOf(v)===i).join(', ')+' МСК','hint'));
+  if(card.kind==='closed'){renderReason(box,'Причина входа',card.entry_reason);renderReason(box,'Причина выхода',card.exit_reason);}else renderReason(box,'Причина '+(card.operation.side==='BUY'?'покупки':'продажи'),card.operation_reason);
+  if(data.position&&Number(data.position.units))box.append(element('p','Отдельно: текущая позиция '+money(data.position.units)+' шт. · открытый результат '+signed(data.position.unrealized_gross)+' ₽ / '+signed(data.position.return_pct)+' % (без комиссий), срез '+time(data.observed_at)+'. Это не результат выбранного прошлого дня.','hint'));
+}
+async function loadCard(){
+  if(!cardState)return;const state=cardState,request=++cardRequest;JournalLoader.cancelPending?.('detail');
+  $('cardContent').replaceChildren();$('cardStatus').textContent='Загружаем карточку…';$('cardRetry').hidden=true;
+  for(const id of ['cardSelect','cardPrev','cardNext'])$(id).disabled=true;
+  try{
+    const data=await JournalLoader.loadJSON('detail',{stream:state.stream,period:state.period,generation:report.generation,symbol:state.symbol,ref:state.ref,offset:String(state.offset),anchor:state.anchor?JSON.stringify(state.anchor):''});
+    if(cardState!==state||request!==cardRequest||state.epoch!==viewEpoch)return;
+    state.anchor=null;state.ref=data.card?.ref||'';
+    $('cardSelect').replaceChildren();for(const o of data.options){const option=element('option',(o.kind==='closed'?'Закрытие · ':'Операция · ')+time(o.at)+(o.quantity?' · '+money(o.quantity)+' шт.':''));option.value=o.ref;$('cardSelect').append(option);}
+    if(data.card)$('cardSelect').value=data.card.ref;state.next=data.next_offset;
+    $('cardSelect').disabled=!data.options.length;$('cardPrev').disabled=state.offset===0;$('cardNext').disabled=data.next_offset===null;
+    $('cardCount').textContent='Записей '+data.total+' · страница '+(state.offset/50+1);$('cardStatus').textContent='Только чтение · единый срез журнала';renderCard(data);
+  }catch(error){if(cardState!==state||request!==cardRequest||error.name==='AbortError')return;
+    $('cardStatus').textContent=error.name==='JournalSnapshotChangedError'?'История обновилась. Закройте карточку, нажмите «Обновить» и откройте её снова.':'Карточка не загружена: '+error.message;
+    $('cardRetry').hidden=error.name==='JournalSnapshotChangedError';
+  }
+}
+$('cardClose').addEventListener('click',closeCard);$('tradeDialog').addEventListener('close',closeCard);
+$('cardRetry').addEventListener('click',loadCard);
+$('cardSelect').addEventListener('change',()=>{if(cardState){cardState.ref=$('cardSelect').value;return loadCard();}});
+for(const [id,step] of [['cardPrev',-50],['cardNext',50]])$(id).addEventListener('click',()=>{if(cardState){cardState.offset+=step;cardState.ref='';return loadCard();}});
 load();

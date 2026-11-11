@@ -43,7 +43,7 @@ install -m 0644 "$source_dir/deploy/trader-journal/nginx.conf" "$prefix/etc/ngin
 install -m 0644 "$source_dir/deploy/trader-journal/moex-trader-journal."{service,timer} "$prefix/etc/systemd/system/"
 install -m 0644 "$source_dir/deploy/trader-journal/moex-trader-journal-api.service" "$prefix/etc/systemd/system/"
 install -m 0644 "$source_dir/deploy/trader-journal/requirements-api.txt" "$target/requirements-api.txt"
-(cd "$target" && sha256sum src/moex_bot/trader_journal.py src/moex_bot/journal_import.py src/moex_bot/journal_readmodel.py src/moex_bot/journal_api.py) > "$target/SHA256SUMS"
+(cd "$target" && sha256sum src/moex_bot/trader_journal.py src/moex_bot/journal_import.py src/moex_bot/journal_readmodel.py src/moex_bot/journal_api.py src/moex_bot/journal_cards.py) > "$target/SHA256SUMS"
 if [[ -n "$prefix" ]]; then
   echo 'Staged isolated journal; no systemd/nginx changes.'
   exit 0

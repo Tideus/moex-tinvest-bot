@@ -9,6 +9,8 @@ class Element {
   getAttribute(name){return this.attributes[name];}
   focus(){this.ownerDocument.activeElement=this;}
   scrollIntoView(){this.scrolled=true;}
+  showModal(){this.open=true;}
+  close(){this.open=false;this.listeners.close?.();}
   click(){return this.listeners.click?.();}
   addEventListener(event,fn){this.listeners[event]=fn;}
 }
@@ -30,6 +32,29 @@ function harness(extra){
   vm.runInNewContext(fs.readFileSync(require.resolve('./journal.js'),'utf8'),{JournalModel:require('./journal-model.js'),JournalLoader:loader,document,setTimeout,clearTimeout,Blob,URL:{createObjectURL:blob=>{blobs.push(blob);return 'blob:test';},revokeObjectURL(){}}});
   return {get,calls,loader,cancellations,document,metadata,blobs,get catalogLoads(){return catalogLoads;}};
 }
+
+function cardReply(p){return {schema:'trader-journal-api-v1',generation:p.generation,total:1,offset:0,next_offset:null,options:[{ref:'a'.repeat(64),kind:'closed',at:'2026-11-11T10:00Z'}],card:{kind:'closed',symbol:'SBER',direction:'SHORT',opened_at:'2026-11-11T08:00Z',closed_at:'2026-11-11T10:00Z',quantity:'2',entry:'100',exit:'99',gross:'2',return_pct:'1',net:null,fees:null,net_return_pct:null,ref:'a'.repeat(64),markers:[{at:'2026-11-11T08:00Z',price:'100',label:'Вход',side:'SELL',quantity:'2'},{at:'2026-11-11T10:00Z',price:'99',label:'Выход',side:'BUY',quantity:'2'}],chart:{interval:1,points:[],sources:[],truncated:false},entry_reason:{context:[]},exit_reason:{context:[]}}};}
+const texts=node=>[node.textContent,...node.children.flatMap(texts)].join(' ');
+test('paper opens read-only trade card with gross, unknown net and explicit missing chart',async()=>{
+  const h=harness((kind,p)=>kind==='detail'?Promise.resolve(cardReply(p)):null);await tick();
+  await h.get('operationCards').firstChild.firstChild.firstChild.click();
+  assert.equal(h.get('tradeDialog').open,true);assert.equal(h.calls.at(-1).kind,'detail');
+  const text=texts(h.get('cardContent'));assert.match(text,/\+2 ₽ \/ \+1 %/);assert.match(text,/После комиссий: —/);assert.match(text,/график неполон/);assert.match(text,/Точная причина не подтверждена/);
+  assert.equal(h.get('cardContent').children.filter(n=>n.tag==='svg').length,1);
+  await h.get('cardClose').click();assert.equal(h.get('tradeDialog').open,false);assert.ok(h.cancellations.includes('detail'));
+});
+test('closing a pending card discards late response, reopening gets a new request',async()=>{
+  let resolve;
+  const h=harness((kind,p)=>kind==='detail'?new Promise(r=>{resolve=()=>r(cardReply(p));}):null);await tick();
+  const pending=h.get('operationCards').firstChild.firstChild.firstChild.click();await tick();await h.get('cardClose').click();resolve();await pending;
+  assert.equal(h.get('tradeDialog').open,false);assert.equal(h.get('cardContent').children.length,0);
+});
+test('card conflict never mixes snapshots or retries indefinitely',async()=>{
+  const h=harness(kind=>kind==='detail'?Promise.reject(Object.assign(new Error('changed'),{name:'JournalSnapshotChangedError'})):null);await tick();
+  await h.get('operationCards').firstChild.firstChild.firstChild.click();
+  assert.match(h.get('cardStatus').textContent,/История обновилась/);assert.equal(h.get('cardRetry').hidden,true);
+  assert.equal(h.calls.filter(c=>c.kind==='detail').length,1);assert.equal(h.get('cardContent').children.length,0);
+});
 test('initial screen fetches operations visibly; signals are lazy and paginated',async()=>{
   const h=harness();await tick();
   assert.deepEqual(h.calls.map(x=>x.kind),['summary','trades','operations']);
@@ -58,7 +83,7 @@ test('operation filter includes securities without closures and is server-side',
   assert.deepEqual(h.get('operationSymbol').children.map(x=>x.value),['','SBER','YDEX']);
   h.get('operationSymbol').value='YDEX';await h.get('operationSymbol').listeners.change();
   assert.equal(h.calls.at(-1).kind,'operations');assert.equal(h.calls.at(-1).p.symbol,'YDEX');assert.equal(h.calls.at(-1).p.cursor,'');
-  assert.equal(h.get('operations').children[0].children[0].textContent,'YDEX');
+  assert.equal(h.get('operations').children[0].children[0].firstChild.textContent,'YDEX ↗');
   assert.match(h.get('operationCount').textContent,/по бумаге 1.*за период 2/);
   assert.equal(h.get('operationCards').children.length,1);
 });
@@ -120,7 +145,7 @@ test('simultaneous conflicts share one restart and late old pages cannot overwri
   conflict=true;h.metadata.generation='next';
   const obsolete=h.get('operationSymbol').listeners.change();const restart=h.get('cost').listeners.change();
   await restart;releaseOld();await obsolete;
-  assert.equal(h.catalogLoads,2);assert.equal(h.get('operations').children[0].children[0].textContent,'SBER');
+  assert.equal(h.catalogLoads,2);assert.equal(h.get('operations').children[0].children[0].firstChild.textContent,'SBER ↗');
   assert.notEqual(h.get('notice').className,'error');
 });
 
