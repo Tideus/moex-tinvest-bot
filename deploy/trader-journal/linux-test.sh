@@ -34,4 +34,5 @@ DESTDIR="$PWD/work/journal-stage" bash deploy/trader-journal/install.sh
 before_config=$(sha256sum work/journal-stage/etc/moex-trader-journal/{config.json,htpasswd})
 DESTDIR="$PWD/work/journal-stage" bash deploy/trader-journal/install.sh
 [[ "$before_config" == "$(sha256sum work/journal-stage/etc/moex-trader-journal/{config.json,htpasswd})" ]]
+python3 deploy/trader-journal/test-nginx.py
 echo 'PASS: isolated journal deployment, private permissions and idempotent reinstallation'

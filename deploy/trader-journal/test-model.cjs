@@ -42,3 +42,15 @@ test('presentation preserves unknown reason, CSV quotes and formula guards', () 
   for(const x of [null,undefined,'NaN','Infinity','',false,'   ',[],{}])assert.equal(M.numeric(x),null);
   assert.equal(M.numeric('0'),0);
 });
+
+test('large history constructs one date formatter, not one per signal', () => {
+  const vm=require('node:vm'), fs=require('node:fs');
+  let constructions=0;
+  const context={module:{exports:{}},Intl:{DateTimeFormat:function(...args){constructions++;return new Intl.DateTimeFormat(...args);}}};
+  vm.runInNewContext(fs.readFileSync(require.resolve('./journal-model.js'),'utf8'),context);
+  const model=context.module.exports;
+  const rows=Array.from({length:20000},(_,i)=>({at:new Date(Date.UTC(2026,10,11,0,0,i)).toISOString()}));
+  assert.equal(rows.filter(r=>model.inPeriod(r.at,'2026-11-11')).length,20000);
+  assert.equal(rows.filter(r=>model.inPeriod(r.at,'2026-11')).length,20000);
+  assert.equal(constructions,1);
+});

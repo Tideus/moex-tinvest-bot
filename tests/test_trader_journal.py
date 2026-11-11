@@ -248,9 +248,13 @@ def test_cli_missing_input_safe_error(tmp_path, monkeypatch, capsys):
 def test_browser_has_no_remote_dependencies_or_order_actions():
     root = Path(__file__).resolve().parents[1] / "deploy/trader-journal"
     html = (root / "index.html").read_text(encoding="utf-8")
-    js = (root / "journal.js").read_text(encoding="utf-8")
-    assert "https://" not in html and "innerHTML" not in js
-    assert "fetch('data.json'" in js and "POST" not in js
+    scripts = ["journal-model.js", "journal-loader.js", "journal.js"]
+    js = "\n".join((root / name).read_text(encoding="utf-8") for name in scripts)
+    assert "https://" not in html and "https://" not in js and "innerHTML" not in js
+    assert "fetchImpl('data.json'" in js and "POST" not in js
+    assert "credentials:'same-origin'" in js
+    for name in scripts:
+        assert f'src="{name}"' in html
 
 
 @pytest.mark.parametrize("side,value,expected", [("BUY", "3100", "100"), ("SELL", "-2900", "100")])

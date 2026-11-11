@@ -1,11 +1,12 @@
 'use strict';
 const M = JournalModel;
+const timeFormatter = new Intl.DateTimeFormat('ru-RU', {timeZone:'Europe/Moscow',day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'});
 let report, shown = [], signalPage = 0;
 const $ = id => document.getElementById(id);
 const money = v => M.numeric(v) === null ? '—' : Number(v).toLocaleString('ru-RU', {maximumFractionDigits: 2});
 const signed = (v, precision=2) => M.numeric(v) === null ? '—' : (Number(v)>0?'+':'') + Number(v).toLocaleString('ru-RU',{maximumFractionDigits:precision});
 const color = v => M.numeric(v) === null ? '' : Number(v) > 0 ? 'pos' : Number(v) < 0 ? 'neg' : '';
-const time = v => v ? new Date(v).toLocaleString('ru-RU', {timeZone:'Europe/Moscow',day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'}) : '—';
+const time = v => v && Number.isFinite(Date.parse(v)) ? timeFormatter.format(new Date(v)) : '—';
 const direction = v => ({BUY:'Покупка',SELL:'Продажа',buy:'Лонг',sell:'Шорт',LONG:'Лонг',SHORT:'Шорт'}[v] || '—');
 function element(tag, text, cls) {
   const e = document.createElement(tag);
@@ -106,10 +107,13 @@ function draw() {
 }
 function resetDetails(){signalPage=0;$('symbol').value='';$('direction').value='';$('outcome').value='';}
 async function load(){
+  if ($('reload').disabled) return;
   $('reload').disabled=true;
+  $('notice').className='';
   try{
-    const r=await fetch('data.json',{cache:'no-store'});if(!r.ok)throw Error('HTTP '+r.status);
-    const data=await r.json();if(data.schema!=='trader-journal-v1'||!Array.isArray(data.streams))throw Error('Версия формата не поддерживается');
+    const data=await JournalLoader.loadReport({onStage:stage=>{
+      $('notice').textContent=(stage==='request'?'Подключаемся к журналу…':'Получаем данные журнала…')+' Ожидание — не более 25 секунд.';
+    }});
     report=data;const previous=$('strategy').value;$('strategy').replaceChildren();
     for(const s of report.streams){const o=element('option',s.strategy.toUpperCase()+' · '+s.environment.toUpperCase()+' · '+s.id.slice(-4));o.value=s.id;$('strategy').append(o);}
     if(report.streams.some(s=>s.id===previous))$('strategy').value=previous;
@@ -119,7 +123,7 @@ async function load(){
     $('notice').textContent=errors.length?'Есть ошибки импорта: '+errors.length+'. Не используйте неполные итоги.':stale?'Выгрузка устарела: '+time(report.generated_at)+' МСК.':'История обновляется каждые 5 минут · интерфейс только для анализа, без отправки заявок.';
     if(report.demo)$('notice').textContent='ДЕМОНСТРАЦИЯ: синтетические данные для проверки интерфейса, не реальные сделки.';
     if(!report.streams.length){$('notice').textContent='Нет импортированной истории. Демо-сделки не подставляются.';shown=[];for(const id of ['overview','metrics','calendar','equity','positions','quality'])$(id).replaceChildren();for(const id of ['trades','operations','signals','symbols','monthlyRows'])table(id,[]);}else draw();
-  }catch(error){$('notice').className='error';$('notice').textContent='Не удалось обновить журнал: '+error.message+'. Ранее загруженные данные могут быть устаревшими.';}
+  }catch(error){$('notice').className='error';$('notice').textContent='Не удалось обновить журнал: '+error.message+'.'+(report?' Показан предыдущий отчёт — он может быть устаревшим.':' Данные пока не загружены.');}
   finally{$('reload').disabled=false;}
 }
 for(const id of ['strategy','date'])$(id).addEventListener('change',()=>{resetDetails();draw();});

@@ -1,6 +1,8 @@
 'use strict';
 // Pure presentation rules: no broker access or trading decisions.
 (function (root) {
+  // Reuse ICU state: rebuilding this for each signal can consume hundreds of MB.
+  const dayFormatter = new Intl.DateTimeFormat('sv-SE',{timeZone:'Europe/Moscow',year:'numeric',month:'2-digit',day:'2-digit'});
   const statuses = {planned:'Включён в план',filter_passed:'Фильтр пройден',filter_rejected:'Не прошёл фильтр',entry_rejected:'Вход отклонён',not_evaluated:'Вход не оценивался',filled:'Исполнено',accepted:'Принято брокером',cancelled:'Отменено',rejected:'Отклонено брокером',partial:'Частично исполнено'};
   const reasons = {price_move:'Недостаточный импульс цены',trade_imbalance:'Нет подтверждения потоком сделок',order_flow:'Нет подтверждения потоком заявок',book_imbalance:'Не подходит дисбаланс стакана',cost_edge:'Ожидаемый эффект ниже порога после расходов',spread_bbo:'Слишком широкий спред',daily_entry_limit:'Достигнут дневной лимит входов',position_limit:'Достигнут лимит позиций',force_flat:'Окно обязательного закрытия',cash:'Недостаточно свободных средств',existing_position:'Позиция уже открыта',short_disabled:'Шорт запрещён настройками',outside_entry_window:'Вне времени новых входов',duplicate_signal:'Повторный сигнал',missing_history:'Не хватает истории',stale_history:'История устарела',ttl_expired:'Истёк срок лимитной заявки — штатная отмена'};
   function numeric(value) {
@@ -9,7 +11,7 @@
   }
   function localDay(value) {
     const at = new Date(value); if (!Number.isFinite(at.getTime())) return '';
-    return new Intl.DateTimeFormat('sv-SE',{timeZone:'Europe/Moscow',year:'numeric',month:'2-digit',day:'2-digit'}).format(at);
+    return dayFormatter.format(at);
   }
   function inPeriod(value, period) { return /^\d{4}-\d{2}(?:-\d{2})?$/.test(period) && localDay(value).startsWith(period); }
   function tradePercent(trade, cost) {
