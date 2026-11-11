@@ -11,6 +11,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from .journal_readmodel import publish
 from .trader_journal import Journal, build_report, digest, encoded, number, timestamp
 
 
@@ -250,6 +251,15 @@ def main() -> int:
         status = import_artifacts(config, journal)
         report = build_report(journal.latest())
         report["import"] = status
+        publish(
+            report,
+            Path(
+                config.get(
+                    "readmodel",
+                    str(Path(config["output"]).parent / "readmodel" / "readmodel.sqlite3"),
+                )
+            ),
+        )
         atomic(Path(config["output"]) / "data.json", encoded(report))
         print(
             f"Journal refreshed: streams={len(report['streams'])}, errors={len(status['errors'])}"

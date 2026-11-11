@@ -6,6 +6,7 @@ import json
 import time
 from pathlib import Path
 from urllib.error import HTTPError
+from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 root = "https://breakwood.ru/journal/"
@@ -87,3 +88,32 @@ for path in ("journal.sqlite3", "bot.env", "receipts/", "config.json", "htpasswd
     print("PASS: private file unavailable:", path)
 assert get("", True, "POST")[0] == 403
 print("PASS: write method forbidden")
+for endpoint in ("catalog", "health", "summary", "trades", "signals"):
+    assert get("api/" + endpoint)[0] == 401
+assert get("api/catalog", True, "POST")[0] == 403
+assert get("api/sql", True)[0] == 404
+assert get("api/health", True)[0] == 200
+status, raw, _ = get("api/catalog", True)
+assert status == 200
+catalog = json.loads(raw)
+assert catalog["schema"] == "trader-journal-api-v1"
+print("PASS: authenticated API catalog", len(raw), "bytes")
+for stream in catalog["streams"]:
+    assert not {"signals", "operations", "trades", "equity"} & set(stream)
+    params = {
+        "stream": stream["id"],
+        "period": stream["dates"][-1],
+        "generation": catalog["generation"],
+    }
+    sizes = {}
+    for endpoint in ("summary", "trades", "signals"):
+        status, body, _ = get("api/" + endpoint + "?" + urlencode(params), True)
+        assert status == 200
+        data = json.loads(body)
+        assert data["generation"] == catalog["generation"]
+        sizes[endpoint] = len(body)
+        if endpoint != "summary":
+            assert len(data["items"]) <= 50
+    assert get("api/trades?" + urlencode(params | {"limit": "101"}), True)[0] == 400
+    assert get("api/trades?" + urlencode(params | {"generation": "old"}), True)[0] == 409
+    print("PASS: API summary/pages/limits/snapshot binding:", stream["strategy"], sizes)

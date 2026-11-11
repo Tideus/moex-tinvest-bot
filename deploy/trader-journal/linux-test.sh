@@ -5,7 +5,7 @@ mount --make-rprivate /
 mkdir -p work/control-fixture
 chmod 0777 work work/control-fixture
 mount --bind "$PWD/work/control-fixture" /var/lib/moex-tinvest-control
-for path in /etc/moex-tinvest-bot /var/lib/moex-tinvest-bot /opt/moex-tinvest-bot; do
+for path in /etc/moex-tinvest-bot /var/lib/moex-tinvest-bot /opt/moex-tinvest-bot /etc/moex-trader-journal /var/lib/moex-trader-journal /opt/moex-trader-journal; do
   mount -t tmpfs tmpfs "$path"
 done
 ip link set lo up
@@ -13,6 +13,7 @@ export PYTHONDONTWRITEBYTECODE=1
 export PYTHONPATH="$PWD/src:$PWD/scripts/research:/var/tmp/moex-rc9-test.ndrJt5Ty/.test-venv/lib/python3.12/site-packages:/opt/moex-pr6-shadow.HG5iukXr/venv/lib/python3.12/site-packages"
 export MYPY_CACHE_DIR="$PWD/work/mypy"
 export RUFF_CACHE_DIR="$PWD/work/ruff"
+export JOURNAL_TEST_GUNICORN="$(cd .. && pwd)/api-venv/bin/gunicorn"
 runuser -u nobody -- git init -q
 runuser -u nobody -- chmod +x scripts/ubuntu/*.sh
 runuser -u nobody -- git add .
@@ -27,6 +28,10 @@ chmod 0755 work/control-fixture
 install -o root -g nogroup -m 0660 /dev/null work/control-fixture/prod-session.lock
 runuser -u nobody -- bash scripts/ubuntu/test-deployment.sh
 systemd-analyze verify deploy/trader-journal/moex-trader-journal.service deploy/trader-journal/moex-trader-journal.timer
+cp deploy/trader-journal/moex-trader-journal-api.service work/moex-trader-journal-api.service
+sed -i "s@/opt/moex-trader-journal/.venv/bin/gunicorn@$JOURNAL_TEST_GUNICORN@g" work/moex-trader-journal-api.service
+chmod 0644 work/moex-trader-journal-api.service
+systemd-analyze verify work/moex-trader-journal-api.service
 DESTDIR="$PWD/work/journal-stage" bash deploy/trader-journal/install.sh
 [[ $(stat -c %a work/journal-stage/etc/moex-trader-journal/access.txt) == 600 ]]
 [[ $(stat -c %a work/journal-stage/etc/moex-trader-journal/htpasswd) == 640 ]]

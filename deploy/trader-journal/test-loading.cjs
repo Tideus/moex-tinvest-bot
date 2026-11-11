@@ -1,13 +1,13 @@
 'use strict';
 const test=require('node:test'),assert=require('node:assert/strict');
 const {loadReport}=require('./journal-loader.js');
-const report={schema:'trader-journal-v1',streams:[],generated_at:new Date().toISOString()};
+const report={schema:'trader-journal-api-v1',generation:'test',streams:[],generated_at:new Date().toISOString()};
 const response=data=>({ok:true,json:async()=>data});
 
 test('successful read uses same-origin auth, no cache and reports both stages',async()=>{
   const stages=[];let signal;
   const result=await loadReport({fetchImpl:async(url,options)=>{
-    assert.equal(url,'data.json');assert.equal(options.cache,'no-store');
+    assert.equal(url,'api/catalog');assert.equal(options.cache,'no-store');
     assert.equal(options.credentials,'same-origin');signal=options.signal;
     return response(report);
   },onStage:s=>stages.push(s)});
@@ -57,11 +57,20 @@ test('UI leaves loading state after timeout and allows explicit retry',async()=>
   vm.createContext(context);vm.runInContext(fs.readFileSync(require.resolve('./journal.js'),'utf8'),context);
   assert.equal(get('reload').disabled,true);assert.match(get('notice').textContent,/Подключаемся/);
   await new Promise(resolve=>setTimeout(resolve,30));
-  assert.equal(get('reload').disabled,false);assert.match(get('notice').textContent,/Данные пока не загружены/);
+  assert.equal(get('reload').disabled,false);assert.match(get('notice').textContent,/не загружены/);
   fail=false;await get('reload').listeners.click();
   assert.equal(get('reload').disabled,false);assert.match(get('notice').textContent,/Нет импортированной истории/);
   fail=true;await get('reload').listeners.click();
-  assert.match(get('notice').textContent,/предыдущий отчёт/);
+  assert.match(get('notice').textContent,/могут быть устаревшими/);
+});
+
+test('API route allowlist and changed snapshot are explicit',async()=>{
+  const {loadJSON}=require('./journal-loader.js');
+  await assert.rejects(loadJSON('../bot.env'),/Неизвестный/);
+  await assert.rejects(loadJSON('summary',{}, {fetchImpl:async()=>({status:409,ok:false})}),/История обновилась/);
+  await loadJSON('signals',{stream:'long:hash',period:'2026-11',generation:'abc',limit:'50'}, {fetchImpl:async url=>{
+    assert.ok(url.startsWith('api/signals?'));assert.ok(url.includes('stream=long%3Ahash'));return response(report);
+  }});
 });
 
 test('installed HTML loads loader before UI and installer includes it',()=>{

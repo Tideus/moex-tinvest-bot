@@ -1,7 +1,7 @@
 'use strict';
 const M = JournalModel;
 const timeFormatter = new Intl.DateTimeFormat('ru-RU', {timeZone:'Europe/Moscow',day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'});
-let report, shown = [], signalPage = 0;
+let report, shown = [], pages = {}, viewEpoch = 0, operationQuality = {}, equityLoaded = false, viewReady = false;
 const $ = id => document.getElementById(id);
 const money = v => M.numeric(v) === null ? '—' : Number(v).toLocaleString('ru-RU', {maximumFractionDigits: 2});
 const signed = (v, precision=2) => M.numeric(v) === null ? '—' : (Number(v)>0?'+':'') + Number(v).toLocaleString('ru-RU',{maximumFractionDigits:precision});
@@ -32,10 +32,10 @@ function dates() { return current()?.dates || []; }
 function overview(period,cost) {
   $('overview').replaceChildren();
   for (const stream of report.streams) {
-    const p=stream.periods[period], button=element('button',undefined,'strategy-card'+(stream.id===$('strategy').value?' selected':''));
+    const p=stream.periods?.[period], button=element('button',undefined,'strategy-card'+(stream.id===$('strategy').value?' selected':''));
     button.setAttribute('aria-pressed',String(stream.id===$('strategy').value));
     button.append(element('span',stream.strategy.toUpperCase()+' · '+stream.environment.toUpperCase(),'eyebrow'),element('strong',signed(p?.[cost])+' ₽',color(p?.[cost])),element('small',p?p.closures+' закрытий · счёт '+signed(p.account?.return_pct,4)+'% net':'Нет данных за этот период'));
-    button.addEventListener('click',()=>{$('strategy').value=stream.id;resetDetails();draw();}); $('overview').append(button);
+    button.addEventListener('click',()=>{$('strategy').value=stream.id;refreshView();}); $('overview').append(button);
   }
 }
 function calendar(stream,period,cost) {
@@ -47,7 +47,7 @@ function calendar(stream,period,cost) {
     const d=month+'-'+String(day).padStart(2,'0'),p=stream.periods[d],b=element('button',String(day),'day'+(d===period?' active':''));
     b.append(element('strong',p?signed(p[cost]):'нет данных',color(p?.[cost]))); b.disabled=!p;
     b.setAttribute('aria-label',d+': '+(p?signed(p[cost])+' рублей':'нет данных'));
-    b.addEventListener('click',()=>{$('mode').value='day';$('date').type='date';$('date').value=d;resetDetails();draw();}); cal.append(b);
+    b.addEventListener('click',()=>{$('mode').value='day';$('date').type='date';$('date').value=d;refreshView();}); cal.append(b);
   }
 }
 function equity(points,account) {
@@ -62,23 +62,27 @@ function equity(points,account) {
   $('window').textContent=account?.window?'Окно оценки: '+account.window.map(time).join(' → ')+(account.coverage?' · операции покрыты выгрузкой брокера':' · полнота операций не подтверждена'):'Нет полного окна оценки. Доходность счёта не рассчитана.';
 }
 function detailTables(stream,period,cost) {
-  const all=stream.trades.filter(t=>M.inPeriod(t.closed_at,period)),oldSymbol=$('symbol').value;
+  const symbols=(stream.periods[period]?.by_symbol||[]).map(t=>t.symbol),oldSymbol=$('symbol').value;
   $('symbol').replaceChildren(element('option','Все бумаги'));$('symbol').firstChild.value='';
-  for(const symbol of [...new Set(all.map(t=>t.symbol))].sort()){const o=element('option',symbol);o.value=symbol;$('symbol').append(o);}
-  if(all.some(t=>t.symbol===oldSymbol))$('symbol').value=oldSymbol;
-  shown=M.selectTrades(stream.trades,period,$('symbol').value,$('direction').value,$('outcome').value,cost);
-  $('tradeCount').textContent='Показано '+shown.length+' из '+all.length+' закрытий. CSV содержит только отфильтрованные строки.';
+  for(const symbol of symbols){const o=element('option',symbol);o.value=symbol;$('symbol').append(o);}
+  if(symbols.includes(oldSymbol))$('symbol').value=oldSymbol;
+  shown=pages.trades?.items||[];
+  $('tradeCount').textContent=pages.trades?'На странице '+shown.length+' · по фильтру '+pages.trades.total+' · за период '+pages.trades.period_total+'. CSV выгружает все строки по фильтру.':'Загружаем закрытия…';
   $('pnlHeading').textContent='Результат ₽ · '+cost;$('pctHeading').textContent='% входа · '+cost;
   table('trades',shown.map(t=>[t.symbol,direction(t.direction),time(t.opened_at),time(t.closed_at),money(t.quantity),money(t.entry),money(t.exit),signed(t[cost]),signed(M.tradePercent(t,cost),4)+' %']),[7,8]);
-  const ops=stream.operations.filter(o=>M.inPeriod(o.at,period)).sort((a,b)=>b.at.localeCompare(a.at));$('operationCount').textContent='· '+ops.length;
+  const ops=pages.operations?.items||[];$('operationCount').textContent=pages.operations?'· '+pages.operations.total:'· по запросу';
   table('operations',ops.slice(0,100).map(o=>[time(o.at),o.symbol,direction(o.side),money(o.quantity),money(o.gross),money(o.commission)]));
-  const signals=stream.signals.filter(o=>M.inPeriod(o.at,period)).sort((a,b)=>b.at.localeCompare(a.at));signalPage=Math.min(signalPage,Math.max(0,Math.ceil(signals.length/100)-1));
-  table('signals',signals.slice(signalPage*100,(signalPage+1)*100).map(o=>[time(o.at),o.symbol,direction(o.side),M.status(o.status),(o.reasons||[]).map(M.reason).join('; ')||'—']));
-  $('signalPage').textContent='Записей: '+signals.length+' · страница '+(signalPage+1)+' из '+Math.max(1,Math.ceil(signals.length/100));
-  $('signalPrev').disabled=signalPage===0;$('signalNext').disabled=(signalPage+1)*100>=signals.length;
+  const signals=pages.signals?.items||[];
+  table('signals',signals.map(o=>[time(o.at),o.symbol,direction(o.side),M.status(o.status),(o.reasons||[]).map(M.reason).join('; ')||'—']));
+  for(const [kind,prefix] of [['trades','trade'],['signals','signal'],['operations','operation']]){
+    const page=pages[kind];
+    $(prefix+'Page').textContent=page?.items?'Записей: '+page.total+' · страница '+(page.index+1):'Данные ещё не загружены';
+    $(prefix+'Prev').disabled=!page||page.busy||page.index===0;
+    $(prefix+'Next').disabled=!page||page.busy||!page.next_cursor;
+  }
 }
 function draw() {
-  const s=current();if(!s)return;const period=$('date').value,cost=$('cost').value;
+  const s=current();if(!viewReady||!s?.periods)return;const period=$('date').value,cost=$('cost').value;
   if(!/^\d{4}-\d{2}(?:-\d{2})?$/.test(period))return;
   const stats=s.periods[period],a=stats?.account,summary=stats?.summary?.[cost];
   $('dateLabel').textContent=$('mode').value==='month'?'Месяц':'Дата';$('periodTitle').textContent=s.strategy.toUpperCase()+' / '+period;
@@ -87,7 +91,8 @@ function draw() {
   metric('Доходность счёта · net',signed(a?.return_pct,4)+' %','Modified Dietz · указанное ниже окно',color(a?.return_pct));
   metric('Прибыльных закрытий',money(summary?.win_rate_pct)+' %',(summary?.wins??'—')+' в плюс / '+(summary?.losses??'—')+' в минус / '+(summary?.flat??'—')+' без результата');
   metric('Profit factor',summary?.profit_factor_state==='no_losses'?'Нет убытков':money(summary?.profit_factor),'Прибыль / модуль убытков · FIFO-части');
-  const points=s.equity.filter(p=>M.inPeriod(p.at,period));calendar(s,period,cost);equity(points,a);
+  const points=s.equity||[];calendar(s,period,cost);equity(points,a);
+  if(!equityLoaded)$('equity').textContent='График загружается отдельно по кнопке «Показать график».';
   $('monthlyPanel').hidden=$('mode').value!=='month';const days=s.dates.filter(d=>d.startsWith(period.slice(0,7)));
   $('monthlyCoverage').textContent=days.length?'Есть записи за '+days[0]+' — '+days.at(-1)+'. Это не подтверждение полного месяца. Закрытия и доходность счёта используют разные основания расчёта.':'Нет истории за выбранный месяц.';
   table('monthlyRows',days.map(d=>{const p=s.periods[d],m=p.summary?.[cost];return[d,p.closures,(m?.wins??'—')+' / '+(m?.losses??'—')+' / '+(m?.flat??'—'),signed(p[cost]),signed(p.account?.return_pct,4)+' %',p.account?.coverage?'Подтверждено в окне':'Недостаточно данных'];}),[3,4]);
@@ -98,14 +103,68 @@ function draw() {
   $('positions').append(element('p','Текущий срез: '+time(s.observed_at)+' · переоценка до комиссий, не относится к выбранному прошлому периоду.','hint'));
   $('quality').replaceChildren();for(const w of s.warnings)$('quality').append(element('p',w,'neg'));
   if(!s.warnings.length)$('quality').append(element('p','✓ Контроль количеств пройден. Покрытие периода указано отдельно.','pos'));
-  const ops=s.operations.filter(o=>M.inPeriod(o.at,period)),missing=ops.filter(o=>M.numeric(o.commission)===null).length,zero=ops.filter(o=>M.numeric(o.commission)===0).length;
+  const {missing=0,zero=0}=operationQuality;
   if(missing)$('quality').append(element('p',missing+' операций без известной комиссии: net может быть недоступен.','neg'));
   if(zero)$('quality').append(element('p',zero+' операций с нулевой комиссией в источнике. Учитывайте это при сравнении с PROD.','warn'));
-  $('quality').append(element('p','Капитал выбранного периода: '+money(points.at(-1)?.equity)+' ₽ · '+time(points.at(-1)?.at),'hint'));
+  if(equityLoaded)$('quality').append(element('p','Капитал выбранного периода: '+money(points.at(-1)?.equity)+' ₽ · '+time(points.at(-1)?.at),'hint'));
   if(Date.now()-Date.parse(s.observed_at)>20*60*1000)$('quality').append(element('p','Снимок этого счёта старше 20 минут.','warn'));
   $('updated').textContent='Сформировано '+time(report.generated_at)+' МСК';
 }
-function resetDetails(){signalPage=0;$('symbol').value='';$('direction').value='';$('outcome').value='';}
+function resetDetails(){pages={};equityLoaded=false;$('symbol').value='';$('direction').value='';$('outcome').value='';}
+function parameters(kind){
+  const p={stream:$('strategy').value,period:$('date').value,generation:report.generation};
+  if(kind==='trades')Object.assign(p,{symbol:$('symbol').value,direction:$('direction').value,outcome:$('outcome').value,cost:$('cost').value});
+  return p;
+}
+function errorNotice(error){$('notice').className='error';$('notice').textContent='Не удалось обновить журнал: '+error.message+'. Данные этого запроса не загружены; уже показанные сведения могут быть устаревшими.';}
+function readyNotice(){
+  const errors=report.import?.errors||[],stale=Date.now()-Date.parse(report.generated_at)>20*60*1000;
+  $('notice').className=errors.length||stale?'error':'';
+  $('notice').textContent=report.demo?'ДЕМОНСТРАЦИЯ: синтетические данные, не реальные сделки.':errors.length?'Есть ошибки импорта: '+errors.length+'. Не используйте неполные итоги.':stale?'Выгрузка устарела: '+time(report.generated_at)+' МСК.':'Сводка и страницы из SQLite · единый срез данных · только чтение.';
+}
+async function refreshView(){
+  const epoch=++viewEpoch;viewReady=false;resetDetails();
+  for(const id of ['overview','metrics','calendar','equity','positions','quality'])$(id).replaceChildren();
+  for(const id of ['trades','operations','signals','symbols','monthlyRows'])table(id,[]);
+  $('download').disabled=true;$('loadEquity').disabled=true;
+  if(!current())return;
+  $('notice').textContent='Получаем сводку и первую страницу…';
+  try{
+    const [bundle,first]=await Promise.all([JournalLoader.loadJSON('summary',parameters('summary')),JournalLoader.loadJSON('trades',{...parameters('trades'),limit:'50'})]);
+    if(epoch!==viewEpoch)return;
+    for(const item of bundle.overview){const s=report.streams.find(x=>x.id===item.id);s.periods={[$('date').value]:item.stats};}
+    Object.assign(current(),bundle.stream,{equity:[]});operationQuality=bundle.operation_quality;
+    pages.trades={...first,index:0,cursors:[''],busy:false};viewReady=true;draw();readyNotice();
+    $('download').disabled=false;$('loadEquity').disabled=false;
+    for(const kind of ['signals','operations'])if($(kind+'Details').open)void fetchPage(kind);
+  }catch(error){if(epoch===viewEpoch)errorNotice(error);}
+}
+async function fetchPage(kind,step=0,reset=false){
+  const epoch=viewEpoch;
+  if(!viewReady||!current()?.periods)return;
+  if(reset)delete pages[kind];
+  let page=pages[kind];if(page?.busy)return;
+  if(!page)pages[kind]=page={index:0,cursors:['']};
+  const index=page.index+step,cursor=step>0?page.next_cursor:page.cursors[index]||'';
+  if(index<0||(step>0&&!cursor))return;
+  page.busy=true;draw();
+  try{
+    const result=await JournalLoader.loadJSON(kind,{...parameters(kind),cursor,limit:kind==='trades'?'50':'100'});
+    if(epoch!==viewEpoch||pages[kind]!==page)return;
+    page.cursors[index]=cursor;Object.assign(page,result,{index,busy:false});draw();
+  }catch(error){if(epoch===viewEpoch&&pages[kind]===page)errorNotice(error);}
+  finally{page.busy=false;if(epoch===viewEpoch&&pages[kind]===page)draw();}
+}
+async function allRows(kind,params,epoch){
+  const result=[];let cursor='';
+  do{
+    const page=await JournalLoader.loadJSON(kind,{...params,cursor,limit:'100'});
+    if(epoch!==viewEpoch)throw new Error('Выбран другой период. Повторите запрос');
+    if(page.total>20000)throw new Error('Более 20 000 строк. Выберите меньший период');
+    result.push(...page.items);cursor=page.next_cursor;
+  }while(cursor);
+  return result;
+}
 async function load(){
   if ($('reload').disabled) return;
   $('reload').disabled=true;
@@ -118,22 +177,25 @@ async function load(){
     for(const s of report.streams){const o=element('option',s.strategy.toUpperCase()+' · '+s.environment.toUpperCase()+' · '+s.id.slice(-4));o.value=s.id;$('strategy').append(o);}
     if(report.streams.some(s=>s.id===previous))$('strategy').value=previous;
     if(!$('date').value)$('date').value=M.changePeriod('',$('mode').value,dates());
-    const errors=report.import?.errors||[],stale=Date.now()-Date.parse(report.generated_at)>20*60*1000;
-    $('notice').className=errors.length||stale?'error':'';
-    $('notice').textContent=errors.length?'Есть ошибки импорта: '+errors.length+'. Не используйте неполные итоги.':stale?'Выгрузка устарела: '+time(report.generated_at)+' МСК.':'История обновляется каждые 5 минут · интерфейс только для анализа, без отправки заявок.';
-    if(report.demo)$('notice').textContent='ДЕМОНСТРАЦИЯ: синтетические данные для проверки интерфейса, не реальные сделки.';
-    if(!report.streams.length){$('notice').textContent='Нет импортированной истории. Демо-сделки не подставляются.';shown=[];for(const id of ['overview','metrics','calendar','equity','positions','quality'])$(id).replaceChildren();for(const id of ['trades','operations','signals','symbols','monthlyRows'])table(id,[]);}else draw();
-  }catch(error){$('notice').className='error';$('notice').textContent='Не удалось обновить журнал: '+error.message+'.'+(report?' Показан предыдущий отчёт — он может быть устаревшим.':' Данные пока не загружены.');}
+    if(!report.streams.length){++viewEpoch;viewReady=false;resetDetails();$('download').disabled=true;$('loadEquity').disabled=true;$('notice').textContent='Нет импортированной истории. Демо-сделки не подставляются.';shown=[];for(const id of ['overview','metrics','calendar','equity','positions','quality'])$(id).replaceChildren();for(const id of ['trades','operations','signals','symbols','monthlyRows'])table(id,[]);}else await refreshView();
+  }catch(error){errorNotice(error);}
   finally{$('reload').disabled=false;}
 }
-for(const id of ['strategy','date'])$(id).addEventListener('change',()=>{resetDetails();draw();});
-for(const id of ['cost','symbol','direction','outcome'])$(id).addEventListener('change',draw);
-$('signalPrev').addEventListener('click',()=>{signalPage--;draw();});$('signalNext').addEventListener('click',()=>{signalPage++;draw();});
-$('mode').addEventListener('change',()=>{const value=M.changePeriod($('date').value,$('mode').value,dates());$('date').type=$('mode').value==='month'?'month':'date';$('date').value=value;resetDetails();draw();});
-for(const [id,amount] of [['periodPrev',-1],['periodNext',1]])$(id).addEventListener('click',()=>{$('date').value=M.movePeriod($('date').value,$('mode').value,amount);resetDetails();draw();});
+for(const id of ['strategy','date'])$(id).addEventListener('change',refreshView);
+for(const id of ['cost','symbol','direction','outcome'])$(id).addEventListener('change',()=>fetchPage('trades',0,true));
+for(const [kind,prefix] of [['trades','trade'],['signals','signal'],['operations','operation']])for(const [suffix,step] of [['Prev',-1],['Next',1]])$(prefix+suffix).addEventListener('click',()=>fetchPage(kind,step));
+for(const kind of ['signals','operations'])$(kind+'Details').addEventListener('toggle',()=>{if($(kind+'Details').open&&!pages[kind]?.items)void fetchPage(kind);});
+$('mode').addEventListener('change',()=>{const value=M.changePeriod($('date').value,$('mode').value,dates());$('date').type=$('mode').value==='month'?'month':'date';$('date').value=value;refreshView();});
+for(const [id,amount] of [['periodPrev',-1],['periodNext',1]])$(id).addEventListener('click',()=>{$('date').value=M.movePeriod($('date').value,$('mode').value,amount);refreshView();});
 $('reload').addEventListener('click',load);$('printReport').addEventListener('click',()=>window.print());
-$('download').addEventListener('click',()=>{
-  const rows=[['symbol','direction','opened_at','closed_at','quantity','entry','exit','gross','fees','net','gross_return_pct','net_return_pct'],...shown.map(t=>[t.symbol,t.direction,t.opened_at,t.closed_at,t.quantity,t.entry,t.exit,t.gross,t.fees,t.net,t.return_pct,M.tradePercent(t,'net')])];
+$('loadEquity').addEventListener('click',async()=>{const epoch=viewEpoch;$('loadEquity').disabled=true;try{const points=await allRows('equity',parameters('equity'),epoch);current().equity=points;equityLoaded=true;draw();}catch(e){if(epoch===viewEpoch)errorNotice(e);}finally{if(epoch===viewEpoch)$('loadEquity').disabled=false;}});
+$('download').addEventListener('click',async()=>{
+  const epoch=viewEpoch,params=parameters('trades');$('download').disabled=true;
+  try{
+  const selected=await allRows('trades',params,epoch);
+  if(JSON.stringify(params)!==JSON.stringify(parameters('trades')))throw new Error('Фильтр изменился. Повторите экспорт');
+  const rows=[['symbol','direction','opened_at','closed_at','quantity','entry','exit','gross','fees','net','gross_return_pct','net_return_pct'],...selected.map(t=>[t.symbol,t.direction,t.opened_at,t.closed_at,t.quantity,t.entry,t.exit,t.gross,t.fees,t.net,t.return_pct,M.tradePercent(t,'net')])];
   const blob=new Blob(['\ufeff'+rows.map(r=>r.map(M.csvCell).join(';')).join('\r\n')],{type:'text/csv;charset=utf-8'}),url=URL.createObjectURL(blob),a=element('a');a.href=url;a.download='journal-'+(current()?.strategy||'unknown')+'-'+$('date').value+'.csv';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
+  }catch(e){if(epoch===viewEpoch)errorNotice(e);}finally{if(epoch===viewEpoch)$('download').disabled=false;}
 });
 load();

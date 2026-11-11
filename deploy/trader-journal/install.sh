@@ -17,6 +17,7 @@ install -d -m 0755 "$target" "$target/src"
 install -d -o root -g www-data -m 0750 "$settings"
 install -d -o moexbot -g www-data -m 0750 "$state"
 install -d -o moexbot -g www-data -m 2750 "$state/public"
+install -d -o moexbot -g www-data -m 2750 "$state/readmodel"
 install -d -o moexbot -g moexbot -m 0700 "$state/receipts"
 cp -a "$source_dir/src/moex_bot" "$target/src/"
 chown -R root:root "$target/src"
@@ -39,12 +40,22 @@ chmod 0640 "$settings/htpasswd"
 install -d -m 0755 "$prefix/etc/nginx/snippets" "$prefix/etc/systemd/system"
 install -m 0644 "$source_dir/deploy/trader-journal/nginx.conf" "$prefix/etc/nginx/snippets/moex-trader-journal.conf"
 install -m 0644 "$source_dir/deploy/trader-journal/moex-trader-journal."{service,timer} "$prefix/etc/systemd/system/"
-(cd "$target" && sha256sum src/moex_bot/trader_journal.py src/moex_bot/journal_import.py) > "$target/SHA256SUMS"
+install -m 0644 "$source_dir/deploy/trader-journal/moex-trader-journal-api.service" "$prefix/etc/systemd/system/"
+install -m 0644 "$source_dir/deploy/trader-journal/requirements-api.txt" "$target/requirements-api.txt"
+(cd "$target" && sha256sum src/moex_bot/trader_journal.py src/moex_bot/journal_import.py src/moex_bot/journal_readmodel.py src/moex_bot/journal_api.py) > "$target/SHA256SUMS"
 if [[ -n "$prefix" ]]; then
   echo 'Staged isolated journal; no systemd/nginx changes.'
   exit 0
 fi
+getent passwd moexjournal >/dev/null || useradd --system --no-create-home --shell /usr/sbin/nologin moexjournal
+[[ -x "$target/.venv/bin/python" ]] || /usr/bin/python3 -m venv "$target/.venv"
+pip_args=(--disable-pip-version-check --require-hashes --only-binary=:all:)
+if [[ -n "${JOURNAL_WHEELHOUSE:-}" ]]; then
+  pip_args+=(--no-index --find-links "$JOURNAL_WHEELHOUSE")
+fi
+"$target/.venv/bin/python" -m pip install "${pip_args[@]}" -r "$target/requirements-api.txt"
 systemd-analyze verify "$prefix/etc/systemd/system/moex-trader-journal.service" "$prefix/etc/systemd/system/moex-trader-journal.timer"
+systemd-analyze verify "$prefix/etc/systemd/system/moex-trader-journal-api.service"
 systemctl daemon-reload
 echo 'Installed isolated journal. Add nginx snippet inside breakwood.ru HTTPS server, test nginx, then enable timer.'
 echo 'Private credentials: /etc/moex-trader-journal/access.txt (root only). No trading services changed.'

@@ -1,0 +1,32 @@
+[Unit]
+Description=Private read-only SQLite trading journal API
+After=network.target
+
+[Service]
+User=moexjournal
+Group=www-data
+WorkingDirectory=/opt/moex-trader-journal
+Environment=PYTHONPATH=/opt/moex-trader-journal/src
+Environment=JOURNAL_READMODEL=/var/lib/moex-trader-journal/readmodel/readmodel.sqlite3
+Environment=PYTHONDONTWRITEBYTECODE=1
+ExecStart=/opt/moex-trader-journal/.venv/bin/gunicorn --no-control-socket --workers 2 --worker-class sync --bind unix:/run/moex-trader-journal-api/api.sock --umask 0007 --timeout 15 --max-requests 1000 --max-requests-jitter 50 moex_bot.journal_api:application
+RuntimeDirectory=moex-trader-journal-api
+RuntimeDirectoryMode=0750
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=20
+UMask=0027
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+InaccessiblePaths=/etc/moex-tinvest-bot /var/lib/moex-tinvest-bot /opt/moex-tinvest-bot /etc/moex-trader-journal /var/lib/moex-trader-journal/receipts /var/lib/moex-trader-journal/journal.sqlite3
+ReadOnlyPaths=/var/lib/moex-trader-journal/readmodel
+RestrictAddressFamilies=AF_UNIX
+IPAddressDeny=any
+MemoryMax=192M
+CPUQuota=50%
+
+[Install]
+WantedBy=multi-user.target

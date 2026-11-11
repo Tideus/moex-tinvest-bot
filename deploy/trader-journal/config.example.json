@@ -3,6 +3,7 @@
   "universe": "/opt/moex-tinvest-bot/config/universe.json",
   "collector_dir": "/var/lib/moex-trader-journal/receipts",
   "database": "/var/lib/moex-trader-journal/journal.sqlite3",
+  "readmodel": "/var/lib/moex-trader-journal/readmodel/readmodel.sqlite3",
   "output": "/var/lib/moex-trader-journal/public",
   "history_from": "2026-10-31T00:00:00+00:00",
   "profiles": [
