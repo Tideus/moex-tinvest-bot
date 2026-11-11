@@ -152,6 +152,9 @@ def match_trades(
                     "fees": None if fees is None else str(fees),
                     "net": None if fees is None else str(pnl - fees),
                     "return_pct": str(pnl / (entry["price"] * take) * 100),
+                    "net_return_pct": None
+                    if fees is None
+                    else str((pnl - fees) / (entry["price"] * take) * 100),
                 }
             )
             remaining -= take
@@ -220,6 +223,36 @@ def period_result(
     }
 
 
+def closed_summary(trades: list[dict[str, Any]], *, complete: bool) -> dict[str, Any]:
+    """Describe FIFO closures, never sum trade percentages or infer missing costs."""
+    result: dict[str, Any] = {"closures": len(trades)}
+    for mode in ("gross", "net"):
+        known = complete and all(t[mode] is not None for t in trades)
+        values = [number(t[mode]) for t in trades] if known else []
+        profits = sum((v for v in values if v > 0), ZERO)
+        losses = -sum((v for v in values if v < 0), ZERO)
+        wins = sum(v > 0 for v in values)
+        result[mode] = {
+            "pnl": str(sum(values, ZERO)) if known else None,
+            "wins": wins if known else None,
+            "losses": sum(v < 0 for v in values) if known else None,
+            "flat": sum(v == 0 for v in values) if known else None,
+            "win_rate_pct": str(Decimal(wins) / len(values) * 100) if values else None,
+            "profit_factor": str(profits / losses) if known and losses else None,
+            "profit_factor_state": "unknown"
+            if not known
+            else "no_closures"
+            if not values
+            else "no_losses"
+            if not losses
+            else "calculated",
+            "fees": str(sum((number(t["fees"]) for t in trades), ZERO))
+            if complete and all(t["fees"] is not None for t in trades)
+            else None,
+        }
+    return result
+
+
 def build_report(events: list[dict[str, Any]]) -> dict[str, Any]:
     streams: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for event in events:
@@ -268,6 +301,16 @@ def build_report(events: list[dict[str, Any]]) -> dict[str, Any]:
                 "closures": len(selected),
                 "wins": sum(number(t["gross"]) > 0 for t in selected),
                 "account": period_result(snapshots, operations, period),
+                "summary": closed_summary(selected, complete=not warnings),
+                "by_symbol": [
+                    {
+                        "symbol": symbol,
+                        **closed_summary(
+                            [t for t in selected if t["symbol"] == symbol], complete=not warnings
+                        ),
+                    }
+                    for symbol in sorted({t["symbol"] for t in selected})
+                ],
             }
             if warnings:
                 stats[period]["gross"] = stats[period]["net"] = None

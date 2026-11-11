@@ -21,7 +21,7 @@ install -d -o moexbot -g moexbot -m 0700 "$state/receipts"
 cp -a "$source_dir/src/moex_bot" "$target/src/"
 chown -R root:root "$target/src"
 chmod -R a+rX,go-w "$target/src"
-install -m 0644 "$source_dir/deploy/trader-journal/"{index.html,journal.js,journal.css} "$state/public/"
+install -m 0644 "$source_dir/deploy/trader-journal/"{index.html,journal.js,journal-model.js,journal.css} "$state/public/"
 if [[ ! -f "$settings/config.json" ]]; then
   install -m 0644 "$source_dir/deploy/trader-journal/config.example.json" "$settings/config.json"
 fi

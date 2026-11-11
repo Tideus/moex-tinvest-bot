@@ -10,6 +10,7 @@ from moex_bot.journal_import import binding, import_artifacts, main, plan_events
 from moex_bot.trader_journal import (
     Journal,
     build_report,
+    closed_summary,
     match_trades,
     number,
     period_result,
@@ -364,3 +365,68 @@ def test_analysis_provenance_hashed_once_per_plan(monkeypatch):
     plan = plan_events(raw, events([])[0])
     assert len(plan) == 24 and len(hashed) == 2
     assert {r["input_sha256"] for r in plan} == {original(raw["analysis_input"])}
+
+
+def test_net_percent_can_reverse_small_gross_profit():
+    result, _ = trades([operation(fee="3"), operation("sell", T2, "SELL", "10", "3005", "3")])
+    assert Decimal(result[0]["return_pct"]) > 0
+    assert Decimal(result[0]["net_return_pct"]) == Decimal(-1) / 3000 * 100
+    unknown, _ = trades([operation(fee=None), operation("sell", T2, "SELL", "10", "3005")])
+    assert unknown[0]["net_return_pct"] is None
+
+
+def test_summary_respects_cost_mode_and_zero_losses():
+    rows = [{"gross": "5", "net": "-1", "fees": "6"}]
+    result = closed_summary(rows, complete=True)
+    assert result["gross"]["wins"] == 1 and result["net"]["losses"] == 1
+    assert result["gross"]["profit_factor"] is None
+    assert result["gross"]["profit_factor_state"] == "no_losses"
+    assert result["net"]["profit_factor"] == "0"
+    rows.append({"gross": "-2", "net": "-3", "fees": "1"})
+    result = closed_summary(rows, complete=True)
+    assert result["gross"]["profit_factor"] == "2.5"
+    assert result["gross"]["win_rate_pct"] == "50.0"
+    assert result["net"]["pnl"] == "-4"
+
+
+@pytest.mark.parametrize("complete,net", [(False, "1"), (True, None)])
+def test_summary_does_not_turn_unknowns_into_zero(complete, net):
+    result = closed_summary([{"gross": "2", "net": net, "fees": None}], complete=complete)
+    assert result["net"]["pnl"] is None and result["net"]["wins"] is None
+    assert result["net"]["profit_factor_state"] == "unknown"
+    assert result["gross"]["fees"] is None
+    if not complete:
+        assert result["gross"]["pnl"] is None
+
+
+def test_empty_closures_not_zero_win_rate():
+    summary = closed_summary([], complete=True)
+    assert summary["gross"]["pnl"] == "0"
+    assert summary["gross"]["win_rate_pct"] is None
+    assert summary["gross"]["profit_factor_state"] == "no_closures"
+
+
+def test_month_and_symbol_summary_keep_accounts_separate():
+    records = events([]) + events(
+        [operation(), operation("sell", T2, "SELL", "10", "3100", "1")], at=T2
+    )
+    other = deepcopy(records)
+    for row in other:
+        row["stream"] = "intraday:another"
+        row["strategy"] = "intraday"
+    streams = build_report(records + other)["streams"]
+    assert len(streams) == 2
+    for stream in streams:
+        day = stream["periods"]["2026-11-02"]
+        month = stream["periods"]["2026-11"]
+        assert day["summary"] == month["summary"]
+        assert month["by_symbol"][0]["symbol"] == "SBER"
+        assert Decimal(month["by_symbol"][0]["net"]["pnl"]) == 96
+        assert month["summary"]["closures"] == 1
+
+
+def test_reconciliation_warning_suppresses_new_summary():
+    records = events([]) + events([operation()], at=T2)
+    period = build_report(records)["streams"][0]["periods"]["2026-11"]
+    assert period["summary"]["gross"]["pnl"] is None
+    assert period["summary"]["net"]["win_rate_pct"] is None

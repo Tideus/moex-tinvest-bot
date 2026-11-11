@@ -24,11 +24,11 @@ def get(path, authenticated=False, method="GET"):
         return error.code, b"", error.headers
 
 
-for path in ("", "data.json", "journal.js"):
+for path in ("", "data.json", "journal.js", "journal-model.js"):
     status, _, _ = get(path)
     assert status == 401, (path, status)
     print("PASS: unauthenticated request denied:", path or "index")
-for path in ("", "journal.js", "journal.css", "data.json"):
+for path in ("", "journal.js", "journal-model.js", "journal.css", "data.json"):
     status, data, headers = get(path, True)
     assert status == 200 and data, (path, status)
     assert "no-store" in headers["Cache-Control"]
@@ -40,6 +40,8 @@ for path in ("", "journal.js", "journal.css", "data.json"):
         for stream in report["streams"]:
             assert stream["environment"] == "sandbox"
             assert not stream["warnings"], stream["strategy"]
+            assert all("summary" in period for period in stream["periods"].values())
+            assert all("net_return_pct" in trade for trade in stream["trades"])
             print(
                 "DATA:",
                 stream["strategy"],
