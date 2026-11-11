@@ -1,0 +1,20 @@
+{
+  "artifact_root": "/var/lib/moex-tinvest-bot",
+  "universe": "/opt/moex-tinvest-bot/config/universe.json",
+  "collector_dir": "/var/lib/moex-trader-journal/receipts",
+  "database": "/var/lib/moex-trader-journal/journal.sqlite3",
+  "output": "/var/lib/moex-trader-journal/public",
+  "history_from": "2026-10-31T00:00:00+00:00",
+  "profiles": [
+    {
+      "id": "long", "environment": "sandbox",
+      "account_env": "T_INVEST_SANDBOX_LONG_ACCOUNT_ID",
+      "portfolio_globs": ["long-once/run-*/portfolio.json", "artifacts/long-close-*.json"]
+    },
+    {
+      "id": "intraday", "environment": "sandbox",
+      "account_env": "T_INVEST_SANDBOX_INTRADAY_ACCOUNT_ID",
+      "portfolio_globs": ["artifacts/intraday-portfolio-*.json"]
+    }
+  ]
+}

@@ -1,0 +1,9 @@
+[Unit]
+Description=Refresh independent trading journal every 5 minutes
+[Timer]
+OnBootSec=2min
+OnUnitInactiveSec=5min
+Unit=moex-trader-journal.service
+[Install]
+WantedBy=timers.target
+

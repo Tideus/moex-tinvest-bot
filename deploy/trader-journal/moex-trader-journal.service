@@ -1,0 +1,26 @@
+[Unit]
+Description=Read-only trading journal import and reconciliation (sandbox)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=moexbot
+Group=moexbot
+EnvironmentFile=/etc/moex-tinvest-bot/bot.env
+Environment=PYTHONPATH=/opt/moex-trader-journal/src
+Environment=SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
+ExecStart=/usr/bin/python3 -m moex_bot.journal_import --config /etc/moex-trader-journal/config.json --collect
+TimeoutStartSec=180
+UMask=0027
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ReadOnlyPaths=/var/lib/moex-tinvest-bot /etc/moex-tinvest-bot /opt/moex-tinvest-bot
+ReadWritePaths=/var/lib/moex-trader-journal
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+MemoryMax=300M
+CPUQuota=40%
+
