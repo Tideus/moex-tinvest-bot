@@ -326,7 +326,7 @@ async function openCard(symbol,anchor=null){
 }
 function renderReason(box,label,reason){
   if(reason?.status==='verified_order'||reason?.status==='verified_execution'){
-    box.append(element('h3',label),element('p',M.rationale(reason.reason)),element('p',reason.status==='verified_execution'?'Подтверждено: сигнал → заявка → брокерское исполнение (общие ID сделок).':'Подтверждено: сигнал → заявка → исполнение по состоянию заявки. Связь с конкретной операцией по счёту не заявляется.','hint'));
+    box.append(element('h3',label));const conditions=element('ul');for(const part of M.rationale(reason.reason).split(';').filter(p=>p.trim()))conditions.append(element('li',part.trim()));box.append(conditions,element('p',reason.status==='verified_execution'?'Подтверждено: сигнал → заявка → брокерское исполнение (общие ID сделок).':'Подтверждено: сигнал → заявка → исполнение по состоянию заявки. Связь с конкретной операцией по счёту не заявляется.','hint'));
     box.append(element('p','Решение: '+time(reason.decision_at)+' МСК · проверка брокера: '+time(reason.verified_at)+' МСК','hint'));
     const proof=element('details');proof.append(element('summary','Цепочка подтверждения'),element('p','План '+reason.plan_ref+' → сигнал '+reason.signal_ref+' → запрос '+reason.request_ref+' → заявка '+reason.broker_ref+'. Обезличенные контрольные ссылки, не номера счетов.','hint'));box.append(proof);return;
   }

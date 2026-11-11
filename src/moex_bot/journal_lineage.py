@@ -9,6 +9,7 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
+import time
 from collections.abc import Callable
 from contextlib import closing
 from datetime import datetime, timedelta
@@ -199,6 +200,7 @@ def collect_lineage(
         items = []
         status["errors"].append("plan_or_ledger:" + type(exc).__name__)
     budget = 8
+    deadline = time.monotonic() + 15
     for evidence in sorted(items, key=lambda e: e["decision_at"], reverse=True):
         if timestamp(evidence["decision_at"]) < since:
             continue
@@ -212,7 +214,7 @@ def collect_lineage(
         if not evidence["record"].get("broker_order_id"):
             status["deferred"] += 1
             continue
-        if budget == 0:
+        if budget == 0 or time.monotonic() >= deadline:
             status["deferred"] += 1
             continue
         budget -= 1

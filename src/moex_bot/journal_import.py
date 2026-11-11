@@ -335,7 +335,8 @@ def collect(config: dict[str, Any]) -> None:
             result: dict[str, Any] = transport.post(
                 SANDBOX_REST + "/tinkoff.public.invest.api.contract.v1.SandboxService/"
                 "GetSandboxOrderState",
-                headers={"Authorization": "Bearer " + os.environ["T_INVEST_SANDBOX_TOKEN"]},
+                headers={"Authorization": "Bearer " + os.environ["T_INVEST_SANDBOX_TOKEN"],
+                         "Content-Type": "application/json"},
                 payload={"accountId": account_id, "orderId": request_id,
                          "orderIdType": "ORDER_ID_TYPE_REQUEST",
                          "priceType": "PRICE_TYPE_CURRENCY"},
