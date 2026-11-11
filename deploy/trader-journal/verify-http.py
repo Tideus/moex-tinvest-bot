@@ -130,8 +130,8 @@ for stream in catalog["streams"]:
     elif full["operations"]:
         sample = full["operations"][-1]
         at = sample["at"]
-        anchor = {"kind": "operation", "at": at,
-                  **{k: sample[k] for k in ("quantity", "side")}}
+        # Same anchor as the UI: quantity belongs to card.operation, not the card root.
+        anchor = {"kind": "operation", "at": at, "side": sample["side"]}
     else:
         continue
     from datetime import datetime

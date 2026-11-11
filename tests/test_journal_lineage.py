@@ -247,6 +247,14 @@ def test_future_lineage_public_projection_keeps_old_cards_and_financials(tmp_pat
     detail = query(path, "detail", {"stream": stream["id"], "period": "2026-11-11",
                     "symbol": "SBER", "generation": generation, "ref": cards[1]["ref"]})
     assert detail["card"]["operation_reason"]["status"] == "verified_order"
+    # A LONG/operation-only stream uses the same exact anchor as the UI and deploy verifier.
+    operation = stream["operations"][0]
+    detail = query(path, "detail", {"stream": stream["id"], "period": "2026-11-11",
+        "symbol": "SBER", "generation": generation,
+        "anchor": encoded({"kind": "operation", "at": operation["at"],
+                           "side": operation["side"]})})
+    assert detail["card"]["kind"] == "operation"
+    assert detail["card"]["operation"]["quantity"] == operation["quantity"]
     # Activation after both decision and operation: every historical card remains byte-identical.
     (tmp_path / "lineage/activation.json").write_text(encoded({
         "protocol": "execution-lineage-v1", "from": "2026-11-11T11:00Z"}))
