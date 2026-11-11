@@ -1,6 +1,6 @@
 'use strict';
 const test=require('node:test'),assert=require('node:assert/strict');
-const {loadReport}=require('./journal-loader.js');
+const {loadReport,loadJSON,cancelPending}=require('./journal-loader.js');
 const report={schema:'trader-journal-api-v1',generation:'test',streams:[],generated_at:new Date().toISOString()};
 const response=data=>({ok:true,json:async()=>data});
 
@@ -12,6 +12,37 @@ test('successful read uses same-origin auth, no cache and reports both stages',a
     return response(report);
   },onStage:s=>stages.push(s)});
   assert.equal(result,report);assert.deepEqual(stages,['request','body']);assert.equal(signal.aborted,false);
+});
+
+test('timeouts identify endpoint, phase and matching request header, without query values',async()=>{
+  for(const phase of ['headers','body']){
+    let id;
+    await assert.rejects(loadJSON('trades',{stream:'PRIVATE_ACCOUNT'}, {timeoutMs:10,fetchImpl:async(_,o)=>{
+      id=o.headers['X-Journal-Request-Id'];
+      return phase==='headers'?new Promise(()=>{}):{ok:true,json:()=>new Promise(()=>{})};
+    }}),e=>e.name==='JournalTimeoutError'&&e.message.includes(id)&&e.message.includes('trades')&&!e.message.includes('PRIVATE_ACCOUNT')&&e.message.includes(phase==='headers'?'заголовков':'JSON'));
+  }
+});
+
+test('superseded pending headers and bodies cancel promptly; new request stays usable',async()=>{
+  for(const phase of ['headers','body']){
+    let signal,started;
+    const ready=new Promise(resolve=>{started=resolve;});
+    const task=loadJSON('trades',{}, {timeoutMs:500,fetchImpl:async(_,o)=>{
+      signal=o.signal;started();return phase==='headers'?new Promise(()=>{}):{ok:true,json:()=>new Promise(()=>{})};
+    }});
+    const rejected=assert.rejects(task,{name:'AbortError'});await ready;await Promise.resolve();
+    cancelPending('trades');await rejected;assert.equal(signal.aborted,true);
+    assert.equal(await loadReport({fetchImpl:async()=>response(report)}),report);
+  }
+});
+
+test('route cancellation leaves unrelated pending request alive',async()=>{
+  let finish;
+  const survivor=loadJSON('summary',{}, {fetchImpl:async()=>({ok:true,json:()=>new Promise(resolve=>{finish=resolve;})})});
+  const obsolete=loadJSON('trades',{}, {fetchImpl:async()=>new Promise(()=>{})});
+  const rejected=assert.rejects(obsolete,{name:'AbortError'});await Promise.resolve();await Promise.resolve();
+  cancelPending('trades');await rejected;finish(report);assert.equal(await survivor,report);
 });
 
 for(const phase of ['headers','body'])test('timeout covers stuck '+phase+' and aborts request',async()=>{

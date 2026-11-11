@@ -101,6 +101,7 @@ def main():
             .replace("/etc/moex-trader-journal/htpasswd", str(root / "htpasswd"))
             .replace("/var/lib/moex-trader-journal/public/", str(public) + "/")
             .replace("/run/moex-trader-journal-api/api.sock", str(root / "api.sock"))
+            .replace("/var/log/nginx/moex-journal-api.log", str(root / "api-access.log"))
         )
         with socket.socket() as sock:
             sock.bind(("127.0.0.1", 0))
@@ -109,7 +110,8 @@ def main():
         configuration.write_text(
             f"pid {root}/nginx.pid; error_log {root}/error.log;\n"
             "events { worker_connections 64; }\n"
-            "http { include /etc/nginx/mime.types; access_log off; "
+            "http { include /etc/nginx/mime.types; "
+            f"include {source}/nginx-log-format.conf; access_log off; "
             f"server {{ listen 127.0.0.1:{port}; {snippet} }} }}"
         )
         process = subprocess.Popen(
@@ -117,8 +119,9 @@ def main():
         )
         auth = "Basic " + base64.b64encode(b"tester:test-only-password").decode()
 
-        def get(path, authenticated=True, compressed=False, method="GET"):
+        def get(path, authenticated=True, compressed=False, method="GET", request_id="test-001"):
             headers = {"Authorization": auth} if authenticated else {}
+            headers["X-Journal-Request-Id"] = request_id
             if compressed:
                 headers["Accept-Encoding"] = "gzip"
             try:
@@ -148,6 +151,7 @@ def main():
                     break
                 time.sleep(0.05)
             assert get("api/health")[0] == 200
+            assert get("api/health", request_id='invalid"private-header')[0] == 200
             assert get("api/catalog", authenticated=False)[0] == 401
             assert get("api/catalog", method="POST")[0] == 403
             catalog = json.loads(get("api/catalog")[1])
@@ -196,6 +200,17 @@ def main():
             process.wait(timeout=10)
             api.terminate()
             api.wait(timeout=10)
+        log = (root / "api-access.log").read_text()
+        events = [json.loads(line) for line in log.splitlines()]
+        assert any(e["request_id"] == "test-001" and e["upstream_status"] == "200" for e in events)
+        assert any(e["request_id"] == "invalid" for e in events)
+        assert all("request_s" in e and "upstream_s" in e for e in events)
+        assert all("?" not in e["path"] for e in events)
+        assert all(
+            value not in log
+            for value in ["private-header", "test:demo", auth, "127.0.0.1", "stream="]
+        )
+        print("PASS: correlated API timing log excludes credentials, account query and IP")
 
 
 if __name__ == "__main__":

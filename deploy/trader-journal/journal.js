@@ -116,7 +116,7 @@ function parameters(kind){
   if(kind==='trades')Object.assign(p,{symbol:$('symbol').value,direction:$('direction').value,outcome:$('outcome').value,cost:$('cost').value});
   return p;
 }
-function errorNotice(error){$('notice').className='error';$('notice').textContent='Не удалось обновить журнал: '+error.message+'. Данные этого запроса не загружены; уже показанные сведения могут быть устаревшими.';}
+function errorNotice(error){if(error.name==='AbortError')return;$('notice').className='error';$('notice').textContent='Не удалось обновить журнал: '+error.message+'. Данные этого запроса не загружены; уже показанные сведения могут быть устаревшими.';}
 function readyNotice(){
   const errors=report.import?.errors||[],stale=Date.now()-Date.parse(report.generated_at)>20*60*1000;
   $('notice').className=errors.length||stale?'error':'';
@@ -124,6 +124,8 @@ function readyNotice(){
 }
 async function refreshView(){
   const epoch=++viewEpoch;viewReady=false;resetDetails();
+  JournalLoader.cancelPending?.();
+  $('dateLabel').textContent=$('mode').value==='month'?'Месяц':'Дата';
   for(const id of ['overview','metrics','calendar','equity','positions','quality'])$(id).replaceChildren();
   for(const id of ['trades','operations','signals','symbols','monthlyRows'])table(id,[]);
   $('download').disabled=true;$('loadEquity').disabled=true;
@@ -137,12 +139,12 @@ async function refreshView(){
     pages.trades={...first,index:0,cursors:[''],busy:false};viewReady=true;draw();readyNotice();
     $('download').disabled=false;$('loadEquity').disabled=false;
     for(const kind of ['signals','operations'])if($(kind+'Details').open)void fetchPage(kind);
-  }catch(error){if(epoch===viewEpoch)errorNotice(error);}
+  }catch(error){if(epoch===viewEpoch){JournalLoader.cancelPending?.();errorNotice(error);}}
 }
 async function fetchPage(kind,step=0,reset=false){
   const epoch=viewEpoch;
   if(!viewReady||!current()?.periods)return;
-  if(reset)delete pages[kind];
+  if(reset){delete pages[kind];JournalLoader.cancelPending?.(kind);}
   let page=pages[kind];if(page?.busy)return;
   if(!page)pages[kind]=page={index:0,cursors:['']};
   const index=page.index+step,cursor=step>0?page.next_cursor:page.cursors[index]||'';
@@ -167,18 +169,20 @@ async function allRows(kind,params,epoch){
 }
 async function load(){
   if ($('reload').disabled) return;
+  const epoch=++viewEpoch;viewReady=false;JournalLoader.cancelPending?.();
   $('reload').disabled=true;
   $('notice').className='';
   try{
     const data=await JournalLoader.loadReport({onStage:stage=>{
       $('notice').textContent=(stage==='request'?'Подключаемся к журналу…':'Получаем данные журнала…')+' Ожидание — не более 25 секунд.';
     }});
+    if(epoch!==viewEpoch)return;
     report=data;const previous=$('strategy').value;$('strategy').replaceChildren();
     for(const s of report.streams){const o=element('option',s.strategy.toUpperCase()+' · '+s.environment.toUpperCase()+' · '+s.id.slice(-4));o.value=s.id;$('strategy').append(o);}
     if(report.streams.some(s=>s.id===previous))$('strategy').value=previous;
     if(!$('date').value)$('date').value=M.changePeriod('',$('mode').value,dates());
     if(!report.streams.length){++viewEpoch;viewReady=false;resetDetails();$('download').disabled=true;$('loadEquity').disabled=true;$('notice').textContent='Нет импортированной истории. Демо-сделки не подставляются.';shown=[];for(const id of ['overview','metrics','calendar','equity','positions','quality'])$(id).replaceChildren();for(const id of ['trades','operations','signals','symbols','monthlyRows'])table(id,[]);}else await refreshView();
-  }catch(error){errorNotice(error);}
+  }catch(error){if(epoch===viewEpoch)errorNotice(error);}
   finally{$('reload').disabled=false;}
 }
 for(const id of ['strategy','date'])$(id).addEventListener('change',refreshView);

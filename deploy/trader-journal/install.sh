@@ -37,7 +37,8 @@ if [[ ! -f "$settings/htpasswd" ]]; then
 fi
 chown root:www-data "$settings/htpasswd"
 chmod 0640 "$settings/htpasswd"
-install -d -m 0755 "$prefix/etc/nginx/snippets" "$prefix/etc/systemd/system"
+install -d -m 0755 "$prefix/etc/nginx/snippets" "$prefix/etc/nginx/conf.d" "$prefix/etc/systemd/system"
+install -m 0644 "$source_dir/deploy/trader-journal/nginx-log-format.conf" "$prefix/etc/nginx/conf.d/moex-trader-journal-log.conf"
 install -m 0644 "$source_dir/deploy/trader-journal/nginx.conf" "$prefix/etc/nginx/snippets/moex-trader-journal.conf"
 install -m 0644 "$source_dir/deploy/trader-journal/moex-trader-journal."{service,timer} "$prefix/etc/systemd/system/"
 install -m 0644 "$source_dir/deploy/trader-journal/moex-trader-journal-api.service" "$prefix/etc/systemd/system/"
