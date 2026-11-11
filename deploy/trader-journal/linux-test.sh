@@ -39,5 +39,10 @@ DESTDIR="$PWD/work/journal-stage" bash deploy/trader-journal/install.sh
 before_config=$(sha256sum work/journal-stage/etc/moex-trader-journal/{config.json,htpasswd})
 DESTDIR="$PWD/work/journal-stage" bash deploy/trader-journal/install.sh
 [[ "$before_config" == "$(sha256sum work/journal-stage/etc/moex-trader-journal/{config.json,htpasswd})" ]]
+JOURNAL_WHEELHOUSE="$(cd .. && pwd)" bash deploy/trader-journal/install-api-runtime.sh "$PWD/work/journal-stage/opt/moex-trader-journal"
+[[ $(stat -c '%U:%G:%a' work/journal-stage/opt/moex-trader-journal/.venv) == root:www-data:750 ]]
+runuser -u nobody -g www-data -- "$PWD/work/journal-stage/opt/moex-trader-journal/.venv/bin/gunicorn" --version
+runuser -u nobody -g www-data -- test ! -w "$PWD/work/journal-stage/opt/moex-trader-journal/.venv/bin/gunicorn"
+echo 'PASS: restrictive-umask runtime executable but not writable by API group'
 python3 deploy/trader-journal/test-nginx.py
 echo 'PASS: isolated journal deployment, private permissions and idempotent reinstallation'

@@ -48,12 +48,7 @@ if [[ -n "$prefix" ]]; then
   exit 0
 fi
 getent passwd moexjournal >/dev/null || useradd --system --no-create-home --shell /usr/sbin/nologin moexjournal
-[[ -x "$target/.venv/bin/python" ]] || /usr/bin/python3 -m venv "$target/.venv"
-pip_args=(--disable-pip-version-check --require-hashes --only-binary=:all:)
-if [[ -n "${JOURNAL_WHEELHOUSE:-}" ]]; then
-  pip_args+=(--no-index --find-links "$JOURNAL_WHEELHOUSE")
-fi
-"$target/.venv/bin/python" -m pip install "${pip_args[@]}" -r "$target/requirements-api.txt"
+bash "$source_dir/deploy/trader-journal/install-api-runtime.sh" "$target"
 systemd-analyze verify "$prefix/etc/systemd/system/moex-trader-journal.service" "$prefix/etc/systemd/system/moex-trader-journal.timer"
 systemd-analyze verify "$prefix/etc/systemd/system/moex-trader-journal-api.service"
 systemctl daemon-reload
