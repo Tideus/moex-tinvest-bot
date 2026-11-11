@@ -297,6 +297,8 @@ def test_collector_is_sandbox_read_only_and_keeps_coverage(tmp_path, monkeypatch
     )
     cfg = {
         "universe": str(universe),
+        "output": str(tmp_path / "public"),
+        "artifact_root": str(tmp_path),
         "collector_dir": str(tmp_path / "receipts"),
         "history_from": T0,
         "profiles": [{**PROFILE, "account_env": "TEST_ACCOUNT"}],

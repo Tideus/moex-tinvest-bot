@@ -114,6 +114,8 @@ def match_trades(
     operations: list[dict[str, Any]],
     baseline: dict[str, Any] | None,
     open_basis: dict[str, Decimal] | None = None,
+    *,
+    lineage_pairs: list[tuple[str, str]] | None = None,
 ) -> tuple[list[dict[str, Any]], list[str]]:
     """FIFO analytical lots, not broker tax lots. Unknown initial inventory stays unknown."""
     queues: dict[str, deque[dict[str, Any]]] = defaultdict(deque)
@@ -173,13 +175,16 @@ def match_trades(
                     else str((pnl - fees) / (entry["price"] * take) * 100),
                 }
             )
+            if lineage_pairs is not None:
+                lineage_pairs.append((entry["identity"], op["identity"]))
             remaining -= take
             entry["quantity"] -= take
             if entry["quantity"] == 0:
                 queue.popleft()
         if remaining:
             queue.append(
-                {"quantity": remaining, "price": price, "fee": fee, "sign": sign, "at": op["at"]}
+                {"quantity": remaining, "price": price, "fee": fee, "sign": sign,
+                 "at": op["at"], "identity": op["identity"]}
             )
     if open_basis is not None:
         open_basis.update(

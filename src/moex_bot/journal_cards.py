@@ -192,6 +192,10 @@ def make_cards(stream: dict[str, Any]) -> list[dict[str, Any]]:
                     {"at": trade["closed_at"], "price": trade["exit"], "label": "Выход",
                      "side": "SELL" if side == "BUY" else "BUY", "quantity": trade["quantity"]},
                 ]}
+        links = stream.get("trade_links", {}).get(digest(trade), {})
+        for label in ("entry", "exit"):
+            if links.get(label):
+                card[label + "_reason"] = links[label]
         cards.append(card)
     # Operations remain visible even if FIFO cannot establish a complete trade.
     for index, op in enumerate(stream["operations"]):
@@ -205,6 +209,10 @@ def make_cards(stream: dict[str, Any]) -> list[dict[str, Any]]:
                           "label": "Операция", "side": op["side"], "quantity": op["quantity"]}],
                       "operation_reason": reason_context(stream, op["symbol"], op["at"],
                                                          op["side"])})
+        link = stream.get("operation_links", {}).get(digest(op))
+        if link:
+            cards[-1]["operation_reason"] = link
+    cards.extend(stream.get("verified_orders", []))
     return cards
 
 

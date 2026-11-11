@@ -130,6 +130,7 @@ def test_collector_preserves_missing_commission_without_changing_shared_decoder(
     monkeypatch.setattr(tinvest_sandbox.TInvestSandboxAccountService, "broker_snapshot",
                         lambda *args, **kwargs: Snapshot())
     collect({"universe": str(universe), "collector_dir": str(tmp_path / "receipts"),
+             "output": str(tmp_path / "public"), "artifact_root": str(tmp_path),
              "history_from": T0,
              "profiles": [{**PROFILE, "account_env": "TEST_ACCOUNT"}]})
     receipt = json.loads(next((tmp_path / "receipts").glob("*.json")).read_bytes())

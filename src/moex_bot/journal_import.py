@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from .journal_cards import attach_charts, attach_order_context
+from .journal_lineage import attach_lineage, collect_lineage
 from .journal_readmodel import publish
 from .trader_journal import Journal, build_report, digest, encoded, number, timestamp
 
@@ -266,17 +267,26 @@ def collect(config: dict[str, Any]) -> None:
                 "GetSandboxPositions",
                 "GetSandboxOrders",
                 "GetSandboxOperationsByCursor",
+                "GetSandboxOrderState",
             }
             if not url.startswith(SANDBOX_REST + "/") or url.rsplit("/", 1)[-1] not in allowed:
                 raise ValueError("journal broker writes and production forbidden")
             response = super().post(url, **kwargs)
             if url.rsplit("/", 1)[-1] == "GetSandboxOperationsByCursor":
                 for operation in response.get("items", []):
-                    if isinstance(operation, dict) and operation.get("id"):
+                    if (isinstance(operation, dict) and operation.get("id")
+                            and str(operation["id"]) not in self.operation_fields):
                         # The shared reader also keeps the first occurrence of an ID.
                         self.operation_fields.setdefault(
                             str(operation["id"]), broker_operation_fields(operation)
                         )
+                        self.operation_fields[str(operation["id"])]["journal_trade_identity"] = {
+                            "instrument_uid": operation.get("instrumentUid"),
+                            "trades": [{"id": str(t.get("num", "")),
+                                        "quantity": t.get("quantity"), "price": t.get("price"),
+                                        "at": t.get("date")}
+                                       for t in operation.get("tradesInfo", {}).get("trades", [])],
+                        }
             return response
 
     raw = json.loads(Path(config["universe"]).read_bytes())
@@ -321,6 +331,18 @@ def collect(config: dict[str, Any]) -> None:
             profile["id"] + "-" + before.strftime("%Y%m%dT%H%M%SZ") + ".json"
         )
         atomic(target, encoded(payload))
+        def lookup(account_id: str, request_id: str) -> dict[str, Any]:
+            result: dict[str, Any] = transport.post(
+                SANDBOX_REST + "/tinkoff.public.invest.api.contract.v1.SandboxService/"
+                "GetSandboxOrderState",
+                headers={"Authorization": "Bearer " + os.environ["T_INVEST_SANDBOX_TOKEN"]},
+                payload={"accountId": account_id, "orderId": request_id,
+                         "orderIdType": "ORDER_ID_TYPE_REQUEST",
+                         "priceType": "PRICE_TYPE_CURRENCY"},
+                timeout_seconds=3.0,
+            )
+            return result
+        collect_lineage(config, account, profile["id"], lookup, datetime.now(UTC))
 
 
 def main() -> int:
@@ -335,9 +357,11 @@ def main() -> int:
             collect(config)
         journal = Journal(Path(config["database"]))
         status = import_artifacts(config, journal)
-        report = build_report(journal.latest())
+        events = journal.latest()
+        report = build_report(events)
         report["import"] = status
         attach_order_context(report, config)
+        attach_lineage(report, events, config)
         attach_charts(report, Path(config["output"]).parent / "prices",
                       refresh=args.collect or args.prices)
         publish(
@@ -353,7 +377,12 @@ def main() -> int:
         print(
             f"Journal refreshed: streams={len(report['streams'])}, errors={len(status['errors'])}"
         )
-        return 2 if status["errors"] else 0
+        lineage_errors = sum(len(s.get("lineage_status", {}).get("errors", []))
+                             for s in report["streams"])
+        if lineage_errors:
+            print(f"Journal lineage degraded: {lineage_errors} plan/ledger or broker-state errors; "
+                  "unconfirmed links withheld (sandbox, read-only)")
+        return 2 if status["errors"] or lineage_errors else 0
     except Exception as exc:
         # Never print broker payloads, account identifiers, URLs containing secrets.
         print(f"Journal refresh FAILED: {type(exc).__name__}; previous report retained")

@@ -35,6 +35,21 @@ function harness(extra){
 
 function cardReply(p){return {schema:'trader-journal-api-v1',generation:p.generation,total:1,offset:0,next_offset:null,options:[{ref:'a'.repeat(64),kind:'closed',at:'2026-11-11T10:00Z'}],card:{kind:'closed',symbol:'SBER',direction:'SHORT',opened_at:'2026-11-11T08:00Z',closed_at:'2026-11-11T10:00Z',quantity:'2',entry:'100',exit:'99',gross:'2',return_pct:'1',net:null,fees:null,net_return_pct:null,ref:'a'.repeat(64),markers:[{at:'2026-11-11T08:00Z',price:'100',label:'Вход',side:'SELL',quantity:'2'},{at:'2026-11-11T10:00Z',price:'99',label:'Выход',side:'BUY',quantity:'2'}],chart:{interval:1,points:[],sources:[],truncated:false},entry_reason:{context:[]},exit_reason:{context:[]}}};}
 const texts=node=>[node.textContent,...node.children.flatMap(texts)].join(' ');
+test('confirmed order reason is distinct from an unlinked account operation',async()=>{
+  const h=harness((kind,p)=>{
+    if(kind!=='detail')return null;
+    const data=cardReply(p);data.card={kind:'broker_order',symbol:'SBER',at:'2026-11-11T08:00Z',verified_at:'2026-11-11T08:05Z',side:'BUY',quantity:'10',filled_lots:'1',markers:[],chart:{interval:1,points:[],sources:[]},operation_reason:{status:'verified_order',reason:'intraday momentum;move=0.01;trade=0.2',decision_at:'2026-11-11T08:00Z',verified_at:'2026-11-11T08:05Z',plan_ref:'planhash',signal_ref:'signalhash',request_ref:'requesthash',broker_ref:'brokerhash'}};
+    data.lineage_status={errors:['broker_order_state:TimeoutError']};return Promise.resolve(data);
+  });await tick();await h.get('operationCards').firstChild.firstChild.firstChild.click();
+  const text=texts(h.get('cardContent'));assert.match(text,/Брокер подтвердил 1 лот/);assert.match(text,/Изменение цены 1.00%/);assert.match(text,/не время исполнения/);assert.match(text,/Связь с конкретной операцией по счёту не заявляется/);assert.match(text,/planhash/);assert.doesNotMatch(text,/Точная причина не подтверждена/);assert.match(h.get('cardStatus').textContent,/проверка связей неполна/);
+});
+test('verified fill reason uses safe text, not HTML, while the exit can remain unlinked',async()=>{
+  const h=harness((kind,p)=>{
+    if(kind!=='detail')return null;const data=cardReply(p);data.card.entry_reason={status:'verified_execution',reason:'<img onerror=evil()>',decision_at:'2026-11-11T08:00Z',verified_at:'2026-11-11T08:05Z'};return Promise.resolve(data);
+  });await tick();await h.get('operationCards').firstChild.firstChild.firstChild.click();
+  assert.match(texts(h.get('cardContent')),/общие ID сделок/);assert.match(texts(h.get('cardContent')),/Точная причина не подтверждена/);
+  const walk=e=>[e,...e.children.flatMap(walk)];assert.equal(walk(h.get('cardContent')).some(e=>e.tag==='img'),false);
+});
 test('paper opens read-only trade card with gross, unknown net and explicit missing chart',async()=>{
   const h=harness((kind,p)=>kind==='detail'?Promise.resolve(cardReply(p)):null);await tick();
   await h.get('operationCards').firstChild.firstChild.firstChild.click();

@@ -325,6 +325,11 @@ async function openCard(symbol,anchor=null){
   if(!$('tradeDialog').open)$('tradeDialog').showModal();await loadCard();
 }
 function renderReason(box,label,reason){
+  if(reason?.status==='verified_order'||reason?.status==='verified_execution'){
+    box.append(element('h3',label),element('p',M.rationale(reason.reason)),element('p',reason.status==='verified_execution'?'Подтверждено: сигнал → заявка → брокерское исполнение (общие ID сделок).':'Подтверждено: сигнал → заявка → исполнение по состоянию заявки. Связь с конкретной операцией по счёту не заявляется.','hint'));
+    box.append(element('p','Решение: '+time(reason.decision_at)+' МСК · проверка брокера: '+time(reason.verified_at)+' МСК','hint'));
+    const proof=element('details');proof.append(element('summary','Цепочка подтверждения'),element('p','План '+reason.plan_ref+' → сигнал '+reason.signal_ref+' → запрос '+reason.request_ref+' → заявка '+reason.broker_ref+'. Обезличенные контрольные ссылки, не номера счетов.','hint'));box.append(proof);return;
+  }
   box.append(element('h3',label),element('p','Точная причина не подтверждена связью с брокерской операцией.','hint'));
   for(const signal of reason?.context||[])box.append(element('p','Контекст, не доказанная причина · '+time(signal.at)+' · '+M.status(signal.status)+' · '+(signal.reasons||[]).map(M.reason).join('; '),'hint'));
   for(const order of reason?.order_context||[]){const p=element('p','Заявка соседнего цикла '+time(order.at)+' (связь с исполнением не подтверждена): '+M.rationale(order.rationale),'hint');box.append(p);}
@@ -348,6 +353,9 @@ function renderCard(data){
     const result=element('div',undefined,'card-result');result.append(element('strong',signed(card.gross)+' ₽ / '+signed(card.return_pct,4)+' %',color(card.gross)),element('p','Без комиссий · процент от стоимости входа'));
     result.append(element('p','После комиссий: '+signed(card.net)+' ₽ / '+signed(card.net_return_pct,4)+' % · комиссии '+money(card.fees)+' ₽',color(card.net)));box.append(result);
     box.append(element('p','Аналитическое FIFO-закрытие (возможно часть позиции). Цена входа/выхода — средняя из суммы и количества исполнения; не цена лимита.','hint'));
+  }else if(card.kind==='broker_order'){
+    box.append(element('h3','Исполнение заявки · '+direction(card.side)+' · '+money(card.quantity)+' шт.'),element('p','Брокер подтвердил '+money(card.filled_lots)+' лот. · проверка '+time(card.verified_at)+' МСК'));
+    box.append(element('p','Заявка создана '+time(card.at)+' МСК. Это не время исполнения. Запись не прибавляется к операциям, обороту или P&L второй раз. Точные точки исполнения отсутствуют, если брокер не вернул их идентификаторы.','hint'));
   }else{
     const op=card.operation;box.append(element('h3',direction(op.side)+' · '+money(op.quantity)+' шт.'),element('p',time(op.at)+' · цена '+operationPriceText(op)+' ₽ · сумма '+money(op.gross)+' ₽'));
     box.append(element('p','Операция не равна закрытой сделке. Её прибыль не рассчитывается отдельно. Выберите FIFO-закрытие в списке, если оно есть.','hint'));
@@ -358,7 +366,7 @@ function renderCard(data){
   box.append(element('p',report.demo?'Синтетический пример графика и исполнений.':('Линия: закрытия '+card.chart.interval+'-минутных свечей MOEX ISS / TQBR. Публичные данные могут задерживаться. Точки: брокерские операции. Разрывы не заполняются.'),'hint'));
   if(!card.chart.points.length||bad.length||card.chart.truncated)box.append(element('p','Рыночный график неполон: '+(bad.map(s=>s.day+' '+({pending:'ожидает сбора',empty:'источник не вернул свечи',error:'ошибка источника'}[s.status]||s.status)+(s.error?' ('+s.error+')':'')).join('; ')||'нет свечей в окне')+(card.chart.truncated?' · достигнут предел точек/истории':''),'warn'));
   if(sources.some(s=>s.retrieved_at))box.append(element('p','Цены получены: '+sources.filter(s=>s.retrieved_at).map(s=>time(s.retrieved_at)).filter((v,i,a)=>a.indexOf(v)===i).join(', ')+' МСК','hint'));
-  if(card.kind==='closed'){renderReason(box,'Причина входа',card.entry_reason);renderReason(box,'Причина выхода',card.exit_reason);}else renderReason(box,'Причина '+(card.operation.side==='BUY'?'покупки':'продажи'),card.operation_reason);
+  if(card.kind==='closed'){renderReason(box,'Причина входа',card.entry_reason);renderReason(box,'Причина выхода',card.exit_reason);}else renderReason(box,'Причина '+((card.operation?.side||card.side)==='BUY'?'покупки':'продажи'),card.operation_reason);
   if(data.position&&Number(data.position.units))box.append(element('p','Отдельно: текущая позиция '+money(data.position.units)+' шт. · открытый результат '+signed(data.position.unrealized_gross)+' ₽ / '+signed(data.position.return_pct)+' % (без комиссий), срез '+time(data.observed_at)+'. Это не результат выбранного прошлого дня.','hint'));
 }
 async function loadCard(){
@@ -369,10 +377,10 @@ async function loadCard(){
     const data=await JournalLoader.loadJSON('detail',{stream:state.stream,period:state.period,generation:report.generation,symbol:state.symbol,ref:state.ref,offset:String(state.offset),anchor:state.anchor?JSON.stringify(state.anchor):''});
     if(cardState!==state||request!==cardRequest||state.epoch!==viewEpoch)return;
     state.anchor=null;state.ref=data.card?.ref||'';
-    $('cardSelect').replaceChildren();for(const o of data.options){const option=element('option',(o.kind==='closed'?'Закрытие · ':'Операция · ')+time(o.at)+(o.quantity?' · '+money(o.quantity)+' шт.':''));option.value=o.ref;$('cardSelect').append(option);}
+    $('cardSelect').replaceChildren();for(const o of data.options){const option=element('option',(o.kind==='closed'?'Закрытие · ':o.kind==='broker_order'?'Исполненная заявка · ':'Операция · ')+time(o.at)+(o.quantity?' · '+money(o.quantity)+' шт.':''));option.value=o.ref;$('cardSelect').append(option);}
     if(data.card)$('cardSelect').value=data.card.ref;state.next=data.next_offset;
     $('cardSelect').disabled=!data.options.length;$('cardPrev').disabled=state.offset===0;$('cardNext').disabled=data.next_offset===null;
-    $('cardCount').textContent='Записей '+data.total+' · страница '+(state.offset/50+1);$('cardStatus').textContent='Только чтение · единый срез журнала';renderCard(data);
+    $('cardCount').textContent='Записей '+data.total+' · страница '+(state.offset/50+1);$('cardStatus').textContent='Только чтение · единый срез журнала'+(data.lineage_status?.errors?.length?' · проверка связей неполна: '+data.lineage_status.errors.join(', '):'');renderCard(data);
   }catch(error){if(cardState!==state||request!==cardRequest||error.name==='AbortError')return;
     $('cardStatus').textContent=error.name==='JournalSnapshotChangedError'?'История обновилась. Закройте карточку, нажмите «Обновить» и откройте её снова.':'Карточка не загружена: '+error.message;
     $('cardRetry').hidden=error.name==='JournalSnapshotChangedError';

@@ -24,7 +24,7 @@ from .trader_journal import MSK, SCHEMA, digest, encoded, number, timestamp
 API_SCHEMA = "trader-journal-api-v1"
 KINDS = ("trades", "signals", "operations", "orders", "equity")
 STREAM_FIELDS = ("id", "strategy", "environment", "dates", "warnings", "positions", "observed_at")
-OPTIONAL_STREAM_FIELDS = ("trade_history_coverage", "order_diagnostics")
+OPTIONAL_STREAM_FIELDS = ("trade_history_coverage", "order_diagnostics", "lineage_status")
 
 
 class QueryError(ValueError):
@@ -260,13 +260,17 @@ def query(path: Path, route: str, params: dict[str, str]) -> dict[str, Any]:
                 "missing" if not sources or any(s["status"] == "missing" for s in sources)
                 else "stale" if any(s["status"] == "stale" for s in sources) else "ok"
             )
+            lineage_errors = sum(len(s.get("lineage_status", {}).get("errors", []))
+                                 for s in streams)
             return {
                 "schema": API_SCHEMA,
                 "generation": metadata["generation"],
                 "generated_at": metadata["generated_at"],
                 "status": "stale" if build_status != "ok" else "import_error"
                 if metadata.get("import", {}).get("errors") else
-                "source_" + source_status if source_status != "ok" else "ok",
+                "source_" + source_status if source_status != "ok" else
+                "lineage_degraded" if lineage_errors else "ok",
+                "lineage_errors": lineage_errors,
                 "age_seconds": round(age),
                 "build_status": build_status,
                 "source_status": source_status,
@@ -332,6 +336,7 @@ def query(path: Path, route: str, params: dict[str, str]) -> dict[str, Any]:
                 card["chart"] = chart_for(card, chart_rows,
                                           1 if stream["strategy"] == "intraday" else 60)
             return {**metadata, "card": card, "total": total, "offset": offset,
+                    "lineage_status": stream.get("lineage_status"),
                     "next_offset": offset + 50 if offset + 50 < total else None,
                     "options": [{k: c[k] for k in ("ref", "kind", "at", "symbol",
                                                    "opened_at", "quantity", "entry", "exit")
