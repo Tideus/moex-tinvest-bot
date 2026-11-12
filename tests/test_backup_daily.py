@@ -79,7 +79,8 @@ def test_quiescent_wal_requires_sidecar_access_but_does_not_change_database(tmp_
     database.chmod(0o444)
     source.chmod(0o555)
     try:
-        with pytest.raises(sqlite3.OperationalError, match="unable to open database file"):
+        with pytest.raises(sqlite3.OperationalError,
+                           match="unable to open database file|readonly database"):
             snapshot.snapshot(source, tmp_path / "denied")
     finally:
         source.chmod(0o755)
