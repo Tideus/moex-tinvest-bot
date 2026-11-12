@@ -13,5 +13,6 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectHome=true
 ProtectSystem=strict
-ReadOnlyPaths=/var/lib/moex-tinvest-bot
-ReadWritePaths=/var/backups /var/lib/moex-tinvest-control/prod-session.lock
+# mode=ro protects database contents; SQLite may still need WAL/SHM sidecars.
+# A read-only mount breaks snapshots of quiescent WAL databases without sidecars.
+ReadWritePaths=/var/lib/moex-tinvest-bot /var/backups /var/lib/moex-tinvest-control/prod-session.lock

@@ -1,6 +1,7 @@
 import importlib.util
 import os
 import sqlite3
+from contextlib import closing
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -61,12 +62,43 @@ def test_snapshot_refuses_symlink(tmp_path):
         snapshot.snapshot(source, tmp_path / "copy")
 
 
+@pytest.mark.skipif(os.name == "nt", reason="Linux SQLite sidecar permissions")
+def test_quiescent_wal_requires_sidecar_access_but_does_not_change_database(tmp_path):
+    if os.geteuid() == 0:
+        pytest.skip("permission regression must run as an unprivileged user")
+    source = tmp_path / "state"
+    source.mkdir()
+    database = source / "state.sqlite3"
+    with closing(sqlite3.connect(database)) as db:
+        db.execute("PRAGMA journal_mode=WAL")
+        db.execute("CREATE TABLE positions(quantity INTEGER)")
+        db.execute("INSERT INTO positions VALUES (17)")
+        db.commit()
+    assert not database.with_name(database.name + "-wal").exists()
+    original = database.read_bytes()
+    database.chmod(0o444)
+    source.chmod(0o555)
+    try:
+        with pytest.raises(sqlite3.OperationalError, match="unable to open database file"):
+            snapshot.snapshot(source, tmp_path / "denied")
+    finally:
+        source.chmod(0o755)
+    snapshot.snapshot(source, tmp_path / "allowed")
+    assert database.read_bytes() == original
+    with closing(sqlite3.connect(tmp_path / "allowed/state.sqlite3")) as db:
+        assert db.execute("SELECT quantity FROM positions").fetchall() == [(17,)]
+        assert db.execute("PRAGMA integrity_check").fetchone() == ("ok",)
+
+
 def test_daily_maintenance_requires_backup_first():
     unit = (ROOT / "deploy/ubuntu/moex-tinvest-maintenance.service").read_text()
     assert "Requires=moex-tinvest-backup.service" in unit
     assert "After=moex-tinvest-backup.service" in unit
     backup = (ROOT / "deploy/ubuntu/moex-tinvest-backup.service").read_text()
-    assert "ReadOnlyPaths=/var/lib/moex-tinvest-bot" in backup
+    assert "ReadOnlyPaths=/var/lib/moex-tinvest-bot" not in backup
+    assert "ReadWritePaths=/var/lib/moex-tinvest-bot /var/backups" in backup
+    assert 'path.as_uri() + "?mode=ro"' in (
+        ROOT / "scripts/ubuntu/snapshot_state.py").read_text()
     assert "EnvironmentFile" not in backup
     script = (ROOT / "scripts/ubuntu/backup.sh").read_text()
     assert script.index("snapshot_state.py") < script.index('mv -- "${stage_dir}/state.tar.gz"')
