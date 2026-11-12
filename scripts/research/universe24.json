@@ -1,0 +1,30 @@
+{
+  "experiment_id": "universe24-20261112-v1",
+  "mode": "research_only",
+  "control_symbols": ["SBER", "ROSN", "CHMF"],
+  "symbols": ["SBER", "T", "MOEX", "LKOH", "GAZP", "NVTK", "GMKN", "PLZL", "PHOR", "CHMF", "YDEX", "X5", "MTSS", "RAGR", "TATNP", "ROSN", "VTBR", "AFLT", "ALRS", "MAGN", "IRAO", "SBERP", "TATN", "TRNFP"],
+  "order_budget_rub": "10000",
+  "max_spread_bps": "10",
+  "commission_bps_per_side": "5",
+  "slippage_bps_per_side": "5",
+  "max_roundtrip_cost_bps": "30",
+  "max_quote_age_seconds": 3,
+  "max_instrument_age_days": 7,
+  "min_median_daily_turnover_rub": "50000000",
+  "turnover_sessions": 20,
+  "max_turnover_age_days": 7,
+  "max_top_book_participation": "0.10",
+  "minimum_complete_sessions": 10,
+  "minimum_quote_coverage": "0.95",
+  "cost_multipliers": [1, 2],
+  "historical_probes": {
+    "long": "L1 SMA200: first observed session each month, next-session open to open 20 sessions later",
+    "intraday": "I2 opening-hour return below -0.5%: 11:10 open to 13:10 open, all six completed 10-minute opening bars required",
+    "commission_bps_per_side": "5",
+    "half_spread_bps_per_side": "5",
+    "slippage_bps_per_side": "5",
+    "large_gap_quarantine_fraction": "0.40",
+    "meaning": "Signal markouts only, not portfolio P&L or production-strategy replication. Price-only, no dividends, no shorts, current-universe selection bias. No historical order-book eligibility inferred."
+  },
+  "weekly_policy": "Report unchanged baseline and all three cohorts; missing sessions cannot count as passed. No automatic parameter changes or promotion to trading."
+}
