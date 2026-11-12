@@ -1,0 +1,17 @@
+[Unit]
+Description=MOEX bot daily state backup before retention cleanup
+Before=moex-tinvest-maintenance.service
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+ExecStart=/usr/bin/bash /opt/moex-tinvest-bot/scripts/ubuntu/backup.sh
+TimeoutStartSec=300
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadOnlyPaths=/var/lib/moex-tinvest-bot
+ReadWritePaths=/var/backups /var/lib/moex-tinvest-control/prod-session.lock

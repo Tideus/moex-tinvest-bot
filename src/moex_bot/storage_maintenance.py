@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import shutil
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -161,9 +162,22 @@ def _old_backups(root: Path, now: datetime, retention_days: int, keep: int) -> l
         reverse=True,
     )
     protected = set(archives[:keep])
+    # A report or a control sidecar is not a full recovery point. Preserve at
+    # least `keep` full state archives AND their independently stored fences.
+    full = [p for p in archives if re.fullmatch(
+        r"moex-tinvest-\d{8}T\d{6}Z\.tar\.gz", p.name)
+        and not p.is_symlink() and p.stat().st_size > 0
+        and p.with_name(p.name + ".sha256").is_file()]
+    protected.update(full[:keep])
     cutoff = now.astimezone(UTC) - timedelta(days=retention_days)
     result: list[Path] = []
     for archive in archives:
+        control = re.fullmatch(
+            r"(moex-tinvest-\d{8}T\d{6}Z)\.(?:prod|sandbox)-control\.tar\.gz", archive.name)
+        if control:
+            parent = archive.with_name(control[1] + ".tar.gz")
+            if parent in protected or not parent.exists():
+                continue
         modified = datetime.fromtimestamp(archive.stat().st_mtime, tz=UTC)
         if archive in protected or modified >= cutoff:
             continue

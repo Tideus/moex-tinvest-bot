@@ -150,6 +150,7 @@ function draw() {
   if(operationQuality.legacy)$('quality').append(element('p',operationQuality.legacy+' операций со старой неподтверждённой комиссией. Ноль в этих записях не считается подтверждённой бесплатной сделкой.','warn'));
   if(coverage?.status!=='verified')$('quality').append(element('p','Показана сумма известных закрытий. Полнота истории не подтверждена'+(coverage?.reason?': '+M.reason(coverage.reason):'.'),'warn'));
   for(const diagnostic of report.import?.diagnostics||[])$('quality').append(element('p',diagnostic,'warn'));
+  for(const warning of M.lineageWarnings(s.lineage_status))$('quality').append(element('p',warning,'warn'));
   if(equityLoaded)$('quality').append(element('p','Капитал выбранного периода: '+money(points.at(-1)?.equity)+' ₽ · '+time(points.at(-1)?.at),'hint'));
   if(Date.now()-Date.parse(s.observed_at)>20*60*1000)$('quality').append(element('p','Снимок этого счёта старше 20 минут.','warn'));
   $('updated').textContent='Сформировано '+time(report.generated_at)+' МСК';
@@ -380,7 +381,7 @@ async function loadCard(){
     $('cardSelect').replaceChildren();for(const o of data.options){const option=element('option',(o.kind==='closed'?'Закрытие · ':o.kind==='broker_order'?'Исполненная заявка · ':'Операция · ')+time(o.at)+(o.quantity?' · '+money(o.quantity)+' шт.':''));option.value=o.ref;$('cardSelect').append(option);}
     if(data.card)$('cardSelect').value=data.card.ref;state.next=data.next_offset;
     $('cardSelect').disabled=!data.options.length;$('cardPrev').disabled=state.offset===0;$('cardNext').disabled=data.next_offset===null;
-    $('cardCount').textContent='Записей '+data.total+' · страница '+(state.offset/50+1);$('cardStatus').textContent='Только чтение · единый срез журнала'+(data.lineage_status?.errors?.length?' · проверка связей неполна: '+data.lineage_status.errors.join(', '):'');renderCard(data);
+    $('cardCount').textContent='Записей '+data.total+' · страница '+(state.offset/50+1);$('cardStatus').textContent='Только чтение · единый срез журнала'+(data.lineage_status?.errors?.length?' · проверка связей неполна: '+data.lineage_status.errors.join(', '):'')+' '+M.lineageWarnings(data.lineage_status).join(' ');renderCard(data);
   }catch(error){if(cardState!==state||request!==cardRequest||error.name==='AbortError')return;
     $('cardStatus').textContent=error.name==='JournalSnapshotChangedError'?'История обновилась. Закройте карточку, нажмите «Обновить» и откройте её снова.':'Карточка не загружена: '+error.message;
     $('cardRetry').hidden=error.name==='JournalSnapshotChangedError';

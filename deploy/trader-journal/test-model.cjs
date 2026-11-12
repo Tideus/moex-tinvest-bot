@@ -1,5 +1,13 @@
 'use strict';
 
+require('node:test')('quantity anomaly is visible, not a confirmed execution',()=>{
+  const m=require('./journal-model.js'),assert=require('node:assert/strict');
+  assert.deepEqual(m.lineageWarnings(undefined),[]);
+  const text=m.lineageWarnings({unconfirmed:[{code:'sandbox_quantity_units_mismatch',symbol:'MTSS',requested_lots:'5',reported_executed:'50',lot_size:'10'}]})[0];
+  assert.match(text,/SANDBOX.*MTSS/);assert.match(text,/lotsExecuted=50/);
+  assert.match(text,/не подтверждена/);assert.match(text,/не пересчитывалось/);
+});
+
 // Chart interpolation must not bridge missing intervals or create synthetic fills.
 require('node:test')('trade chart splits gaps and retains exact execution markers',()=>{
   const m=require('./journal-model.js'),assert=require('node:assert/strict');

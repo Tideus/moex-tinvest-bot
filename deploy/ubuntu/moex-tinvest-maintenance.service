@@ -1,6 +1,8 @@
 [Unit]
 Description=MOEX/T-Invest disk usage check and bounded retention cleanup
 Documentation=file:///opt/moex-tinvest-bot/docs/UBUNTU_24_SERVER_RU.md
+Requires=moex-tinvest-backup.service
+After=moex-tinvest-backup.service
 
 [Service]
 Type=oneshot

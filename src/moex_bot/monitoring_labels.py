@@ -24,6 +24,9 @@ API_LABELS = {
 
 
 def check_description(key: str) -> str:
+    if key == "backup:age":
+        return ("MOEX BOT / Резервирование состояния\n"
+                "Полная копия БД и истории, не отчёт и не sidecar")
     if key in API_LABELS:
         title, host = API_LABELS[key]
         return f"MOEX BOT / {title}\nЦель: {host}"
@@ -37,6 +40,9 @@ def check_description(key: str) -> str:
 
 
 def check_action(key: str) -> str:
+    if key == "backup:age":
+        return ("Проверить moex-tinvest-backup.service и maintenance.timer; "
+                "запустить backup.sh, проверить SHA и восстановление в изолированной папке.")
     if key == "api:news_iss_observer":
         return "Проверить moex-news-observer; ISS не заменяет RSS и не влияет на сделки."
     if key.startswith("api:tinvest_"):
@@ -84,6 +90,10 @@ INACTIVE = "FAIL: active=inactive, no schedule"
 
 def safe_reason(value: str) -> str:
     """Only known templates; never echo arbitrary collector errors to Kuma or Telegram."""
+    if value == "FAIL: backup missing":
+        return "нет завершённой резервной копии состояния с SHA256"
+    if value == "FAIL: backup stale":
+        return "резервная копия состояния просрочена"
     if value == "FAIL: news observer stale or missing":
         return "ISS-наблюдение: нет свежего отчёта; состояние источника неизвестно"
     if value == "FAIL: news observer timer inactive":

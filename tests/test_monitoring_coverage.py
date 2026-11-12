@@ -164,8 +164,9 @@ def test_artifact_probes(tmp_path, monkeypatch, settings, variant, legacy_monito
             raise OSError()
         return {'dead': 1 if variant=='blocked' else 0, 'pending_due': 0}
     monkeypatch.setattr(p,'read_outbox_health',health)
-    backup = tmp_path/'moex-tinvest-test.tar.gz'
+    backup = tmp_path/'moex-tinvest-20261112T010000Z.tar.gz'
     backup.write_bytes(b'backup')
+    backup.with_name(backup.name + '.sha256').write_text('test fixture')
     os.utime(backup, (NOW.timestamp(), NOW.timestamp()))
     original = Path.glob
     def glob(path, pattern):
@@ -190,6 +191,28 @@ def test_artifact_probes(tmp_path, monkeypatch, settings, variant, legacy_monito
         late = NOW.replace(hour=17)
         result = p.collect_artifacts(ROOT, tmp_path, settings, late)
         assert expected in result['intraday:overnight_exposure']
+
+
+@pytest.mark.parametrize('name,complete,expected', [
+    ('moex-tinvest-20261112T010000Z.tar.gz', True, 'OK'),
+    ('moex-tinvest-20261112T010000Z.tar.gz', False, 'backup missing'),
+    ('moex-tinvest-20261112T010000Z.sandbox-control.tar.gz', True, 'backup missing'),
+    ('moex-strategy-report-20261112.tar.gz', True, 'backup missing'),
+])
+def test_backup_probe_requires_completed_full_state(
+        tmp_path, monkeypatch, settings, legacy_monitor_layout, name, complete, expected):
+    backup = tmp_path / name
+    backup.write_bytes(b'fixture')
+    if complete:
+        backup.with_name(backup.name + '.sha256').write_text('fixture')
+    original = Path.glob
+    def glob(path, pattern):
+        if str(path).replace('\\', '/') == '/var/backups/moex-tinvest-bot':
+            return iter([backup])
+        return original(path, pattern)
+    monkeypatch.setattr(Path, 'glob', glob)
+    checks = p.collect_artifacts(ROOT, tmp_path, settings, datetime.now(UTC))
+    assert expected in checks['backup:age']
 
 
 @pytest.mark.parametrize("field,value", [('disk_warn_pct',True),('timeout_seconds','bad'),

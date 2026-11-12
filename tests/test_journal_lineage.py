@@ -212,6 +212,53 @@ def test_collector_reports_failure_without_fabricating_zero(tmp_path, monkeypatc
     assert not list((tmp_path / "lineage/receipts").glob("*.json"))
 
 
+def test_sandbox_share_count_is_visible_unconfirmed_not_fabricated_link(tmp_path, monkeypatch):
+    config = {"output": str(tmp_path / "public"), "artifact_root": str(tmp_path)}
+    lineage.activation(tmp_path / "lineage", timestamp("2026-11-11T09:00Z"))
+    e = evidence()
+    monkeypatch.setattr(lineage, "candidates", lambda *a: [e])
+    _, _, state = fixture()
+    state["lotsExecuted"] = "20"
+    original = deepcopy(state)
+    lineage.collect_lineage(config, ACCOUNT, "intraday", lambda *a: state, NOW)
+    status = lineage.load(tmp_path / "lineage/intraday-status.json")
+    assert status["errors"] == []
+    assert status["verified"] == 0
+    assert status["unconfirmed"][0]["code"] == "sandbox_quantity_units_mismatch"
+    assert status["unconfirmed"][0]["reported_executed"] == "20"
+    assert status["unconfirmed"][0]["requested_lots"] == "2"
+    assert state == original
+    assert ACCOUNT not in encoded(status) and '"request"' not in encoded(status)
+    assert not list((tmp_path / "lineage/receipts").glob("*.json"))
+    # A corrected broker response can be verified on the next cycle; no quarantine lockout.
+    state["lotsExecuted"] = "2"
+    lineage.collect_lineage(config, ACCOUNT, "intraday", lambda *a: state, NOW)
+    status = lineage.load(tmp_path / "lineage/intraday-status.json")
+    assert status["verified"] == 1 and status["unconfirmed"] == []
+
+
+@pytest.mark.parametrize("change", ["request", "uid", "status", "quantity", "ledger", "strategy"])
+def test_quantity_anomaly_classification_never_hides_other_corruption(change):
+    e = evidence()
+    _, _, state = fixture()
+    state["lotsExecuted"] = "20"
+    if change == "request":
+        state["orderRequestId"] = "wrong"
+    elif change == "uid":
+        state["instrumentUid"] = "wrong"
+    elif change == "status":
+        state["executionReportStatus"] = "EXECUTION_REPORT_STATUS_PARTIALLYFILL"
+    elif change == "quantity":
+        state["lotsExecuted"] = "21"
+    elif change == "ledger":
+        e["record"]["filled_lots"] = 0
+    else:
+        e["strategy"] = "long"
+    with pytest.raises(ValueError) as error:
+        lineage.verify_state(e, state, NOW)
+    assert not isinstance(error.value, lineage.SandboxQuantityUnavailable)
+
+
 def test_future_lineage_public_projection_keeps_old_cards_and_financials(tmp_path):
     receipt, op = operation_fixture()
     config = {"output": str(tmp_path / "public"), "collector_dir": str(tmp_path / "receipts")}

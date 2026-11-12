@@ -64,6 +64,11 @@
     return {min,max,start:new Date(start).toISOString(),end:new Date(end).toISOString(),segments,markers:fills.map(m=>{const [x,y]=xy(m.at,m.price);return {...m,x,y};})};
   }
   function rationale(value){return String(value||'').replace('intraday momentum','Внутридневной импульс').replace('intraday mandatory flat','Обязательное закрытие перед концом сессии').replace('intraday managed exit','Закрытие intraday').replace('direction=long','Направление: LONG').replace('direction=short','Направление: SHORT').replace('stop_loss:','Порог убытка: ').replace('take_profit:','Цель прибыли: ').replace('max_holding','Предельное время удержания').replace('force_flat','Обязательное закрытие перед концом сессии').replace(/(?:momentum|move)=(-?\d+(?:\.\d+)?)/g,(_,v)=>'Изменение цены '+(Number(v)*100).toFixed(2)+'%').replace(/(?:trade|order|book)=(-?\d+(?:\.\d+)?)/g,(all,v)=>({'trade':'Дисбаланс сделок','order':'Поток заявок','book':'Дисбаланс стакана'}[all.split('=')[0]])+' '+Number(v).toFixed(3)).replaceAll('bps',' б.п.');}
-  const api={numeric,localDay,inPeriod,tradePercent,selectTrades,changePeriod,movePeriod,equityCoordinates,priceCoordinates,csvCell,csvNumber,operationPrice,rationale,status:value=>statuses[value]||value||'Неизвестно',reason:value=>reasons[value]||'Причина: '+value};
+  function lineageWarnings(status){
+    return (status?.unconfirmed||[]).map(row=>row.code==='sandbox_quantity_units_mismatch'
+      ? 'SANDBOX · '+row.symbol+': брокер вернул lotsExecuted='+row.reported_executed+' при заявке '+row.requested_lots+' лот. × '+row.lot_size+' шт. Связь с причиной не подтверждена; количество не пересчитывалось. Сделки и суммы берутся из операций брокера.'
+      : 'Связь исполнения с причиной не подтверждена; проверьте диагностику журнала.');
+  }
+  const api={numeric,localDay,inPeriod,tradePercent,selectTrades,changePeriod,movePeriod,equityCoordinates,priceCoordinates,csvCell,csvNumber,operationPrice,rationale,lineageWarnings,status:value=>statuses[value]||value||'Неизвестно',reason:value=>reasons[value]||'Причина: '+value};
   if(typeof module!=='undefined'&&module.exports)module.exports=api; else root.JournalModel=api;
 })(globalThis);

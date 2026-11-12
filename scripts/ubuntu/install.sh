@@ -234,6 +234,8 @@ install -m 0644 "${PROJECT_DIR}/deploy/ubuntu/moex-tinvest-intraday.timer" \
   "$(root_path /etc/systemd/system/moex-tinvest-intraday.timer)"
 install -m 0644 "${PROJECT_DIR}/deploy/ubuntu/moex-tinvest-maintenance.service" \
   "$(root_path /etc/systemd/system/moex-tinvest-maintenance.service)"
+install -m 0644 "${PROJECT_DIR}/deploy/ubuntu/moex-tinvest-backup.service" \
+  "$(root_path /etc/systemd/system/moex-tinvest-backup.service)"
 install -m 0644 "${PROJECT_DIR}/deploy/ubuntu/moex-tinvest-maintenance.timer" \
   "$(root_path /etc/systemd/system/moex-tinvest-maintenance.timer)"
 install -m 0644 "${PROJECT_DIR}/deploy/ubuntu/moex-tinvest-bot.logrotate" \

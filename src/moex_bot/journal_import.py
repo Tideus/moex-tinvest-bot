@@ -383,6 +383,13 @@ def main() -> int:
         if lineage_errors:
             print(f"Journal lineage degraded: {lineage_errors} plan/ledger or broker-state errors; "
                   "unconfirmed links withheld (sandbox, read-only)")
+        unconfirmed = sum(len(s.get("lineage_status", {}).get("unconfirmed", []))
+                          for s in report["streams"])
+        if unconfirmed:
+            print(f"WARN: SANDBOX journal links unconfirmed={unconfirmed}; "
+                  "stage=broker_order_state; code=sandbox_quantity_units_mismatch; "
+                  "lotsExecuted differs from lots; no inferred execution links. "
+                  "Financial operations refreshed; API lineage status remains degraded.")
         return 2 if status["errors"] or lineage_errors else 0
     except Exception as exc:
         # Never print broker payloads, account identifiers, URLs containing secrets.

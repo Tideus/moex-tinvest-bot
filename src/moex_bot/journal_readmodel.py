@@ -262,6 +262,8 @@ def query(path: Path, route: str, params: dict[str, str]) -> dict[str, Any]:
             )
             lineage_errors = sum(len(s.get("lineage_status", {}).get("errors", []))
                                  for s in streams)
+            lineage_unconfirmed = sum(len(s.get("lineage_status", {}).get("unconfirmed", []))
+                                      for s in streams)
             return {
                 "schema": API_SCHEMA,
                 "generation": metadata["generation"],
@@ -269,8 +271,9 @@ def query(path: Path, route: str, params: dict[str, str]) -> dict[str, Any]:
                 "status": "stale" if build_status != "ok" else "import_error"
                 if metadata.get("import", {}).get("errors") else
                 "source_" + source_status if source_status != "ok" else
-                "lineage_degraded" if lineage_errors else "ok",
+                "lineage_degraded" if lineage_errors or lineage_unconfirmed else "ok",
                 "lineage_errors": lineage_errors,
+                "lineage_unconfirmed": lineage_unconfirmed,
                 "age_seconds": round(age),
                 "build_status": build_status,
                 "source_status": source_status,

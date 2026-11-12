@@ -20,6 +20,10 @@ from uuid import NAMESPACE_URL, uuid5
 from .trader_journal import digest, encoded, match_trades, number, operation_display, timestamp
 
 
+class SandboxQuantityUnavailable(ValueError):
+    """Broker units are inconsistent; never infer an execution link from this state."""
+
+
 def read_db(path: Path, sql: str, args: tuple[Any, ...] = ()) -> list[dict[str, Any]]:
     with closing(sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True)) as db:
         db.execute("PRAGMA query_only=ON")
@@ -169,6 +173,12 @@ def verify_state(evidence: dict[str, Any], state: dict[str, Any], now: datetime)
         raise ValueError("broker order identity mismatch")
     # Known sandbox bug: lotsExecuted sometimes contains shares. Never silently divide.
     filled = number(state["lotsExecuted"])
+    lot = number(intent["instrument"]["lot_size"])
+    if (evidence["strategy"] == "intraday" and lot > 1
+            and filled == number(intent["lots"]) * lot
+            and state.get("executionReportStatus") == "EXECUTION_REPORT_STATUS_FILL"
+            and number(record["filled_lots"]) == number(intent["lots"])):
+        raise SandboxQuantityUnavailable("sandbox lotsExecuted reports units, not verified lots")
     if filled < 0 or filled > number(intent["lots"]) or filled != filled.to_integral_value():
         raise ValueError("broker filled quantity inconsistent; linkage withheld")
     if filled < number(record["filled_lots"]):
@@ -193,7 +203,7 @@ def collect_lineage(
     records = directory / "receipts"
     records.mkdir(mode=0o700, exist_ok=True)
     status: dict[str, Any] = {"from": since.isoformat(), "observed_at": now.isoformat(),
-                              "verified": 0, "deferred": 0, "errors": []}
+                              "verified": 0, "deferred": 0, "errors": [], "unconfirmed": []}
     try:
         items = candidates(Path(config["artifact_root"]), strategy, account, since)
     except (KeyError, ValueError, OSError, TypeError, sqlite3.Error) as exc:
@@ -228,6 +238,17 @@ def collect_lineage(
             with path.open("x", encoding="utf-8") as out:
                 out.write(encoded(receipt))
             status["verified"] += 1
+        except SandboxQuantityUnavailable:
+            # A refreshed financial journal is usable even if explanatory links are not.
+            # Keep this visible in API/UI quality, without inventing zero or dividing by lot.
+            status["unconfirmed"].append({
+                "stage": "broker_order_state", "code": "sandbox_quantity_units_mismatch",
+                "symbol": evidence["intent"]["instrument"]["secid"],
+                "requested_lots": str(number(evidence["intent"]["lots"])),
+                "reported_executed": str(number(state["lotsExecuted"])),
+                "lot_size": str(number(evidence["intent"]["instrument"]["lot_size"])),
+                "request_ref": key[:16],
+            })
         except Exception as exc:
             status["errors"].append("broker_order_state:" + type(exc).__name__)
     temporary = directory / (strategy + ".tmp")

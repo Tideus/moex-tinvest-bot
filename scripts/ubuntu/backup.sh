@@ -52,11 +52,23 @@ elif [[ -e "${STATE_DIR}/long-once" || -L "${STATE_DIR}/long-once" || \
   printf 'FAIL: missing trusted production lock; no safe coordinated backup.\n' >&2; exit 2
 fi
 
+BACKUP_DIR="$(realpath -m -s -- "${BACKUP_DIR}")"
 mkdir -p "${BACKUP_DIR}"
+if [[ -L "${BACKUP_DIR}" || "$(realpath -e "${BACKUP_DIR}")" != "${BACKUP_DIR}" ]]; then
+  printf 'FAIL: backup directory must not contain symlinks.\n' >&2; exit 2
+fi
+if [[ "${EUID}" -eq 0 ]]; then
+  chown root:"${MOEX_BOT_USER:-moexbot}" "${BACKUP_DIR}"
+  chmod 0750 "${BACKUP_DIR}"
+fi
+stage_dir="$(mktemp -d "${BACKUP_DIR}/.snapshot.XXXXXXXX")"
+trap '[[ "${stage_dir}" == "${BACKUP_DIR}/.snapshot."* && -d "${stage_dir}" ]] && rm -rf -- "${stage_dir}"' EXIT
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+"${MOEX_BOT_PYTHON:-python3}" "${script_dir}/snapshot_state.py" "${STATE_DIR}" "${stage_dir}/state"
 stamp="$(date -u +%Y%m%dT%H%M%SZ)"
 archive="${BACKUP_DIR}/moex-tinvest-${stamp}.tar.gz"
-tar --create --gzip --file "${archive}" --directory "${STATE_DIR}" .
-(cd "${BACKUP_DIR}" && sha256sum "$(basename "${archive}")") >"${archive}.sha256"
+[[ ! -e "${archive}" ]] || { printf 'FAIL: backup name already exists.\n' >&2; exit 2; }
+tar --create --gzip --file "${stage_dir}/state.tar.gz" --directory "${stage_dir}/state" .
 # Independent anti-replay fences must travel WITH, not inside, a resettable state DB.
 # Preserve all control evidence, but never auto-extract/re-enroll from this sidecar.
 if [[ -d /var/lib/moex-tinvest-control/prod-long-once ]]; then
@@ -76,4 +88,7 @@ if [[ -d /var/lib/moex-tinvest-control/long-once-sandbox ]]; then
   (cd "${BACKUP_DIR}" && sha256sum "$(basename "${sandbox_control_archive}")") \
     >"${sandbox_control_archive}.sha256"
 fi
+mv -- "${stage_dir}/state.tar.gz" "${archive}"
+(cd "${BACKUP_DIR}" && sha256sum "$(basename "${archive}")") >"${stage_dir}/checksum"
+mv -- "${stage_dir}/checksum" "${archive}.sha256"
 printf '%s\n' "${archive}"

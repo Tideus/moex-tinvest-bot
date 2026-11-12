@@ -383,7 +383,12 @@ def test_ordinary_backup_rejects_long_writer_and_preserves_ledger(tmp_path):
     state, backups = tmp_path / "state", tmp_path / "backups"
     ledger = state / "long-once/sandbox.sqlite3"
     ledger.parent.mkdir(parents=True)
-    ledger.write_bytes(b"test ledger content")
+    import sqlite3
+
+    with sqlite3.connect(ledger) as db:
+        db.execute("CREATE TABLE evidence(value TEXT)")
+        db.execute("INSERT INTO evidence VALUES ('test ledger content')")
+    original_ledger = ledger.read_bytes()
     script = (root / "scripts/ubuntu/backup.sh").read_text()
     for path in ("in / /var /var/lib ", "/etc/moex-tinvest-bot", "/var/lib/moex-tinvest-control"):
         replacement = (
@@ -410,11 +415,15 @@ stat() {
         "MOEX_BOT_STATE_DIR": str(state),
         "MOEX_BOT_BACKUP_DIR": str(backups),
     }
+    script_path = tmp_path / "backup.sh"
+    script_path.write_text(script)
+    (tmp_path / "snapshot_state.py").write_bytes(
+        (root / "scripts/ubuntu/snapshot_state.py").read_bytes())
     fd = os.open(control, os.O_RDONLY)
     try:
         fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
         busy = subprocess.run(
-            ["bash", "-c", script], capture_output=True, text=True, env=env, timeout=10
+            ["bash", str(script_path)], capture_output=True, text=True, env=env, timeout=10
         )
         assert busy.returncode == 2 and "sandbox long writer" in busy.stderr
         assert not backups.exists()
@@ -423,13 +432,18 @@ stat() {
     cmd = [
         "bash",
         "-c",
-        'exec 7<"$1"; flock -xn 7 || exit 2; bash -c "$2"',
+        'exec 7<"$1"; flock -xn 7 || exit 2; bash "$2"',
         "test",
         str(control),
-        script,
+        str(script_path),
     ]
     done = subprocess.run(cmd, capture_output=True, text=True, env=env, timeout=10)
     assert done.returncode == 0, done.stderr
+    assert ledger.read_bytes() == original_ledger
     with tarfile.open(Path(done.stdout.strip())) as archive:
-        assert archive.extractfile("./long-once/sandbox.sqlite3").read() == ledger.read_bytes()
+        restored = tmp_path / "restored.sqlite3"
+        restored.write_bytes(archive.extractfile("./long-once/sandbox.sqlite3").read())
+        with sqlite3.connect(restored) as db:
+            assert db.execute("SELECT * FROM evidence").fetchall() == [("test ledger content",)]
+            assert db.execute("PRAGMA integrity_check").fetchone() == ("ok",)
         assert all("entry.claim" not in name for name in archive.getnames())

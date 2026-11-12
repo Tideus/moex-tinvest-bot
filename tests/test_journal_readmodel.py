@@ -302,3 +302,17 @@ def test_legacy_normalized_report_still_has_exact_projection_parity(projection):
                 row.pop(field)
     publish(report, path)
     assert compare(report, path)["streams"] == 2
+
+
+def test_unconfirmed_quantity_is_not_hidden_by_successful_financial_refresh(projection):
+    path, report, _ = projection
+    for stream in report["streams"]:
+        stream["observed_at"] = datetime.now(UTC).isoformat()
+    report["streams"][0]["lineage_status"] = {"errors": [], "unconfirmed": [
+        {"stage": "broker_order_state", "code": "sandbox_quantity_units_mismatch",
+         "symbol": "MTSS", "requested_lots": "5", "reported_executed": "50"}]}
+    publish(report, path)
+    health = query(path, "health", {})
+    assert health["status"] == "lineage_degraded"
+    assert health["lineage_unconfirmed"] == 1 and health["lineage_errors"] == 0
+    assert compare(report, path)["streams"] == 2

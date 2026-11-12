@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import sqlite3
 import subprocess
@@ -272,10 +273,15 @@ def collect_artifacts(app: Path, state: Path, settings: dict[str, Any],
                 if positions else "OK")
         except Exception:
             checks["intraday:overnight_exposure"] = "FAIL: broker snapshot read error"
-    backups = list(Path("/var/backups/moex-tinvest-bot").glob("moex-tinvest-*.tar.gz"))
+    backups = [p for p in Path("/var/backups/moex-tinvest-bot").glob("moex-tinvest-*.tar.gz")
+               if re.fullmatch(r"moex-tinvest-\d{8}T\d{6}Z\.tar\.gz", p.name)
+               and not p.is_symlink() and p.stat().st_size > 0
+               and p.with_name(p.name + ".sha256").is_file()]
     age = max(now.timestamp(), datetime.now(UTC).timestamp()) - max(
         (p.stat().st_mtime for p in backups), default=0)
-    checks["backup:age"] = "OK" if age <= settings["backup_max_age_hours"] * 3600 else "FAIL: stale"
+    checks["backup:age"] = (
+        "FAIL: backup missing" if not backups else
+        "OK" if age <= settings["backup_max_age_hours"] * 3600 else "FAIL: backup stale")
     return checks
 
 
