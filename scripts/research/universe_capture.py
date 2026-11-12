@@ -111,9 +111,12 @@ def capture(universe, cfg, data, reader):
     if len(by_symbol) != len(universe) or not set(cfg["symbols"]) <= set(by_symbol):
         raise ValueError("universe does not cover the research policy")
     rows, errors = [], []
+    def fetch(symbol):
+        return capture_one(by_symbol[symbol], load(data, symbol, 24), reader)
+
     with ThreadPoolExecutor(max_workers=4) as pool:
         futures = {
-            pool.submit(capture_one, by_symbol[s], load(data, s, 24), reader): s
+            pool.submit(fetch, s): s
             for s in cfg["symbols"]
         }
         for future in as_completed(futures):

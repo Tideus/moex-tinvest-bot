@@ -1,0 +1,35 @@
+[Unit]
+Description=MOEX research 24 stocks - read-only cohorts 3/21/24
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=moexuniverse24
+DynamicUser=yes
+StateDirectory=moex-research-universe24
+WorkingDirectory=/opt/moex-universe24-a95e285-r1
+EnvironmentFile=/etc/moex-tinvest-bot/bot.env
+ExecStart=/usr/bin/python3 -I -B /opt/moex-universe24-a95e285-r1/universe_launch.py run --bundle /opt/moex-universe24-a95e285-r1 --state /var/lib/moex-research-universe24
+Restart=on-failure
+RestartSec=30
+TimeoutStopSec=30
+MemoryMax=256M
+CPUQuota=20%
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+RestrictSUIDSGID=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+SystemCallArchitectures=native
+UMask=0077
+InaccessiblePaths=/opt/moex-tinvest-bot /var/lib/moex-tinvest-bot /etc/moex-tinvest-bot /var/lib/moex-research-forward-v2
+
+[Install]
+WantedBy=multi-user.target

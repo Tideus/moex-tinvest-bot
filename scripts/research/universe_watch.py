@@ -16,8 +16,6 @@ from pathlib import Path
 from statistics import median
 from zoneinfo import ZoneInfo
 
-from intraday_markout import analyze
-
 MSK = ZoneInfo("Europe/Moscow")
 BPS = D(10000)
 
@@ -371,6 +369,8 @@ def main():
     elif args.command == "weekly":
         result = weekly(json.loads(args.input.read_bytes()), cfg)
     else:
+        from intraday_markout import analyze
+
         report = analyze(
             args.input,
             fee_bps=number(cfg["commission_bps_per_side"]),

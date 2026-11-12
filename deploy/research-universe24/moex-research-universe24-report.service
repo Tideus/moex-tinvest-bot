@@ -1,0 +1,26 @@
+[Unit]
+Description=MOEX research 24 stocks - daily and rolling weekly cohort reports
+
+[Service]
+Type=oneshot
+User=moexuniverse24
+DynamicUser=yes
+StateDirectory=moex-research-universe24
+WorkingDirectory=/opt/moex-universe24-a95e285-r1
+ExecStart=/usr/bin/python3 -I -B /opt/moex-universe24-a95e285-r1/universe_launch.py report --bundle /opt/moex-universe24-a95e285-r1 --state /var/lib/moex-research-universe24
+TimeoutStartSec=120
+MemoryMax=256M
+CPUQuota=20%
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+PrivateNetwork=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+RestrictSUIDSGID=yes
+UMask=0077
+InaccessiblePaths=/opt/moex-tinvest-bot /var/lib/moex-tinvest-bot /etc/moex-tinvest-bot /var/lib/moex-research-forward-v2

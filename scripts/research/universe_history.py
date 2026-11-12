@@ -19,11 +19,11 @@ from time import sleep
 from urllib.parse import urlencode
 from urllib.request import urlopen
 
-from universe_watch import cohorts, digest, policy, write_result
+from universe_watch import MSK, cohorts, digest, policy, write_result
 
 
 def candles(symbol, board, interval, start, end, root):
-    if end >= datetime.now(UTC).date():
+    if end >= datetime.now(MSK).date():
         raise ValueError("download completed dates only")
     stem = f"{symbol}_{board}_{interval}_{start}_{end}"
     raw_dir = root / "raw"

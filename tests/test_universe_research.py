@@ -1,6 +1,6 @@
 import copy
 import json
-from datetime import UTC, date, datetime, timedelta
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 from unittest.mock import Mock
@@ -366,6 +366,6 @@ def test_intraday_requires_all_bars_and_does_not_use_future_turnover(cfg):
 
 
 def test_downloader_refuses_unfinished_dates(tmp_path):
-    today = datetime.now(UTC).date()
+    today = datetime.now(watch.MSK).date()
     with pytest.raises(ValueError, match="completed"):
         history.candles("SBER", "TQBR", 10, today, today, tmp_path)

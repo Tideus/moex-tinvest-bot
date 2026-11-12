@@ -1,0 +1,12 @@
+[Unit]
+Description=MOEX research 24 stocks - report at 23:57 Moscow
+
+[Timer]
+OnCalendar=*-*-* 23:57:00 Europe/Moscow
+AccuracySec=1s
+RandomizedDelaySec=0
+Persistent=true
+Unit=moex-research-universe24-report.service
+
+[Install]
+WantedBy=timers.target
