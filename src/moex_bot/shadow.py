@@ -22,6 +22,7 @@ from .domain import (
 )
 from .harness import HarnessResult, TradingHarness
 from .integrations.algopack_intraday import IntradaySuperCandle
+from .observer_funding import ObserverFundingGate, ObserverFundsReader, number, verified_funding
 
 
 class HourlyMarketDataPort(Protocol):
@@ -193,6 +194,7 @@ def run_hourly_shadow(
     as_of: datetime,
     market_data: HourlyMarketDataPort,
     long_flow: tuple[IntradaySuperCandle, ...] = (),
+    observer_reader: ObserverFundsReader | None = None,
 ) -> HarnessResult:
     if config.mode is not ExecutionMode.SHADOW:
         raise ValueError("hourly shadow requires mode=shadow")
@@ -224,6 +226,24 @@ def run_hourly_shadow(
         )
         market[entry.secid] = observation
     portfolio = load_portfolio(portfolio_path, market)
+    funding_gate = None
+    if portfolio.source.startswith("t_invest_prod_observer"):
+        if observer_reader is None or observer_reader.account_id != portfolio.account_id:
+            raise ValueError("PROD OBSERVER requires a bound read-only funding checker")
+        raw_portfolio = json.loads(portfolio_path.read_text(encoding="utf-8"))
+        funding = verified_funding(raw_portfolio.get("observer_funding"),
+                                   portfolio.account_id, observer_reader.clock())
+        available = max(Decimal(0), min(number(funding["positions_money_rub"]),
+                                        number(funding["withdraw_conservative_rub"])))
+        if (number(funding["available_cash_rub"]) != available
+                or portfolio.cash > min(available, number(funding["capital_limit_rub"]))):
+            raise ValueError("PROD OBSERVER sleeve exceeds verified buying power")
+        funding_gate = ObserverFundingGate(
+            observer_reader, funding, portfolio.cash,
+            max(Decimal(0), portfolio.equity(market) * config.min_cash_reserve_weight),
+        )
+    elif observer_reader is not None:
+        raise ValueError("PROD OBSERVER funding checker requires observer portfolio")
     geo_events, news_stale = load_geo_feed(geo_path, as_of=as_of)
     audit_path = output_path.with_suffix(".audit.jsonl")
     run_id = f"shadow-{as_of.isoformat()}"
@@ -243,7 +263,10 @@ def run_hourly_shadow(
             in config.strategy.rebalance_hours_moscow
         ),
         flow={item.secid: item for item in long_flow},
+        observer_gate=None if funding_gate is None else funding_gate.check,
     )
+    if funding_gate is not None:
+        result = replace(result, observer_funding=funding_gate.report())
     persisted = asdict(result)
     persisted["market"] = [asdict(market[secid]) for secid in sorted(market)]
     persisted["portfolio_input"] = asdict(portfolio)

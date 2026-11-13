@@ -6,6 +6,7 @@ from decimal import Decimal
 from pathlib import Path
 
 import pytest
+from test_observer_funding import evidence_now
 
 from moex_bot import cli
 from moex_bot.integrations.tinvest_sandbox import (
@@ -18,6 +19,7 @@ from moex_bot.integrations.tinvest_sandbox import (
     TInvestSandboxAccountService,
 )
 from moex_bot.live_operator import read_live_plan
+from moex_bot.observer_funding import WITHDRAW
 from moex_bot.prod_long import load_prod_long_policy, prepare_prod_long_sleeve
 from moex_bot.protected_observer import ProtectedObserverTransport
 from moex_bot.service_config import PROD_REST, SANDBOX_REST
@@ -35,6 +37,7 @@ class Transport:
     def __init__(self):
         self.calls = []
         self.responses = {
+            WITHDRAW: {"money": [{"currency": "rub", "units": "45000", "nano": 0}]},
             GET_INSTRUMENT_PATH: {"instrument": {
                 "uid": EXTERNAL.uid, "ticker": EXTERNAL.secid, "instrumentType": "futures"}},
             GET_PORTFOLIO_PATH: {
@@ -88,6 +91,7 @@ def test_external_futures_preserve_account_totals_orders_raw_records_and_never_e
     assert "current_value" not in projected.positions[0]
     assert projected.operations[0]["broker_record"]["payment"]["units"] == "91"
     assert payload["source"] == "t_invest_prod_observer_raw"
+    payload["observer_funding"] = evidence_now("iis-test", "45000")
     sleeve = prepare_prod_long_sleeve(policy=POLICY, broker_snapshot=payload,
                                       expected_account_id="iis-test")
     assert sleeve["positions"] == {}

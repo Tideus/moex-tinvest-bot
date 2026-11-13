@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import asdict, dataclass, replace
 from datetime import datetime, timedelta
 from decimal import Decimal
@@ -8,9 +8,11 @@ from decimal import Decimal
 from .adapters import AuditPort, ExecutionPort, order_record_event
 from .config import BotConfig
 from .domain import (
+    ExecutionMode,
     GeoEvent,
     GeoRiskSnapshot,
     MarketObservation,
+    OrderIntent,
     OrderRecord,
     PortfolioSnapshot,
     Position,
@@ -60,6 +62,7 @@ class HarnessResult:
     rebalance_hours_moscow: tuple[int, ...] = ()
     signal_diagnostics: tuple[SignalDiagnostic, ...] = ()
     flow_diagnostics: tuple[FlowDiagnostic, ...] = ()
+    observer_funding: dict[str, object] | None = None
 
 
 class TradingHarness:
@@ -90,7 +93,10 @@ class TradingHarness:
         news_stale: bool = False,
         allow_rebalance: bool = True,
         flow: Mapping[str, IntradaySuperCandle] | None = None,
+        observer_gate: Callable[[OrderIntent], tuple[str, ...]] | None = None,
     ) -> HarnessResult:
+        if observer_gate is not None and self.config.mode is not ExecutionMode.SHADOW:
+            raise ValueError("observer funding gate is shadow-only, not execution permission")
         quality = validate_market(market, as_of, self.config.max_data_age_seconds)
         geo = assess_geo_risk(geo_events, news_stale=news_stale)
         self.audit.write(
@@ -279,6 +285,12 @@ class TradingHarness:
                 cluster_exposure,
                 short_exposure,
             )
+            if decision.allowed and decision.intent is not None and observer_gate is not None:
+                funding_reasons = observer_gate(decision.intent)
+                if funding_reasons:
+                    decision = replace(
+                        decision, allowed=False, reasons=funding_reasons, intent=None,
+                    )
             if not decision.allowed or decision.intent is None:
                 item: dict[str, object] = {
                     "type": "risk_reject",

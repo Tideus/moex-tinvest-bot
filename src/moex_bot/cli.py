@@ -56,6 +56,7 @@ from .live_operator import live_operator
 from .long_flow_health import missing_only
 from .notification_policy import load_notification_policy, should_send_long_morning
 from .notifications import SQLiteOutbox, TelegramBotApiSender, deliver_pending
+from .observer_funding import ObserverFundsReader
 from .ownership import load_ownership_disclosures, render_ownership_report
 from .performance import render_performance_report, summarize_performance
 from .prod_long import load_prod_long_policy, write_prod_long_sleeve
@@ -716,6 +717,8 @@ def hourly_shadow(
             as_of=as_of,
             market_data=market_data,
             long_flow=long_flow,
+            **({"observer_reader": ObserverFundsReader.from_environment()}
+               if report_environment == "PROD OBSERVER" else {}),
         )
         notification_policy = load_notification_policy(notifications_path)
         if outbox_path is not None and should_send_long_morning(
@@ -1364,6 +1367,11 @@ def broker_portfolio_snapshot(
         portfolio_payload["executed_operations"] = [asdict(item) for item in operations]
         if observer_transport is not None:
             observer_transport.annotate(portfolio_payload)
+            funding = ObserverFundsReader(
+                broker.token, broker.account_id, transport=UrlLibJsonTransport(),
+            ).snapshot()
+            funding["started_at"] = snapshot_started_at.isoformat()
+            portfolio_payload["observer_funding"] = funding
         output_path.write_text(
             json.dumps(portfolio_payload, ensure_ascii=False, indent=2, default=str),
             encoding="utf-8",

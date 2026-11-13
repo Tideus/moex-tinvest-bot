@@ -213,13 +213,40 @@ def render_shadow_report(
         lines.extend(
             (
                 "",
-                "💼 СЧЁТ",
+                "💼 БЮДЖЕТ LONG (НЕ ВЕСЬ ИИС)" if result.observer_funding else "💼 СЧЁТ",
                 f"Капитал: {equity_text}",
                 f"Свободно: {_money(portfolio.cash)}",
                 f"Заблокировано: {_money(portfolio.blocked_cash)}",
                 f"Позиции: {len(portfolio.positions)} · заявки у брокера: {portfolio.open_orders}",
             )
         )
+    if result.observer_funding is not None:
+        funds = result.observer_funding
+        lines.extend((
+            "", "🏦 ПРОВЕРКА ДЕНЕГ · T‑INVEST PROD",
+            "Срез брокера: " + datetime.fromisoformat(str(funds['observed_at'])).astimezone(
+                MOSCOW).strftime("%d.%m.%Y %H:%M:%S МСК"),
+            f"Деньги GetPositions: {_money(Decimal(str(funds['positions_money_rub'])))}",
+            f"Блокировки: {_money(Decimal(str(funds['blocked_rub'])))} · "
+            f"ГО: {_money(Decimal(str(funds['guarantee_rub'])))}",
+            f"Консервативно доступно: {_money(Decimal(str(funds['available_cash_rub'])))}",
+            f"Резерв LONG: {_money(Decimal(str(funds['reserve_rub'])))} · "
+            f"на покупки: {_money(Decimal(str(funds['spendable_rub'])))}",
+            f"План с комиссией: {_money(Decimal(str(funds['planned_total_with_fees_rub'])))}",
+        ))
+        checks = funds.get("checks", [])
+        if isinstance(checks, list):
+            for check in checks[:12]:
+                if isinstance(check, dict):
+                    lines.append(
+                        f"• {check['secid']} · GetMaxLots: "
+                        f"{check.get('buy_max_lots', 'неизвестно')} "
+                        "лот. на свои деньги · " + {
+                            "PASSED": "проверка пройдена", "REJECTED": "отказ",
+                            "UNAVAILABLE": "данные недоступны",
+                        }.get(str(check['status']), str(check['status']))
+                    )
+        lines.append("Это снимок, не непрерывный баланс и не разрешение на исполнение.")
     if result.targets:
         lines.extend(("", "🎯 ЦЕЛЕВОЙ ПОРТФЕЛЬ"))
         for index, target in enumerate(result.targets[:12], start=1):

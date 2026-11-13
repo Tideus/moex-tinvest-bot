@@ -4,10 +4,12 @@ import json
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
 from uuid import UUID
 
+from .observer_funding import number, verified_funding
 from .protected_observer import ProtectedExternalInstrument
 
 _ENV_NAME = re.compile(r"^[A-Z][A-Z0-9_]*$")
@@ -113,7 +115,15 @@ def prepare_prod_long_sleeve(
             f"{sorted(unknown)}"
         )
     cash = _decimal(broker_snapshot.get("cash"), "snapshot cash")
-    sleeve_cash = min(cash, policy.canary.capital_limit_rub)
+    funding = verified_funding(
+        broker_snapshot.get("observer_funding"), account_id, datetime.now(UTC),
+    )
+    available = max(Decimal(0), min(cash, number(funding["withdraw_conservative_rub"])))
+    sleeve_cash = min(available, policy.canary.capital_limit_rub)
+    funding.update({"positions_money_rub": str(cash),
+                    "positions_blocked_rub": str(broker_snapshot.get("blocked_cash", "0")),
+                    "available_cash_rub": str(available),
+                    "capital_limit_rub": str(policy.canary.capital_limit_rub)})
     managed_positions = {
         str(secid): value
         for secid, value in raw_positions.items()
@@ -126,6 +136,7 @@ def prepare_prod_long_sleeve(
         "blocked_cash": str(broker_snapshot.get("blocked_cash", "0")),
         "reported_equity": str(sleeve_cash),
         "positions": managed_positions,
+        "observer_funding": funding,
         "daily_turnover": str(broker_snapshot.get("daily_turnover", "0")),
         "open_orders": _coerce_int(
             broker_snapshot.get("open_orders", 0), "snapshot open_orders"

@@ -4,6 +4,7 @@ from decimal import Decimal
 from pathlib import Path
 
 import pytest
+from test_observer_funding import evidence_now
 
 from moex_bot.prod_long import (
     _coerce_int,
@@ -129,6 +130,7 @@ def test_observer_sleeve_writes_only_managed_holdings(tmp_path):
         source="t_invest_prod",
         account_id="iis",
         cash="1000",
+        observer_funding=evidence_now("iis", "1000"),
         positions={"SBER": {"lots": 1}, "GAZP": 1, "T": 0},
     )
     snapshot_path.write_text(json.dumps(snapshot))

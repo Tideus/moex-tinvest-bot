@@ -2,6 +2,7 @@ import json
 from pathlib import Path
 
 import pytest
+from test_observer_funding import evidence_now
 
 from moex_bot.prod_long import load_prod_long_policy, prepare_prod_long_sleeve
 from moex_bot.shadow import load_universe, select_allowed_universe
@@ -14,6 +15,7 @@ def _snapshot() -> dict[str, object]:
         "source": "t_invest_prod",
         "account_id": "prod-iis",
         "cash": "41302.62",
+        "observer_funding": evidence_now(),
         "blocked_cash": "0",
         "reported_equity": "160033.12",
         "daily_turnover": "0",
