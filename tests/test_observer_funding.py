@@ -39,7 +39,7 @@ class Transport:
         self.responses = {
             WITHDRAW: {
                 "money": [money("54887.15")],
-                "blocked": [money("1000")],
+                "blocked": [money("36000")],
                 "blockedGuarantee": [money("35000")],
             },
             MAX_LOTS: {
@@ -231,6 +231,36 @@ def test_current_broker_money_lower_than_snapshot_blocks_buy():
     transport.responses[MAX_LOTS]["buyLimits"]["buyMoneyAmount"] = money("1")
     assert gate.check(intent())
     assert gate.checks[-1]["status"] == "REJECTED"
+
+
+def test_reserve_survives_cash_drop_between_snapshot_and_order_check():
+    gate, transport = setup_gate(budget="10000", reserve="1000")
+    transport.responses[MAX_LOTS]["buyLimits"]["buyMoneyAmount"] = money("3500")
+    assert gate.check(intent())
+    assert gate.checks[-1]["available_for_order_rub"] == "2500"
+    assert gate.spent == 0
+
+
+@pytest.mark.parametrize("blocked,guarantee,expected", [
+    ("42000", "42000", "13000"),  # Real API shape: GO also in aggregate blocked.
+    ("43000", "42000", "12000"),  # GO plus another restriction, counted once.
+    ("0", "42000", "13000"),      # GO still reserved if aggregate field is omitted.
+    ("60000", "42000", "0"),
+])
+def test_withdraw_restrictions_overlap_not_double_deducted(blocked, guarantee, expected):
+    transport = Transport()
+    transport.responses[WITHDRAW] = {"money": [money("55000")],
+                                   "blocked": [money(blocked)],
+                                   "blockedGuarantee": [money(guarantee)]}
+    evidence = ObserverFundsReader("test", "prod-iis", transport).snapshot()
+    assert evidence["withdraw_conservative_rub"] == expected
+
+
+def test_obsolete_double_deduction_evidence_cannot_be_used():
+    evidence = evidence_now()
+    evidence["protocol"] = "prod-observer-funding-v1"
+    with pytest.raises(ValueError, match="refresh snapshot"):
+        verified_funding(evidence, "prod-iis", datetime.now(UTC))
 
 
 @pytest.mark.parametrize(

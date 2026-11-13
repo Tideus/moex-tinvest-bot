@@ -227,8 +227,8 @@ def render_shadow_report(
             "Срез брокера: " + datetime.fromisoformat(str(funds['observed_at'])).astimezone(
                 MOSCOW).strftime("%d.%m.%Y %H:%M:%S МСК"),
             f"Деньги GetPositions: {_money(Decimal(str(funds['positions_money_rub'])))}",
-            f"Блокировки: {_money(Decimal(str(funds['blocked_rub'])))} · "
-            f"ГО: {_money(Decimal(str(funds['guarantee_rub'])))}",
+            f"Блокировка брокера: {_money(Decimal(str(funds['blocked_rub'])))} · "
+            f"ГО: {_money(Decimal(str(funds['guarantee_rub'])))} (не суммируются)",
             f"Консервативно доступно: {_money(Decimal(str(funds['available_cash_rub'])))}",
             f"Резерв LONG: {_money(Decimal(str(funds['reserve_rub'])))} · "
             f"на покупки: {_money(Decimal(str(funds['spendable_rub'])))}",

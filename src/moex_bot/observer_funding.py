@@ -77,7 +77,7 @@ def binding(account_id: str) -> str:
 
 
 def verified_funding(raw: object, account_id: str, now: datetime) -> dict[str, object]:
-    if not isinstance(raw, dict) or raw.get("protocol") != "prod-observer-funding-v1":
+    if not isinstance(raw, dict) or raw.get("protocol") != "prod-observer-funding-v2":
         raise ValueError("PROD OBSERVER: missing GetWithdrawLimits evidence; refresh snapshot")
     if raw.get("account_binding") != binding(account_id):
         raise ValueError("PROD OBSERVER: funding belongs to a different account")
@@ -94,7 +94,10 @@ def verified_funding(raw: object, account_id: str, now: datetime) -> dict[str, o
     )
     if min(blocked, guarantee) < 0:
         raise ValueError("PROD OBSERVER: negative broker cash restriction")
-    expected = max(Decimal(0), cash - blocked - guarantee)
+    # GetWithdrawLimits.blocked can ALREADY contain blockedGuarantee. They are
+    # overlapping restrictions, not independent debits. GetMaxLots.buyLimits
+    # remains the mandatory per-order authority if limits differ between APIs.
+    expected = max(Decimal(0), cash - max(blocked, guarantee))
     if number(raw.get("withdraw_conservative_rub")) != expected:
         raise ValueError("PROD OBSERVER: inconsistent funding calculation")
     return dict(raw)
@@ -145,14 +148,14 @@ class ObserverFundsReader:
         # Empty repeated protobuf fields may be omitted. Invalid/non-list is NOT zero.
         blocked, guarantee = _rub(raw.get("blocked", [])), _rub(raw.get("blockedGuarantee", []))
         result: dict[str, object] = {
-            "protocol": "prod-observer-funding-v1",
+            "protocol": "prod-observer-funding-v2",
             "account_binding": binding(self.account_id),
             "started_at": start.isoformat(),
             "observed_at": self.clock().isoformat(),
             "money_rub": str(money),
             "blocked_rub": str(blocked),
             "guarantee_rub": str(guarantee),
-            "withdraw_conservative_rub": str(max(Decimal(0), money - blocked - guarantee)),
+            "withdraw_conservative_rub": str(max(Decimal(0), money - max(blocked, guarantee))),
         }
         return verified_funding(result, self.account_id, self.clock())
 
@@ -216,7 +219,7 @@ class ObserverFundingGate:
             verified_funding(self.evidence, self.reader.account_id, self.reader.clock())
             # Earlier shadow BUYs are not present at the broker. Reserve them here;
             # never fund another BUY from proceeds of an unexecuted shadow SELL.
-            available = max(Decimal(0), min(self.budget - self.reserve, cash) - self.spent)
+            available = max(Decimal(0), min(self.budget, cash) - self.reserve - self.spent)
             if total > available:
                 reasons.append("недостаточно собственных денег с учётом ГО, резерва и комиссии")
             record.update(
