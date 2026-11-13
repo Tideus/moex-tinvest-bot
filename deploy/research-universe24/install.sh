@@ -2,7 +2,7 @@
 # Deploy only the standalone read-only research observer, never trading services.
 set -Eeuo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)"
-DEST=/opt/moex-universe24-a95e285-r2
+DEST=/opt/moex-universe24-a95e285-r3
 STAGE=""
 if [[ $# == 2 && "$1" == --staging ]]; then
   STAGE="$2"

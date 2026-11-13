@@ -106,7 +106,9 @@ def safe_error(source, stage, exc):
 
 
 def calendar_fetch(day):
-    day_start = datetime.combine(day, time(), MSK).astimezone(UTC)
+    # TradingSchedules dates are UTC day labels, not local session instants.
+    # Moscow midnight converts to the previous UTC date and is rejected (30003).
+    day_start = datetime.combine(day, time(), UTC)
     requests = {
         "tinvest": Request(
             collector.BASE + "InstrumentsService/TradingSchedules",
@@ -398,6 +400,7 @@ def main():
     last_observation = None
     next_prepare = now()
     while True:
+        pause = 5
         at = now()
         day = at.astimezone(MSK).date()
         local_time = at.astimezone(MSK).time()
@@ -426,6 +429,8 @@ def main():
                 },
             )
         except Exception as exc:
+            # Keep an explicit failure, but do not hammer a failing calendar.
+            pause = 60
             error = safe_error("universe24", "scheduler", exc)
             atomic(
                 state / "health.json",
@@ -437,7 +442,7 @@ def main():
                 },
             )
             print(json.dumps(error), flush=True)
-        sleep(5)
+        sleep(pause)
 
 
 if __name__ == "__main__":

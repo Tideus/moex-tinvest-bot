@@ -7,10 +7,11 @@ Run separately from the trading application. Historical daily CSVs supply turnov
 import argparse
 import json
 import os
+import ssl
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import UTC, datetime
 from pathlib import Path
-from urllib.request import HTTPRedirectHandler, Request, build_opener
+from urllib.request import HTTPRedirectHandler, HTTPSHandler, Request, build_opener
 
 from universe_history import load
 from universe_watch import digest, number, policy, screen, write_result
@@ -35,6 +36,9 @@ class Reader:
         if not token.strip():
             raise ValueError("read-only token is missing")
         self._token = token
+        # Immutable verified trust context is shared by concurrent read requests.
+        # Reloading the CA store for every RPC can exhaust the observer CPU quota.
+        self._ssl_context = ssl.create_default_context()
 
     def read(self, method, payload):
         if method not in READS or "accountId" in payload:
@@ -45,7 +49,9 @@ class Reader:
             method="POST",
             headers={"Authorization": "Bearer " + self._token, "Content-Type": "application/json"},
         )
-        with build_opener(NoRedirect()).open(request, timeout=15) as response:
+        with build_opener(NoRedirect(), HTTPSHandler(context=self._ssl_context)).open(
+            request, timeout=15
+        ) as response:
             return json.load(response)
 
 
@@ -124,7 +130,16 @@ def capture(universe, cfg, data, reader):
                 rows.append(future.result())
             except Exception as exc:
                 # Provider exception strings may include headers: never persist them.
-                errors.append({"secid": futures[future], "error_type": type(exc).__name__})
+                error = {"secid": futures[future], "error_type": type(exc).__name__}
+                known = {
+                    "instrument identity or availability mismatch": "instrument_validation",
+                    "invalid live lot size": "instrument_validation",
+                    "stale trading-status read": "trading_status_freshness",
+                    "market-data identity mismatch": "market_identity",
+                }
+                if isinstance(exc, ValueError) and str(exc) in known:
+                    error.update(source="T-Invest", stage=known[str(exc)], reason=str(exc))
+                errors.append(error)
     snapshot = {
         "as_of": datetime.now(UTC).isoformat(),
         "rows": sorted(rows, key=lambda r: r["secid"]),

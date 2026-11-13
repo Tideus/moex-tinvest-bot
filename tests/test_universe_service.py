@@ -1,4 +1,5 @@
 import importlib.util
+import io
 import json
 import os
 import subprocess
@@ -316,6 +317,109 @@ def test_foreign_dynamic_private_directory_is_optional_but_still_denied():
         assert "ProtectSystem=strict" in unit
 
 
+def test_calendar_query_uses_utc_date_label_not_moscow_midnight(monkeypatch):
+    monkeypatch.setenv("T_INVEST_READONLY_TOKEN", "fixture-readonly")
+    monkeypatch.setenv("MOEX_APIKEY", "fixture-moex")
+    requests = []
+    raw = calendar_payload()
+
+    class Opener:
+        def open(self, request, timeout):
+            requests.append(request)
+            source = "tinvest" if request.data else "moex"
+            return io.StringIO(json.dumps(raw[source]["payload"]))
+
+    monkeypatch.setattr(svc, "build_opener", lambda *_: Opener())
+    assert svc.calendar_status(svc.calendar_fetch(DAY), DAY) == "OPEN"
+    query = json.loads(requests[0].data)
+    assert query == {
+        "exchange": "MOEX",
+        "from": "2026-11-13T00:00:00+00:00",
+        "to": "2026-11-14T00:00:00+00:00",
+    }
+    assert "date=2026-11-13" in requests[1].full_url
+
+
+def test_reader_reuses_verified_tls_context_without_reusing_mutable_opener(monkeypatch):
+    factory = Mock(wraps=capture.ssl.create_default_context)
+    monkeypatch.setattr(capture.ssl, "create_default_context", factory)
+    contexts = []
+
+    class Opener:
+        def open(self, request, timeout):
+            assert request.full_url.endswith("MarketDataService/GetOrderBook")
+            return io.StringIO("{}")
+
+    def opener(*handlers):
+        assert isinstance(handlers[0], capture.NoRedirect)
+        contexts.append(handlers[1]._context)
+        return Opener()
+
+    monkeypatch.setattr(capture, "build_opener", opener)
+    reader = capture.Reader("fixture-only")
+    for _ in range(3):
+        assert reader.read("MarketDataService/GetOrderBook", {"instrumentId": "fixture"}) == {}
+    assert factory.call_count == 1 and len({id(c) for c in contexts}) == 1
+    assert contexts[0].check_hostname
+    assert contexts[0].verify_mode == capture.ssl.CERT_REQUIRED
+
+
+def test_status_freshness_is_not_relaxed_by_transport_optimization(tmp_path, monkeypatch):
+    config = cfg() | {"symbols": ["SBER"], "control_symbols": ["SBER"]}
+    monkeypatch.setattr(capture, "load", lambda *_: [])
+    monkeypatch.setattr(
+        capture, "capture_one", Mock(side_effect=ValueError("stale trading-status read"))
+    )
+    result = capture.capture([{"secid": "SBER"}], config, tmp_path, None)
+    assert result["snapshot"]["rows"] == []
+    assert result["snapshot"]["errors"] == [{
+        "secid": "SBER", "error_type": "ValueError", "source": "T-Invest",
+        "stage": "trading_status_freshness", "reason": "stale trading-status read",
+    }]
+
+
+def test_capture_still_rejects_status_older_than_three_seconds():
+    reader = Mock()
+    reader.read.side_effect = [{"instrument": {
+        "uid": "fixture", "ticker": "SBER", "classCode": "TQBR", "currency": "rub",
+        "lot": 10, "apiTradeAvailableFlag": True,
+    }}, {}, {}]
+    times = iter([AT, AT, AT + timedelta(seconds=4)])
+    with pytest.raises(ValueError, match="stale trading-status read"):
+        capture.capture_one(
+            {"secid": "SBER", "t_invest_uid": "fixture", "class_code": "TQBR"},
+            [], reader, lambda: next(times),
+        )
+
+
+def test_scheduler_backs_off_calendar_failure_without_capture(tmp_path, monkeypatch):
+    monkeypatch.setattr(os.sys, "argv", ["observer", "run", "--bundle", str(tmp_path),
+                                       "--state", str(tmp_path)])
+    monkeypatch.setattr(svc, "validate_bundle", lambda _: cfg())
+    monkeypatch.setattr(svc, "now", lambda: AT)
+    for key in list(os.environ):
+        if key.startswith("T_INVEST_"):
+            monkeypatch.delenv(key)
+    monkeypatch.setattr(svc.shutil, "disk_usage", lambda _: Mock(free=2 * 1024**3))
+    monkeypatch.setattr(svc, "latest_calendar", Mock(side_effect=svc.SourceError(
+        "tinvest", "official_calendar", "HTTP_400")))
+    capture_mock = Mock()
+    monkeypatch.setattr(svc, "capture_slot", capture_mock)
+    waits = []
+
+    def stop(seconds):
+        waits.append(seconds)
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(svc, "sleep", stop)
+    with pytest.raises(KeyboardInterrupt):
+        svc.main()
+    assert waits == [60]
+    capture_mock.assert_not_called()
+    health = json.loads((tmp_path / "health.json").read_bytes())
+    assert health["status"] == "FAILED" and health["error"]["error"] == "HTTP_400"
+
+
 @pytest.mark.skipif(os.name == "nt", reason="Linux staging and systemd validation")
 def test_linux_installer_isolated_staging(tmp_path):
     run = subprocess.run(
@@ -324,7 +428,7 @@ def test_linux_installer_isolated_staging(tmp_path):
         text=True,
     )
     assert run.returncode == 0, run.stderr
-    bundle = tmp_path / "opt/moex-universe24-a95e285-r2"
+    bundle = tmp_path / "opt/moex-universe24-a95e285-r3"
     assert svc.validate_bundle(bundle)["control_symbols"] == ["SBER", "ROSN", "CHMF"]
     report_unit = (
         tmp_path / "etc/systemd/system/moex-research-universe24-report.service"
