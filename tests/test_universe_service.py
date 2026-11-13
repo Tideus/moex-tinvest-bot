@@ -69,6 +69,7 @@ def fixture_state(tmp_path):
     bundle.mkdir()
     (state / "calendar" / f"{DAY}.json").write_text(json.dumps(calendar_payload()))
     (bundle / "universe.json").write_text("[]")
+    (bundle / "BUNDLE_MANIFEST.sha256").write_text("fixture")
     return state, bundle
 
 
@@ -295,6 +296,26 @@ def test_imports_do_not_load_working_bot():
     assert run.returncode == 0, run.stderr
 
 
+def test_rejected_calendar_preserves_raw_but_never_caches_success(tmp_path, monkeypatch):
+    raw = calendar_payload()
+    raw["moex"]["payload"]["session_schedule"]["data"] = []
+    monkeypatch.setattr(svc, "calendar_fetch", lambda day: raw)
+    monkeypatch.setattr(svc, "now", lambda: AT)
+    with pytest.raises(svc.SourceError, match="moex_calendar_missing_or_ambiguous"):
+        svc.latest_calendar(tmp_path, DAY, AT)
+    assert len(list(tmp_path.glob("calendar-attempts/*.json"))) == 1
+    assert not (tmp_path / "calendar" / f"{DAY}.json").exists()
+
+
+def test_foreign_dynamic_private_directory_is_optional_but_still_denied():
+    for name in ("moex-research-universe24.service", "moex-research-universe24-report.service"):
+        unit = (ROOT / "deploy/research-universe24" / name).read_text()
+        assert "DynamicUser=yes" in unit
+        assert " -/var/lib/moex-research-forward-v2" in unit
+        assert "InaccessiblePaths=/opt/moex-tinvest-bot" in unit
+        assert "ProtectSystem=strict" in unit
+
+
 @pytest.mark.skipif(os.name == "nt", reason="Linux staging and systemd validation")
 def test_linux_installer_isolated_staging(tmp_path):
     run = subprocess.run(
@@ -303,7 +324,7 @@ def test_linux_installer_isolated_staging(tmp_path):
         text=True,
     )
     assert run.returncode == 0, run.stderr
-    bundle = tmp_path / "opt/moex-universe24-a95e285-r1"
+    bundle = tmp_path / "opt/moex-universe24-a95e285-r2"
     assert svc.validate_bundle(bundle)["control_symbols"] == ["SBER", "ROSN", "CHMF"]
     report_unit = (
         tmp_path / "etc/systemd/system/moex-research-universe24-report.service"

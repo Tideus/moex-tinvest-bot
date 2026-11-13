@@ -8,9 +8,9 @@ Type=simple
 User=moexuniverse24
 DynamicUser=yes
 StateDirectory=moex-research-universe24
-WorkingDirectory=/opt/moex-universe24-a95e285-r1
+WorkingDirectory=/opt/moex-universe24-a95e285-r2
 EnvironmentFile=/etc/moex-tinvest-bot/bot.env
-ExecStart=/usr/bin/python3 -I -B /opt/moex-universe24-a95e285-r1/universe_launch.py run --bundle /opt/moex-universe24-a95e285-r1 --state /var/lib/moex-research-universe24
+ExecStart=/usr/bin/python3 -I -B /opt/moex-universe24-a95e285-r2/universe_launch.py run --bundle /opt/moex-universe24-a95e285-r2 --state /var/lib/moex-research-universe24
 Restart=on-failure
 RestartSec=30
 TimeoutStopSec=30
@@ -29,7 +29,7 @@ RestrictSUIDSGID=yes
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 SystemCallArchitectures=native
 UMask=0077
-InaccessiblePaths=/opt/moex-tinvest-bot /var/lib/moex-tinvest-bot /etc/moex-tinvest-bot /var/lib/moex-research-forward-v2
+InaccessiblePaths=/opt/moex-tinvest-bot /var/lib/moex-tinvest-bot /etc/moex-tinvest-bot -/var/lib/moex-research-forward-v2
 
 [Install]
 WantedBy=multi-user.target

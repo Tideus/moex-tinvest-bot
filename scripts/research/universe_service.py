@@ -142,7 +142,6 @@ def calendar_fetch(day):
             "received_at": now().isoformat(),
             "payload": payload,
         }
-    calendar_status(result, day)
     return result
 
 
@@ -184,7 +183,21 @@ def prepare(state, cfg, day):
 def latest_calendar(state, day, at):
     path = state / "calendar" / f"{day}.json"
     if not path.exists():
-        watch.write_result(path, calendar_fetch(day))
+        raw = calendar_fetch(day)
+        attempt = now().strftime("%Y%m%dT%H%M%S%fZ")
+        watch.write_result(state / "calendar-attempts" / f"{day}-{attempt}.json", raw)
+        try:
+            calendar_status(raw, day)
+        except Exception as exc:
+            known = {
+                "tinvest_calendar_missing_or_ambiguous",
+                "moex_calendar_missing_or_ambiguous",
+                "calendars_disagree",
+                "calendar_session_times_disagree",
+            }
+            reason = str(exc) if str(exc) in known else type(exc).__name__
+            raise SourceError("calendar", "cross_source_validation", reason) from None
+        watch.write_result(path, raw)
         at = now()
     raw = json.loads(path.read_bytes())
     for value in raw.values():
@@ -222,6 +235,9 @@ def capture_slot(state, bundle, cfg, at, calendar=latest_calendar, capture=colle
         if not slot <= started <= slot + timedelta(seconds=30):
             raise ValueError("capture_started_after_slot_deadline")
         result["protocol"] = PROTOCOL
+        result["bundle_manifest_sha256"] = hashlib.sha256(
+            (bundle / "BUNDLE_MANIFEST.sha256").read_bytes()
+        ).hexdigest()
         result["execution_allowed"] = False
         result["calendar_sha256"] = hashlib.sha256(
             (state / "calendar" / f"{day}.json").read_bytes()
