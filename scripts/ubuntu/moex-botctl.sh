@@ -929,6 +929,11 @@ if source.exists():
     find "${STATE_DIR}/artifacts" -maxdepth 1 -type f \
       -newermt "${from_date} 00:00:00" ! -newermt "${to_date} 23:59:59" \
       -exec cp -a -t "${work_dir}/state/artifacts" -- {} +
+    # Reports may be rebuilt after midnight; their session date is authoritative.
+    # Supplement the unchanged cycle/mtime selection with explicitly named reports.
+    "${PYTHON_BIN}" "${APP_DIR}/scripts/ubuntu/report_artifacts.py" \
+      --artifacts "${STATE_DIR}/artifacts" --destination "${work_dir}/state/artifacts" \
+      --from-date "${from_date}" --to-date "${to_date}"
   fi
   if [[ -d "${LOG_DIR}" ]]; then
     find "${LOG_DIR}" -maxdepth 1 -type f \
