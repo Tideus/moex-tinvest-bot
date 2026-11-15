@@ -20,7 +20,7 @@ run="$(mktemp -d "${base}/run-$(date -u +%Y%m%dT%H%M%SZ).XXXXXXXX")"
   --sources "${app}/config/geo_sources.json" --output "${run}/geo.json"
 "${python}" -I -B -m moex_bot.cli broker-portfolio-snapshot \
   --universe "${app}/config/universe.json" --runtime "${app}/config/prod_runtime.json" \
-  --services "${app}/config/services.json" --output "${run}/portfolio.json"
+  --services "${app}/config/services.json" --one-shot-funding --output "${run}/portfolio.json"
 "${python}" -I -B -m moex_bot.cli prod-long-prepare \
   --policy "${app}/config/prod_long.json" --broker-snapshot "${run}/portfolio.json" \
   --output "${run}/sleeve.json"

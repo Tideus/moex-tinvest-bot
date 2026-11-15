@@ -10,6 +10,7 @@ from pathlib import Path
 from uuid import UUID
 
 from .observer_funding import number, verified_funding
+from .one_shot_manual_future import KCG7, RAW_SOURCE, SLEEVE_SOURCE, require_collateral
 from .protected_observer import ProtectedExternalInstrument
 
 _ENV_NAME = re.compile(r"^[A-Z][A-Z0-9_]*$")
@@ -93,7 +94,9 @@ def prepare_prod_long_sleeve(
 ) -> dict[str, object]:
     if policy.execution_stage != "observer":
         raise ValueError("this build permits prod long observer stage only")
-    if broker_snapshot.get("source") not in {"t_invest_prod", "t_invest_prod_observer_raw"}:
+    if broker_snapshot.get("source") not in {
+        "t_invest_prod", "t_invest_prod_observer_raw", RAW_SOURCE,
+    }:
         raise ValueError("prod long observer requires a production broker snapshot")
     external = _external_snapshot(policy, broker_snapshot)
     account_id = str(broker_snapshot.get("account_id", "")).strip()
@@ -151,6 +154,14 @@ def prepare_prod_long_sleeve(
             "allowed_secids": sorted(policy.allowed_secids),
         },
     }
+    if "manual_kcg7_contracts" in broker_snapshot or broker_snapshot.get("source") == RAW_SOURCE:
+        count = broker_snapshot.get("manual_kcg7_contracts")
+        if (broker_snapshot.get("source") != RAW_SOURCE or type(count) is not int
+                or count == 0 or KCG7 not in policy.protected_external_instruments):
+            raise ValueError("invalid one-shot manual KCG7 evidence")
+        require_collateral(funding)
+        result["source"] = SLEEVE_SOURCE  # rejected by the legacy supervised live operator
+        result["manual_kcg7_contracts"] = count  # audit only, never a managed position
     if external:
         result["source"] = "t_invest_prod_observer_external"
         result["protected_external"] = external

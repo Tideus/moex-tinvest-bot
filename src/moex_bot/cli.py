@@ -57,6 +57,11 @@ from .long_flow_health import missing_only
 from .notification_policy import load_notification_policy, should_send_long_morning
 from .notifications import SQLiteOutbox, TelegramBotApiSender, deliver_pending
 from .observer_funding import ObserverFundsReader
+from .one_shot_manual_future import (
+    RAW_SOURCE,
+    ManualFutureCheck,
+    require_collateral,
+)
 from .ownership import load_ownership_disclosures, render_ownership_report
 from .performance import render_performance_report, summarize_performance
 from .prod_long import load_prod_long_policy, write_prod_long_sleeve
@@ -718,7 +723,7 @@ def hourly_shadow(
             market_data=market_data,
             long_flow=long_flow,
             **({"observer_reader": ObserverFundsReader.from_environment()}
-               if report_environment == "PROD OBSERVER" else {}),
+               if report_environment in {"PROD OBSERVER", "PROD ONE-SHOT PLAN"} else {}),
         )
         notification_policy = load_notification_policy(notifications_path)
         if outbox_path is not None and should_send_long_morning(
@@ -1295,6 +1300,7 @@ def broker_portfolio_snapshot(
     services_path: Path,
     account_id_env: str | None = None,
     observer_policy_path: Path | None = None,
+    one_shot_funding: bool = False,
 ) -> int:
     try:
         runtime_config = load_runtime_config(runtime_path)
@@ -1310,6 +1316,20 @@ def broker_portfolio_snapshot(
         instruments = _verified_instruments(universe)
         service = TInvestSandboxAccountService(broker.token, transport=UrlLibJsonTransport())
         observer_transport = None
+        manual_check = None
+        if one_shot_funding and (
+            broker.environment is not TInvestEnvironment.PROD
+            or broker.account_id_env != "T_INVEST_PROD_ACCOUNT_ID"
+            or observer_policy_path is not None
+        ):
+            raise ValueError("one-shot funding requires the unprojected configured PROD IIS")
+        if one_shot_funding:
+            policy = load_prod_long_policy(universe_path.with_name("prod_long.json"))
+            manual_check = ManualFutureCheck(
+                broker.account_id, broker.token, service.transport,
+                policy.protected_external_instruments, frozenset(instruments),
+            )
+            service.iis_one_shot_check = manual_check
         if observer_policy_path is not None:
             policy = load_prod_long_policy(observer_policy_path)
             if (
@@ -1367,11 +1387,16 @@ def broker_portfolio_snapshot(
         portfolio_payload["executed_operations"] = [asdict(item) for item in operations]
         if observer_transport is not None:
             observer_transport.annotate(portfolio_payload)
+        if one_shot_funding or observer_transport is not None:
             funding = ObserverFundsReader(
                 broker.token, broker.account_id, transport=UrlLibJsonTransport(),
             ).snapshot()
             funding["started_at"] = snapshot_started_at.isoformat()
             portfolio_payload["observer_funding"] = funding
+            if manual_check is not None and manual_check.contracts:
+                require_collateral(funding)
+                portfolio_payload["source"] = RAW_SOURCE
+                portfolio_payload["manual_kcg7_contracts"] = manual_check.contracts
         output_path.write_text(
             json.dumps(portfolio_payload, ensure_ascii=False, indent=2, default=str),
             encoding="utf-8",
@@ -1923,6 +1948,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     broker_snapshot_parser.add_argument("--output", type=Path, required=True)
     broker_snapshot_parser.add_argument("--observer-policy", type=Path)
+    broker_snapshot_parser.add_argument("--one-shot-funding", action="store_true")
     broker_snapshot_parser.add_argument(
         "--runtime", type=Path, default=Path("config/runtime.json")
     )
@@ -2301,6 +2327,7 @@ def main() -> int:
             services_path=args.services,
             account_id_env=args.account_id_env,
             observer_policy_path=args.observer_policy,
+            one_shot_funding=args.one_shot_funding,
         )
     if args.command == "intraday-reconcile":
         return intraday_reconcile(accounts_path=args.accounts, outbox_path=args.outbox)

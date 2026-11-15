@@ -13,6 +13,8 @@ from uuid import NAMESPACE_URL, uuid5
 from .config import load_config
 from .domain import Instrument, Side
 from .execution import stable_order_request_id
+from .observer_funding import verified_funding
+from .one_shot_manual_future import KCG7, SLEEVE_SOURCE, require_collateral
 from .prod_long import load_prod_long_policy
 from .scheduler import MOSCOW, is_conservative_stock_window
 from .shadow import load_universe
@@ -42,7 +44,8 @@ def select_candidate(
     now: datetime,
     environment: str,
 ) -> Candidate | None:
-    sources = {"sandbox": "t_invest_sandbox", "prod-preview": "t_invest_prod_observer"}
+    sources = {"sandbox": {"t_invest_sandbox"},
+               "prod-preview": {"t_invest_prod_observer", SLEEVE_SOURCE}}
     if environment not in sources or not account_id.strip() or now.tzinfo is None:
         raise ValueError("explicit environment, account and aware clock required")
     raw, snapshot = plan.read_bytes(), portfolio.read_bytes()
@@ -51,10 +54,9 @@ def select_candidate(
     config = load_config(strategy_config)
     if (
         p["portfolio_input_sha256"] != hashlib.sha256(snapshot).hexdigest()
-        or any(
-            x["source"] != sources[environment] or x["account_id"] != account_id
-            for x in (s, p["portfolio_input"])
-        )
+        or s["source"] not in sources[environment]
+        or p["portfolio_input"]["source"] != s["source"]
+        or any(x["account_id"] != account_id for x in (s, p["portfolio_input"]))
         or p["config_snapshot"] != json.loads(json.dumps(asdict(config), default=str))
         or config.mode.value != "shadow"
         or config.allow_margin
@@ -80,6 +82,11 @@ def select_candidate(
     ):
         return None
     rules = load_prod_long_policy(policy)
+    if s["source"] == SLEEVE_SOURCE:
+        count = s.get("manual_kcg7_contracts")
+        if type(count) is not int or not count or KCG7 not in rules.protected_external_instruments:
+            raise ValueError("missing manual KCG7 reconciliation in one-shot sleeve")
+        require_collateral(verified_funding(s.get("observer_funding"), account_id, now))
     entries = {i.secid: i for i in load_universe(universe)}
     eligible = {x["secid"] for x in p["signal_diagnostics"] if x["eligible"] is True}
     flow = {x["secid"] for x in p["flow_diagnostics"] if x["passed"] is True}

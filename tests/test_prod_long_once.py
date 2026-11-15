@@ -85,6 +85,19 @@ def test_one_buy_one_native_stop_and_never_another_candidate(case):
     assert (case["claim_directory"] / "stop-dispatch.json").is_file()
 
 
+@pytest.mark.parametrize("refusal_at", [1, 2])
+def test_funding_limit_lost_before_reservation_never_dispatches(case, refusal_at):
+    broker = case["broker"]
+    broker.capture = Mock(side_effect=[broker.state] * (refusal_at - 1)
+                          + [ValueError("GetMaxLots: insufficient own-money lots")])
+    with pytest.raises(ValueError, match="GetMaxLots"):
+        execute(case)
+    fences = case["claim_directory"]
+    assert (fences / "claim.json").exists() == (refusal_at == 2)
+    assert not (fences / "buy-dispatch.json").exists()
+    assert not broker.calls and not case["stops"].post_stop.called
+
+
 def test_grant_failure_never_touches_broker_or_claim(case):
     case["authority"].side_effect = ValueError("not reviewed")
     with pytest.raises(ValueError, match="not reviewed"):

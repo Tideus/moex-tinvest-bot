@@ -11,6 +11,7 @@ from zoneinfo import ZoneInfo
 
 from ..domain import Instrument, OrderIntent, OrderRecord, OrderStatus, Side
 from ..live_execution import LiveHolding, LiveState
+from ..observer_funding import verified_order_total
 from ..service_config import PROD_REST
 from .tinvest_sandbox import (
     JsonPostTransport,
@@ -111,8 +112,7 @@ class TInvestLiveBroker:
         positions = self._post("OperationsService/GetPositions", payload)
         if positions.get("limitsLoadingInProgress", False) is not False:
             raise ValueError("production position limits are not verified as loaded")
-        if positions.get("futures") or positions.get("options"):
-            raise ValueError("initial live canary does not support existing derivatives")
+        portfolio = self._equity_portfolio(intent, portfolio, positions)
         free = {
             str(row["instrumentUid"]): int(row["balance"])
             if row.get("exchangeBlocked") is not True
@@ -137,24 +137,7 @@ class TInvestLiveBroker:
                 0 if row.get("blocked") is True else free.get(known.uid, 0),
                 _money(row["currentPrice"]),
             )
-        withdraw = self._post("OperationsService/GetWithdrawLimits", payload)
-        cash = sum(
-            (
-                _money(row)
-                for row in _rows(withdraw, "money")
-                if str(row.get("currency", "")).upper() == "RUB"
-            ),
-            Decimal("0"),
-        )
-        for field in ("blocked", "blockedGuarantee"):
-            cash -= sum(
-                (
-                    _money(row)
-                    for row in _rows(withdraw, field)
-                    if str(row.get("currency", "")).upper() == "RUB"
-                ),
-                Decimal("0"),
-            )
+        cash = self._cash_available(intent, positions)
         orders = _rows(self._post("OrdersService/GetOrders", payload), "orders")
         stops = _rows(self._post("StopOrdersService/GetStopOrders", payload), "stopOrders")
         turnover = self._turnover(started)
@@ -170,11 +153,7 @@ class TInvestLiveBroker:
                 "price": decimal_to_quotation(intent.limit_price),
             },
         )
-        if (
-            int(estimate.get("lotsRequested", 0)) != intent.lots
-            or _money(estimate.get("initialOrderAmount")) != intent.notional
-        ):
-            raise ValueError("broker order-price quantity/notional mismatch")
+        total = verified_order_total(estimate, intent)
         status = self._post("MarketDataService/GetTradingStatus", {"instrumentId": inst.uid})
         book = self._post("MarketDataService/GetOrderBook", {"instrumentId": inst.uid, "depth": 1})
         if book.get("instrumentUid") != inst.uid or status.get("instrumentUid") != inst.uid:
@@ -206,11 +185,26 @@ class TInvestLiveBroker:
             _money(portfolio.get("totalAmountPortfolio")),
             _money(portfolio.get("dailyYield")),
             turnover,
-            _money(estimate.get("totalOrderAmount")),
+            total,
             holdings,
             len(orders),
             frozenset(str(row["instrumentUid"]) for row in stops),
         )
+
+    def _equity_portfolio(
+        self, intent: OrderIntent, portfolio: Mapping[str, Any], positions: Mapping[str, Any],
+    ) -> Mapping[str, Any]:
+        if positions.get("futures") or positions.get("options"):
+            raise ValueError("initial live canary does not support existing derivatives")
+        return portfolio
+
+    def _cash_available(self, intent: OrderIntent, positions: Mapping[str, Any]) -> Decimal:
+        """Original supervised route; the LONG one-shot enforces its own stricter checks."""
+        withdraw = self._post("OperationsService/GetWithdrawLimits", {"accountId": self.account_id})
+        def rub(key: str) -> Decimal:
+            return sum((_money(r) for r in _rows(withdraw, key)
+                        if str(r.get("currency", "")).upper() == "RUB"), Decimal(0))
+        return rub("money") - rub("blocked") - rub("blockedGuarantee")
 
     def _turnover(self, now: datetime) -> Decimal:
         zone = ZoneInfo("Europe/Moscow")
@@ -245,7 +239,7 @@ class TInvestLiveBroker:
                     "OPERATION_TYPE_BUY_MARGIN",
                     "OPERATION_TYPE_SELL_MARGIN",
                 }:
-                    result += abs(_money(row.get("payment")))
+                    result += self._trade_turnover(row)
             if response.get("hasNext") is not True:
                 return result
             next_cursor = str(response.get("nextCursor", ""))
@@ -253,6 +247,9 @@ class TInvestLiveBroker:
                 raise ValueError("live operations pagination did not advance")
             cursor = next_cursor
         raise ValueError("live operations pagination limit exceeded")
+
+    def _trade_turnover(self, row: Mapping[str, Any]) -> Decimal:
+        return abs(_money(row.get("payment")))
 
     def _decode(self, intent: OrderIntent, raw: Mapping[str, Any]) -> OrderRecord:
         statuses = {

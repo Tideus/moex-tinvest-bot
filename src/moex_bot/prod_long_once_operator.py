@@ -11,22 +11,34 @@ import hashlib
 import json
 import os
 import re
-from dataclasses import replace
+from collections.abc import Mapping
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
+from .config import load_config
+from .domain import OrderIntent, Side
 from .integrations.tinvest_sandbox import JsonPostTransport
 from .live_audit import AuditJsonTransport
 from .live_execution import registered_live_journal
 from .live_operator import assert_root_review_path, release_digest
 from .live_protection import NativeProtectionBroker
 from .long_auto_signal import select_candidate
+from .observer_funding import ObserverFundsReader, number, rub_balance, verified_funding
+from .one_shot_manual_future import (
+    KCG7,
+    ManualFutureCheck,
+    require_collateral,
+    verify_equity_turnover,
+)
 from .prod_long import load_prod_long_policy
 from .prod_long_once import run_once
 from .prod_session import production_session
+from .protected_observer import ProtectedExternalInstrument
 from .service_config import PROD_REST
 from .shadow import load_universe
 from .supervised_execution import SupervisedTInvestBroker
@@ -136,6 +148,7 @@ class ProductionTransport:
             "OperationsService/GetOperationsByCursor",
             "OrdersService/GetOrders",
             "OrdersService/GetOrderPrice",
+            "OrdersService/GetMaxLots",
             "OrdersService/GetOrderState",
             "OrdersService/PostOrder",
             "OrdersService/CancelOrder",
@@ -154,6 +167,61 @@ class ProductionTransport:
         if not isinstance(result, dict):
             raise ValueError("invalid production response")
         return result
+
+
+@dataclass(kw_only=True)
+class OneShotIisBroker(SupervisedTInvestBroker):
+    capital_limit: Decimal
+    reserve_weight: Decimal
+    protected_futures: tuple[ProtectedExternalInstrument, ...] = ()
+
+    def _trade_turnover(self, row: Mapping[str, Any]) -> Decimal:
+        verify_equity_turnover(row, frozenset(self.instruments_by_uid))
+        return super()._trade_turnover(row)
+
+    def _equity_portfolio(
+        self, intent: OrderIntent, portfolio: Mapping[str, Any], positions: Mapping[str, Any],
+    ) -> Mapping[str, Any]:
+        if intent.instrument.uid == KCG7.uid or intent.instrument.secid == KCG7.secid:
+            raise ValueError("IIS: manual KCG7 is never a trading target")
+        return ManualFutureCheck(
+            self.account_id, self.token, self.transport, self.protected_futures,
+            frozenset(self.instruments_by_uid),
+        ).equity_portfolio(portfolio, positions)
+
+    def _cash_available(self, intent: OrderIntent, positions: Mapping[str, Any]) -> Decimal:
+        if (intent.side is not Side.BUY or intent.lots != 1 or intent.confirm_margin_trade
+                or not self.capital_limit.is_finite() or self.capital_limit <= 0
+                or not self.reserve_weight.is_finite() or not 0 <= self.reserve_weight <= 1):
+            raise ValueError("invalid one-lot IIS funding request")
+        # GetPortfolio and GetPositions are separate reads. A BUY must not add to
+        # a manual position which appeared between them. Never adopt its shares for a stop.
+        rows = positions.get("securities", [])
+        if not isinstance(rows, list):
+            raise ValueError("invalid IIS securities")
+        seen: set[str] = set()
+        for row in rows:
+            uid = row.get("instrumentUid") if isinstance(row, Mapping) else None
+            if not isinstance(uid, str) or not uid or uid in seen:
+                raise ValueError("ambiguous IIS securities")
+            seen.add(uid)
+            if uid == intent.instrument.uid and (
+                number(row.get("balance")) != 0 or number(row.get("blocked", 0)) != 0
+                or row.get("exchangeBlocked", False) is not False
+            ):
+                raise ValueError("GetPositions: candidate is held or blocked on the IIS")
+        reader = ObserverFundsReader(self.token, self.account_id, self.transport, self.clock)
+        funds = reader.snapshot()
+        if positions.get("futures"):
+            require_collateral(funds)
+        lots, cash = reader.own_buy_limits(intent)
+        if lots < 1:
+            raise ValueError("GetMaxLots: insufficient own-money lots for LONG IIS")
+        verified_funding(funds, self.account_id, self.clock())
+        budget = min(self.capital_limit, max(Decimal(0), rub_balance(positions.get("money"))),
+                     number(funds["withdraw_conservative_rub"]))
+        # Mirror the strategy sleeve's reserve, even when the broker's cash limit is lower.
+        return max(Decimal(0), min(budget, cash) - budget * self.reserve_weight)
 
 
 def operate(args: argparse.Namespace) -> dict[str, str | int]:
@@ -248,7 +316,12 @@ def operate(args: argparse.Namespace) -> dict[str, str | int]:
     transport = AuditJsonTransport(
         raw_transport, journal.parent / "audit" / (candidate.order_request_id + ".jsonl")
     )
-    broker = SupervisedTInvestBroker(token, account, transport, instruments)
+    broker = OneShotIisBroker(
+        token, account, transport, instruments,
+        capital_limit=policy.canary.capital_limit_rub,
+        protected_futures=policy.protected_external_instruments,
+        reserve_weight=load_config(CONFIG / "prod_shadow.json").min_cash_reserve_weight,
+    )
     return run_once(
         candidate=candidate,
         policy=policy,

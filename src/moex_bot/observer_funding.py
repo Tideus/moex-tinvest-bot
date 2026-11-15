@@ -54,7 +54,16 @@ def _money(value: object) -> Decimal:
     return _quotation(value)
 
 
-def _rub(rows: object) -> Decimal:
+def verified_order_total(estimate: Mapping[str, Any], intent: OrderIntent) -> Decimal:
+    total = _money(estimate.get("totalOrderAmount"))
+    if (number(estimate.get("lotsRequested")) != intent.lots
+            or _money(estimate.get("initialOrderAmount")) != intent.notional
+            or (intent.side is Side.BUY and total < intent.notional)):
+        raise ValueError("GetOrderPrice quantity/amount mismatch")
+    return total
+
+
+def rub_balance(rows: object) -> Decimal:
     if not isinstance(rows, list):
         raise ValueError("missing broker funding money list")
     total = Decimal(0)
@@ -144,9 +153,10 @@ class ObserverFundsReader:
     def snapshot(self) -> dict[str, object]:
         start = self.clock()
         raw = self.read(WITHDRAW)
-        money = _rub(raw.get("money"))
+        money = rub_balance(raw.get("money"))
         # Empty repeated protobuf fields may be omitted. Invalid/non-list is NOT zero.
-        blocked, guarantee = _rub(raw.get("blocked", [])), _rub(raw.get("blockedGuarantee", []))
+        blocked = rub_balance(raw.get("blocked", []))
+        guarantee = rub_balance(raw.get("blockedGuarantee", []))
         result: dict[str, object] = {
             "protocol": "prod-observer-funding-v2",
             "account_binding": binding(self.account_id),
@@ -158,6 +168,24 @@ class ObserverFundsReader:
             "withdraw_conservative_rub": str(max(Decimal(0), money - max(blocked, guarantee))),
         }
         return verified_funding(result, self.account_id, self.clock())
+
+    def own_buy_limits(self, intent: OrderIntent) -> tuple[int, Decimal]:
+        if intent.side is not Side.BUY or intent.confirm_margin_trade:
+            raise ValueError("only a non-margin BUY may use own-money limits")
+        raw = self.read(MAX_LOTS, {
+            "instrumentId": intent.instrument.uid,
+            "price": decimal_to_quotation(intent.limit_price),
+        })
+        if str(raw.get("currency", "")).lower() != "rub":
+            raise ValueError("GetMaxLots currency must be RUB")
+        own = raw.get("buyLimits")
+        if not isinstance(own, Mapping):
+            raise ValueError("GetMaxLots buyLimits missing; margin limits are not usable")
+        lots = number(own.get("buyMaxLots"))
+        cash = _quotation(own.get("buyMoneyAmount"))
+        if lots < 0 or lots != int(lots) or cash < 0:
+            raise ValueError("GetMaxLots invalid own-money limits")
+        return int(lots), cash
 
 
 @dataclass
@@ -180,22 +208,7 @@ class ObserverFundingGate:
         }
         try:
             verified_funding(self.evidence, self.reader.account_id, self.reader.clock())
-            raw = self.reader.read(
-                MAX_LOTS,
-                {
-                    "instrumentId": intent.instrument.uid,
-                    "price": decimal_to_quotation(intent.limit_price),
-                },
-            )
-            if str(raw.get("currency", "")).lower() != "rub":
-                raise ValueError("GetMaxLots currency must be RUB")
-            own = raw.get("buyLimits")
-            if not isinstance(own, Mapping):
-                raise ValueError("GetMaxLots buyLimits missing; margin limits are not usable")
-            lots = number(own.get("buyMaxLots"))
-            cash = _quotation(own.get("buyMoneyAmount"))
-            if lots < 0 or lots != int(lots) or cash < 0:
-                raise ValueError("GetMaxLots invalid own-money limits")
+            lots, cash = self.reader.own_buy_limits(intent)
             record.update({"buy_max_lots": int(lots), "buy_money_rub": str(cash)})
             reasons: list[str] = []
             if intent.lots > lots:
@@ -209,13 +222,7 @@ class ObserverFundingGate:
                     "price": decimal_to_quotation(intent.limit_price),
                 },
             )
-            total = _money(estimate.get("totalOrderAmount"))
-            if (
-                number(estimate.get("lotsRequested")) != intent.lots
-                or _money(estimate.get("initialOrderAmount")) != intent.notional
-                or total < intent.notional
-            ):
-                raise ValueError("GetOrderPrice quantity/amount mismatch")
+            total = verified_order_total(estimate, intent)
             verified_funding(self.evidence, self.reader.account_id, self.reader.clock())
             # Earlier shadow BUYs are not present at the broker. Reserve them here;
             # never fund another BUY from proceeds of an unexecuted shadow SELL.

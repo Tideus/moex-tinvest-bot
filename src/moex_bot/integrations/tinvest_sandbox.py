@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import ROUND_DOWN, Decimal
 from http.client import IncompleteRead, RemoteDisconnected
-from typing import Any, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
 from urllib.request import Request, urlopen
@@ -16,7 +16,10 @@ from uuid import UUID
 
 from ..domain import ExecutionMode, Instrument, OrderIntent, OrderRecord, OrderStatus, Side
 from ..performance import TradeOperation
-from ..service_config import SANDBOX_REST
+from ..service_config import PROD_REST, SANDBOX_REST
+
+if TYPE_CHECKING:
+    from ..one_shot_manual_future import ManualFutureCheck
 
 SANDBOX_BASE_URL = SANDBOX_REST
 POST_ORDER_PATH = "/tinkoff.public.invest.api.contract.v1.OrdersService/PostOrder"
@@ -217,6 +220,7 @@ class TInvestSandboxAccountService:
     token: str
     transport: JsonPostTransport
     timeout_seconds: float = 10.0
+    iis_one_shot_check: ManualFutureCheck | None = None
 
     def __post_init__(self) -> None:
         if not self.token.strip():
@@ -366,6 +370,10 @@ class TInvestSandboxAccountService:
         operations_path: str = GET_SANDBOX_OPERATIONS_BY_CURSOR_PATH,
     ) -> tuple[TradeOperation, ...]:
         """Read executed broker operations, following the official cursor contract."""
+        check = self.iis_one_shot_check
+        if check and (base_url != PROD_REST or operations_path != GET_OPERATIONS_BY_CURSOR_PATH
+                      or account_id != check.account):
+            raise ValueError("one-shot operations require the bound production account")
         if from_time.tzinfo is None or to_time.tzinfo is None or from_time >= to_time:
             raise ValueError("operation range must be ordered and timezone-aware")
         cursor = ""
@@ -389,6 +397,10 @@ class TInvestSandboxAccountService:
             if not isinstance(raw_items, list):
                 raise ValueError("unexpected operations response")
             for raw in raw_items:
+                if check is not None:
+                    if not isinstance(raw, Mapping):
+                        raise ValueError("invalid broker operation")
+                    check.verify_trade(raw)
                 operation = _trade_operation(raw, instruments_by_uid)
                 if operation is not None and operation.operation_id not in seen:
                     seen.add(operation.operation_id)
@@ -417,11 +429,18 @@ class TInvestSandboxAccountService:
         clean_account_id = account_id.strip()
         if not clean_account_id:
             raise ValueError("sandbox account id is required")
+        check = self.iis_one_shot_check
+        if check and (base_url != PROD_REST or clean_account_id != check.account
+                      or source != "t_invest_prod" or (portfolio_path, positions_path, orders_path)
+                      != (GET_PORTFOLIO_PATH, GET_POSITIONS_PATH, GET_ORDERS_PATH)):
+            raise ValueError("manual futures reconciliation requires bound raw production reads")
         payload = {"accountId": clean_account_id}
         portfolio = self._post(
             portfolio_path, {**payload, "currency": "RUB"}, base_url=base_url
         )
         positions = self._post(positions_path, payload, base_url=base_url)
+        if check is not None:
+            portfolio = check.equity_portfolio(portfolio, positions)
         orders = self._post(orders_path, payload, base_url=base_url)
 
         if positions.get("limitsLoadingInProgress") is True:
