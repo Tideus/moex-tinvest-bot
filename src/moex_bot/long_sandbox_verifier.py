@@ -16,6 +16,7 @@ from .long_auto_control import writer_lock
 from .long_auto_operator import ANCHOR, STATE, _scope, _working_account
 from .long_auto_sandbox import SandboxLongBroker, SandboxOnlyTransport, _rows
 from .long_sandbox_retry import resolve
+from .long_verification_diagnostics import READ_METHODS, STAGES, VerificationProgress
 from .monitoring_long_once import ReadOnlyLedger
 from .notifications import SQLiteOutbox, TelegramBotApiSender, deliver_pending
 from .prod_once_observer import candidate_from_claim
@@ -26,28 +27,37 @@ from .service_config import SANDBOX_REST
 OUTPUT = Path("/var/lib/moex-tinvest-bot/artifacts/long-sandbox-verification")
 OUTBOX = Path("/var/lib/moex-tinvest-bot/data/notifications.sqlite3")
 PREFIX = SANDBOX_REST + "/tinkoff.public.invest.api.contract.v1.SandboxService/"
-READS = {"GetSandboxAccounts", "GetSandboxOrderState", "GetSandboxPositions",
-         "GetSandboxOrders", "GetSandboxStopOrders"}
+READS = READ_METHODS
 
 
 class ReadOnlySandboxTransport(SandboxOnlyTransport):
+    def __init__(self, progress: VerificationProgress | None = None) -> None:
+        self.progress = progress
+
     def post(self, url: str, *, headers: Any, payload: Any, timeout_seconds: float) -> Any:
         if url not in {PREFIX + name for name in READS}:
             raise ValueError("verifier permits sandbox reads only")
+        if self.progress is not None:
+            self.progress.api_method = url.rsplit("/", 1)[1]
         return super().post(url, headers=headers, payload=payload, timeout_seconds=timeout_seconds)
 
 
 def verify(state: Path, anchor: Path, account: str, broker: SandboxLongBroker,
-           now: datetime) -> dict[str, Any] | None:
+           now: datetime, *, progress: VerificationProgress | None = None) -> dict[str, Any] | None:
     """Caller holds shared LONG writer lock; SQLite opened read-only, never repaired."""
+    progress = progress or VerificationProgress()
+    progress.enter("request_validation")
     if broker.account_id != account or broker.environment != "sandbox" or now.tzinfo is None:
         raise ValueError("exact sandbox account and aware time required")
+    progress.enter("ledger_binding")
     binding = resolve(state, anchor, account)
     anchor = binding.anchor
+    progress.enter("ledger_status")
     ledger = ReadOnlyLedger(binding.state, account, anchor=anchor)
     status = ledger.status()
     if status == "WAITING":
         return None  # No signal: no API traffic and no repeated Telegram message.
+    progress.enter("ledger_candidate")
     with closing(ledger.connect()) as db:
         row = db.execute("SELECT candidate,record,detail FROM attempt WHERE singleton=1").fetchone()
     if not row:
@@ -60,6 +70,7 @@ def verify(state: Path, anchor: Path, account: str, broker: SandboxLongBroker,
                            candidate.limit_price * candidate.instrument.lot_size,
                            "sandbox one-shot long genuine signal")
     parent = OrderRecord(expected, OrderStatus.UNKNOWN)
+    progress.enter("ledger_parent")
     if row[1]:
         raw = json.loads(row[1])
         intent = decode_validated_intent({"status": "validated", "intent": raw["intent"]})
@@ -69,19 +80,25 @@ def verify(state: Path, anchor: Path, account: str, broker: SandboxLongBroker,
             raise ValueError("durable parent mismatch")
         parent = OrderRecord(intent, OrderStatus(raw["status"]), raw["filled_lots"],
                              raw["broker_order_id"])
+    progress.enter("account_readback", "GetSandboxAccounts")
     accounts = _rows(broker._post("SandboxService/GetSandboxAccounts", {}), "accounts")
     if len([a for a in accounts if a.get("id") == account
             and a.get("status") == "ACCOUNT_STATUS_OPEN"]) != 1:
         raise ValueError("working sandbox account not open")
+    progress.enter("entry_readback", "GetSandboxOrderState")
     actual = broker.lookup(parent)
+    progress.enter("positions_readback", "GetSandboxPositions")
     position = broker._sandbox("GetSandboxPositions")
     if position.get("limitsLoadingInProgress") is True:
         raise ValueError("position still loading")
     holdings = [h for h in _rows(position, "securities")
                 if h.get("instrumentUid") == candidate.instrument.uid]
+    progress.enter("orders_readback", "GetSandboxOrders")
     orders = _rows(broker._sandbox("GetSandboxOrders"), "orders")
+    progress.enter("stops_readback", "GetSandboxStopOrders")
     stops = _rows(broker._sandbox("GetSandboxStopOrders", {
         "status": "STOP_ORDER_STATUS_ACTIVE"}), "stopOrders")
+    progress.enter("reconcile")
     result = {
         "version": 1, "environment": "sandbox", "observed_at": now.isoformat(),
         "account_sha256": hashlib.sha256(account.encode()).hexdigest(),
@@ -114,9 +131,11 @@ def verify(state: Path, anchor: Path, account: str, broker: SandboxLongBroker,
                 and str(holdings[0].get("balance")) == str(candidate.instrument.lot_size)
                 and str(holdings[0].get("blocked")) == "0"
                 and not holdings[0].get("exchangeBlocked") and not related_orders):
+            progress.enter("stop_evidence")
             response = json.loads(row[2])
             if not anchor.with_suffix(anchor.suffix + ".stop-dispatch").is_file():
                 raise ValueError("missing stop dispatch fence")
+            progress.enter("protection_readback", "GetSandboxStopOrders")
             verified = broker.verify_protection(candidate, response)
             if verified.get("verified") is True:
                 result.update(state="FILLED_PROTECTED", stop_verified=True)
@@ -131,10 +150,20 @@ def render(result: dict[str, Any]) -> str:
                "ENTRY_NOT_FILLED": "ℹ️ BUY не исполнен; новая попытка запрещена",
                "REQUIRES_REVIEW": "🚨 Покупка/защита требуют сверки",
                "POSITION_CLOSED": "ℹ️ Позиции больше нет; причина закрытия не установлена",
-               "UNAVAILABLE": "🚨 Не удалось проверить LONG: журнал или sandbox API недоступен"}
+               "UNAVAILABLE": "🚨 Не удалось подтвердить состояние покупки и защиты LONG"}
     observed = datetime.fromisoformat(result["observed_at"]).astimezone(MOSCOW)
-    lines = [f"🧪 LONG SANDBOX · попытка {result.get('attempt', 1)}", heading[state],
+    attempt = f"попытка {result['attempt']}" if "attempt" in result else "проверка защиты"
+    lines = [f"🧪 LONG SANDBOX · {attempt}", heading[state],
              "Сверка: " + observed.strftime("%d.%m.%Y · %H:%M МСК")]
+    if state == "UNAVAILABLE" and "failure" in result:
+        failure = result["failure"]
+        lines.append("Этап: " + STAGES.get(failure["stage"], "неизвестен"))
+        lines.append("Источник: " + (f"T-Invest SANDBOX · {failure['method']}"
+                     if failure["source"] == "t_invest_sandbox" else "локальный журнал/окружение"))
+        http = f" · HTTP {failure['http_status']}" if failure.get("http_status") else ""
+        lines.append(f"Причина: {failure['reason']} [{failure['category']}]{http}")
+        lines.append("Текущая защита НЕ проверена; это не доказательство отсутствия стопа. "
+                     "Заявки не повторять.")
     if "secid" in result:
         lines += [f"{result['secid']} · 1 лот = {result['lot_size']} шт.",
                   f"Лимит BUY: {result['limit_price']} ₽ · исполнено: {result['filled_lots']} лот.",
@@ -150,7 +179,14 @@ def publish(result: dict[str, Any], output: Path, outbox: Path, now: datetime) -
     facts = {k: v for k, v in result.items() if k != "observed_at"}
     identity = json.dumps(facts, sort_keys=True)
     digest = hashlib.sha256(identity.encode()).hexdigest()
-    target = output / (digest + ".json")
+    receipt_digest = digest
+    if result["state"] == "UNAVAILABLE":
+        # Keep every failed observation, but alert once per reason/stage per Moscow day.
+        receipt_digest = hashlib.sha256(
+            json.dumps(result, sort_keys=True).encode()).hexdigest()
+        day = datetime.fromisoformat(result["observed_at"]).astimezone(MOSCOW).date()
+        digest += ":" + day.isoformat()
+    target = output / (receipt_digest + ".json")
     # Immutable first readback per outcome, not a mutable latest success overwritten by failure.
     if not target.exists():
         fd, name = tempfile.mkstemp(prefix=".pending-", dir=output)
@@ -174,7 +210,8 @@ def publish(result: dict[str, Any], output: Path, outbox: Path, now: datetime) -
             finally:
                 os.close(fd)
     stored = json.loads(target.read_bytes())
-    if {k: v for k, v in stored.items() if k != "observed_at"} != facts:
+    if ({k: v for k, v in stored.items() if k != "observed_at"} != facts
+            or (result["state"] == "UNAVAILABLE" and stored != result)):
         raise ValueError("existing verification receipt mismatches; never silently replace")
     SQLiteOutbox(outbox).enqueue(kind="long_sandbox_verification",
                                 dedupe_key="long-sandbox-verification:" + digest,
@@ -226,8 +263,10 @@ def main() -> int:
     parser.parse_args()
     now = datetime.now(UTC)
     result = None
+    progress = VerificationProgress()
     try:
         _scope(argparse.Namespace(state=STATE))
+        progress.enter("account_config")
         account = _working_account()
         try:
             binding = resolve(STATE, ANCHOR, account)
@@ -238,16 +277,20 @@ def main() -> int:
         if not waiting:
             # Never compete with the one scheduled entry window merely to poll WAITING.
             # OnSuccess/OnFailure handles the transition that happens after this fast read.
+            progress.enter("writer_lock")
             with writer_lock():
+                progress.enter("broker_init")
                 result = verify(STATE, ANCHOR, account, SandboxLongBroker(
                     os.environ["T_INVEST_SANDBOX_TOKEN"], account,
-                    transport=ReadOnlySandboxTransport()), now)
+                    transport=ReadOnlySandboxTransport(progress)), now, progress=progress)
     except Exception as exc:
-        if isinstance(exc.__cause__, BlockingIOError):
+        if progress.stage == "writer_lock" and isinstance(exc.__cause__, BlockingIOError):
             print("WAITING: LONG writer still active; no broker retry or notification")
             return 0
         result = {"version": 1, "state": "UNAVAILABLE", "observed_at": now.isoformat(),
-                  "environment": "sandbox", "read_only": True}
+                  "environment": "sandbox", "read_only": True, "failure": progress.failure(exc)}
+        print("LONG sandbox verification failure: "
+              + json.dumps(result["failure"], ensure_ascii=False))
     if result is not None:
         publish(result, OUTPUT, OUTBOX, now)
     publish_planner_failures(STATE.parent, OUTBOX, now)
