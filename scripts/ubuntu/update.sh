@@ -170,7 +170,18 @@ install -d -o "${SERVICE_USER}" -g "${SERVICE_USER}" -m 0750 \
 chown root:"${SERVICE_USER}" "${CONFIG_DIR}/bot.env"
 chmod 0640 "${CONFIG_DIR}/bot.env"
 bash "${PROJECT_DIR}/scripts/ubuntu/install-ca-certificates.sh"
-"${APP_DIR}/.venv/bin/python" -m pip install --upgrade "${APP_DIR}[server]"
+# BEGIN SERVICE PYTHON INSTALL
+(
+  # Root's private backup umask must not make installed code unreadable to moexbot.
+  # Only Python code/runtime: secret file permissions remain explicitly restricted.
+  umask 022
+  "${APP_DIR}/.venv/bin/python" -m pip install --upgrade "${APP_DIR}[server]"
+)
+# END SERVICE PYTHON INSTALL
+if ! runuser -u "${SERVICE_USER}" -- "${APP_DIR}/.venv/bin/python" -I -c 'import moex_bot.cli'; then
+  printf 'FAIL: installed Python CLI is not readable/importable by service user; deployment blocked.\n' >&2
+  exit 2
+fi
 "${APP_DIR}/.venv/bin/python" -m moex_bot.cli runtime-normalize \
   --runtime "${CONFIG_DIR}/runtime.json"
 chown root:"${SERVICE_USER}" "${CONFIG_DIR}/runtime.json"

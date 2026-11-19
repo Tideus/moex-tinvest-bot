@@ -287,9 +287,20 @@ chown root:"${SERVICE_USER}" "${CONFIG_DIR}/prod-live.json" "${CONFIG_DIR}/prod-
 chmod 0640 "${CONFIG_DIR}/prod-live.json" "${CONFIG_DIR}/prod-long.json" \
   "${CONFIG_DIR}/prod-experiment.json"
 
-python3.12 -m venv "${APP_DIR}/.venv"
-"${APP_DIR}/.venv/bin/python" -m pip install --upgrade pip
-"${APP_DIR}/.venv/bin/python" -m pip install "${APP_DIR}[server]"
+# BEGIN SERVICE PYTHON INSTALL
+(
+  # venv and Python code must be readable by the unprivileged service account.
+  # Do not relax the caller's mask for secrets/configuration outside this block.
+  umask 022
+  python3.12 -m venv "${APP_DIR}/.venv"
+  "${APP_DIR}/.venv/bin/python" -m pip install --upgrade pip
+  "${APP_DIR}/.venv/bin/python" -m pip install "${APP_DIR}[server]"
+)
+# END SERVICE PYTHON INSTALL
+if ! runuser -u "${SERVICE_USER}" -- "${APP_DIR}/.venv/bin/python" -I -c 'import moex_bot.cli'; then
+  printf 'FAIL: installed Python CLI is not readable/importable by service user; installation blocked.\n' >&2
+  exit 2
+fi
 (cd "${APP_DIR}" && sha256sum --quiet -c BUILD_MANIFEST.sha256)
 installed_version="$("${APP_DIR}/.venv/bin/python" -c \
   'from moex_bot import __version__; print(__version__)')"

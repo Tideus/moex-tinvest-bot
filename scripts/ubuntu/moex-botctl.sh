@@ -307,6 +307,14 @@ prelaunch() {
     "проверьте ${ENV_FILE}, владельца root:${SERVICE_USER} и режим 0640" load_secrets
   load_secrets || true
 
+  check "Python CLI доступен пользователю сервиса" \
+    "восстановите установку/права Python-пакета; это не ошибка API или токена" \
+    as_service "${PYTHON_BIN}" -I -c 'import moex_bot.cli'
+  if [[ "${FAILURES}" -ne 0 ]]; then
+    printf 'BLOCKED: окружение не готово; проверки API не выполнялись.\n'
+    return 2
+  fi
+
   heading "2/5 Конфигурация"
   check "Конфигурационные файлы валидны" \
     "исправьте JSON-файл, указанный в сообщении" \
