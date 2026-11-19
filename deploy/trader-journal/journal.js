@@ -144,6 +144,8 @@ function draw() {
   $('positions').append(element('p','Текущий срез: '+time(s.observed_at)+' · переоценка до комиссий, не относится к выбранному прошлому периоду.','hint'));
   $('quality').replaceChildren();for(const w of s.warnings)$('quality').append(element('p',w,'neg'));
   if(!s.warnings.length)$('quality').append(element('p','✓ Контроль количеств пройден. Покрытие периода указано отдельно.','pos'));
+  const reconciliation=s.operation_reconciliation;
+  if(reconciliation)$('quality').append(element('p','Состав операций сверен с полной выгрузкой брокера на '+time(reconciliation.observed_at)+'. Старых ID вне текущей выгрузки: '+reconciliation.retired_operation_ids+'. Они сохранены в архиве, но не считаются повторными сделками.','hint'));
   const {missing=0,zero=0}=operationQuality;
   if(missing)$('quality').append(element('p',missing+' операций без известной комиссии: net может быть недоступен.','neg'));
   if(zero)$('quality').append(element('p',zero+' операций с нулевой комиссией в источнике. Учитывайте это при сравнении с PROD.','warn'));

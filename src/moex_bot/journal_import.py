@@ -16,7 +16,16 @@ from .broker_fees import commission_amount
 from .journal_cards import attach_charts, attach_order_context
 from .journal_lineage import attach_lineage, collect_lineage
 from .journal_readmodel import publish
-from .trader_journal import Journal, build_report, digest, encoded, number, timestamp
+from .trader_journal import (
+    OPERATIONS_SNAPSHOT,
+    Journal,
+    build_report,
+    digest,
+    encoded,
+    number,
+    operations_digest,
+    timestamp,
+)
 
 
 def atomic(path: Path, content: str) -> None:
@@ -120,6 +129,23 @@ def portfolio_events(
             if price <= 0:
                 raise ValueError("invalid broker operation price")
             result[-1]["price"] = str(price)
+    proof = raw.get("journal_operations_snapshot")
+    if proof is not None:
+        start, end = timestamp(raw["journal_coverage_from"]), timestamp(raw["journal_coverage_to"])
+        operations = result[1:]
+        identities = sorted(r["identity"] for r in operations)
+        if (not isinstance(proof, dict) or proof.get("protocol") != OPERATIONS_SNAPSHOT
+                or type(proof.get("pages")) is not int or proof["pages"] <= 0
+                or type(proof.get("count")) is not int or proof["count"] != len(operations)
+                or len(set(identities)) != len(identities)
+                or proof.get("ids_sha256") != digest(identities)
+                or not start <= end <= timestamp(at)
+                or any(not start <= timestamp(r["at"]) <= end for r in operations)):
+            raise ValueError("invalid complete operations receipt")
+        snapshot["operations_manifest"] = {
+            "protocol": OPERATIONS_SNAPSHOT, "from": start.isoformat(), "to": end.isoformat(),
+            "count": len(operations), "sha256": operations_digest(operations),
+        }
     return result
 
 
@@ -272,6 +298,63 @@ def broker_operation_fields(raw: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+class OperationsWindow:
+    """Journal-only pagination proof; malformed/partial responses never erase history."""
+
+    def __init__(self) -> None:
+        self.pages = 0
+        self.cursor = ""
+        self.cursors: set[str] = set()
+        self.ended = False
+        self.request: str | None = None
+        self.items: dict[str, str] = {}
+
+    def page(self, response: Any, request: dict[str, Any]) -> None:
+        if (not isinstance(response, dict) or type(response.get("hasNext")) is not bool
+                or not isinstance(response.get("items"), list)):
+            raise ValueError("operations snapshot: missing items/hasNext")
+        signature = digest({k: v for k, v in request.items() if k != "cursor"})
+        if (self.ended or request.get("cursor", "") != self.cursor
+                or (self.request is not None and self.request != signature)):
+            raise ValueError("operations snapshot: inconsistent pagination request")
+        self.request = signature
+        start, end = timestamp(request["from"]), timestamp(request["to"])
+        allowed = {"accountId", "from", "to", "state", "limit", "cursor",
+                   "withoutTrades", "withoutCommissions", "withoutOvernights"}
+        if (set(request) - allowed or start >= end
+                or request.get("state") != "OPERATION_STATE_EXECUTED"
+                or any(request.get(k) is not False for k in
+                       ("withoutTrades", "withoutCommissions", "withoutOvernights"))):
+            raise ValueError("operations snapshot: filtered or invalid request")
+        for raw in response["items"]:
+            if (not isinstance(raw, dict) or not isinstance(raw.get("id"), str)
+                    or not raw["id"].strip() or raw["id"] != raw["id"].strip()
+                    or raw.get("state") != "OPERATION_STATE_EXECUTED"
+                    or not start <= timestamp(raw["date"]) <= end
+                    or (raw.get("brokerAccountId") is not None
+                        and raw["brokerAccountId"] != request["accountId"])):
+                raise ValueError("operations snapshot: invalid operation scope")
+            checksum = digest(raw)
+            if raw["id"] in self.items and self.items[raw["id"]] != checksum:
+                raise ValueError("operations snapshot: conflicting duplicate ID")
+            self.items[raw["id"]] = checksum
+        self.pages += 1
+        self.ended = not response["hasNext"]
+        if not self.ended:
+            cursor = response.get("nextCursor")
+            if not isinstance(cursor, str) or not cursor or cursor in self.cursors:
+                raise ValueError("operations snapshot: repeated/missing cursor")
+            self.cursors.add(cursor)
+            self.cursor = cursor
+
+    def proof(self, identities: list[str]) -> dict[str, Any]:
+        if (not self.pages or not self.ended or len(set(identities)) != len(identities)
+                or set(identities) != set(self.items)):
+            raise ValueError("operations snapshot: incomplete broker history")
+        return {"protocol": OPERATIONS_SNAPSHOT, "pages": self.pages, "count": len(identities),
+                "ids_sha256": digest(sorted(identities))}
+
+
 def collect(config: dict[str, Any]) -> None:
     # The web server never imports this path or receives broker credentials.
     from .domain import Instrument
@@ -281,6 +364,7 @@ def collect(config: dict[str, Any]) -> None:
     class ReadOnlyTransport(UrlLibJsonTransport):
         def __init__(self) -> None:
             self.operation_fields: dict[str, dict[str, Any]] = {}
+            self.window = OperationsWindow()
 
         def post(self, url: str, **kwargs: Any) -> Any:
             allowed = {
@@ -294,6 +378,7 @@ def collect(config: dict[str, Any]) -> None:
                 raise ValueError("journal broker writes and production forbidden")
             response = super().post(url, **kwargs)
             if url.rsplit("/", 1)[-1] == "GetSandboxOperationsByCursor":
+                self.window.page(response, kwargs["payload"])
                 for operation in response.get("items", []):
                     if (isinstance(operation, dict) and operation.get("id")
                             and str(operation["id"]) not in self.operation_fields):
@@ -332,6 +417,7 @@ def collect(config: dict[str, Any]) -> None:
         after = datetime.now(UTC)
         coverage_from = timestamp(config["history_from"])
         transport.operation_fields.clear()
+        transport.window = OperationsWindow()
         operations = service.operations(
             account, instruments, from_time=coverage_from, to_time=after
         )
@@ -347,6 +433,8 @@ def collect(config: dict[str, Any]) -> None:
             ],
             journal_coverage_from=coverage_from.isoformat(),
             journal_coverage_to=before.isoformat(),
+            journal_operations_snapshot=transport.window.proof(
+                [o.operation_id for o in operations]),
         )
         target = Path(config["collector_dir"]) / (
             profile["id"] + "-" + before.strftime("%Y%m%dT%H%M%SZ") + ".json"

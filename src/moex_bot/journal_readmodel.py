@@ -24,7 +24,8 @@ from .trader_journal import MSK, SCHEMA, digest, encoded, number, timestamp
 API_SCHEMA = "trader-journal-api-v1"
 KINDS = ("trades", "signals", "operations", "orders", "equity")
 STREAM_FIELDS = ("id", "strategy", "environment", "dates", "warnings", "positions", "observed_at")
-OPTIONAL_STREAM_FIELDS = ("trade_history_coverage", "order_diagnostics", "lineage_status")
+OPTIONAL_STREAM_FIELDS = ("trade_history_coverage", "order_diagnostics", "lineage_status",
+                          "operation_reconciliation")
 
 
 class QueryError(ValueError):
@@ -264,6 +265,7 @@ def query(path: Path, route: str, params: dict[str, str]) -> dict[str, Any]:
                                  for s in streams)
             lineage_unconfirmed = sum(len(s.get("lineage_status", {}).get("unconfirmed", []))
                                       for s in streams)
+            financial_warnings = sum(len(s.get("warnings", [])) for s in streams)
             return {
                 "schema": API_SCHEMA,
                 "generation": metadata["generation"],
@@ -271,7 +273,9 @@ def query(path: Path, route: str, params: dict[str, str]) -> dict[str, Any]:
                 "status": "stale" if build_status != "ok" else "import_error"
                 if metadata.get("import", {}).get("errors") else
                 "source_" + source_status if source_status != "ok" else
+                "financial_degraded" if financial_warnings else
                 "lineage_degraded" if lineage_errors or lineage_unconfirmed else "ok",
+                "financial_warnings": financial_warnings,
                 "lineage_errors": lineage_errors,
                 "lineage_unconfirmed": lineage_unconfirmed,
                 "age_seconds": round(age),

@@ -16,6 +16,7 @@ from zoneinfo import ZoneInfo
 MSK = ZoneInfo("Europe/Moscow")
 ZERO = Decimal(0)
 SCHEMA = "trader-journal-v1"
+OPERATIONS_SNAPSHOT = "broker-operations-window-v1"
 
 
 def number(value: Any) -> Decimal:
@@ -43,6 +44,65 @@ def digest(value: Any) -> str:
     return hashlib.sha256(encoded(value).encode()).hexdigest()
 
 
+def operations_digest(operations: list[dict[str, Any]]) -> str:
+    return digest(sorted(operations, key=lambda row: row["identity"]))
+
+
+def reconcile_operations(db: sqlite3.Connection,
+                         events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Use complete broker windows, NOT a union of mutable broker operation IDs.
+
+    This only changes the disposable view. Every original revision stays in events.
+    A window replaces membership, not identity: no time/price-based alias guesses.
+    """
+    streams = {row["stream"] for row in events if "operations_manifest" in row}
+    for stream in streams:
+        snapshots = sorted((r for r in events if r["stream"] == stream
+                            and "operations_manifest" in r),
+                           key=lambda r: timestamp(r["known_at"]), reverse=True)
+        windows: list[tuple[datetime, datetime]] = []
+        selected: dict[str, dict[str, Any]] = {}
+        for snapshot in snapshots:
+            manifest = snapshot["operations_manifest"]
+            start, end = timestamp(manifest["from"]), timestamp(manifest["to"])
+            if (manifest.get("protocol") != OPERATIONS_SNAPSHOT or start > end
+                    or end > timestamp(snapshot["known_at"])):
+                raise ValueError("invalid operations snapshot manifest")
+            if any(a <= start and end <= b for a, b in windows):
+                continue
+            rows = [json.loads(row[0]) for row in db.execute(
+                "SELECT payload FROM events WHERE stream=? AND kind='operation' AND known_at=?",
+                (stream, timestamp(snapshot["known_at"]).isoformat()))]
+            rows = [r for r in rows if r.get("source_sha256") == snapshot["source_sha256"]]
+            if (len(rows) != manifest["count"] or operations_digest(rows) != manifest["sha256"]
+                    or any(not start <= timestamp(r["at"]) <= end for r in rows)):
+                raise ValueError("incomplete or conflicting operations snapshot")
+            for row in rows:
+                if any(a <= timestamp(row["at"]) <= b for a, b in windows):
+                    continue
+                if row["identity"] in selected:
+                    raise ValueError("operation identity crosses conflicting broker windows")
+                selected[row["identity"]] = row
+            windows.append((start, end))
+        previous = [r for r in events if r["stream"] == stream and r["kind"] == "operation"]
+        covered = [r for r in previous if any(a <= timestamp(r["at"]) <= b for a, b in windows)]
+        outside = [r for r in previous if not any(a <= timestamp(r["at"]) <= b
+                                                 for a, b in windows)]
+        if any(r["identity"] in selected for r in outside):
+            raise ValueError("operation identity crosses conflicting broker windows")
+        retired = sum(r["identity"] not in selected for r in covered)
+        events = [r for r in events if r["stream"] != stream or r["kind"] != "operation"]
+        events.extend([*outside, *selected.values()])
+        # Derived diagnostic only: never stored back into source history.
+        latest = snapshots[0]
+        diagnostic = {"status": "complete_broker_windows", "observed_at": latest["known_at"],
+                      "windows": len(windows), "current_operations": len(selected),
+                      "retired_operation_ids": retired}
+        events = [{**r, "operation_reconciliation": diagnostic} if r is latest else r
+                  for r in events]
+    return events
+
+
 class Journal:
     """Append revisions, never UPDATE/DELETE source history or execution journals."""
 
@@ -60,6 +120,7 @@ class Journal:
                 stream TEXT NOT NULL, kind TEXT NOT NULL, identity TEXT NOT NULL,
                 known_at TEXT NOT NULL, checksum TEXT NOT NULL, payload TEXT NOT NULL,
                 UNIQUE(stream,kind,identity,known_at))""")
+            db.execute("CREATE INDEX IF NOT EXISTS events_receipt ON events(stream,kind,known_at)")
             # Rebuildable analytics cache, never the trading execution journal.
             db.execute("""CREATE TABLE IF NOT EXISTS imported_sources (
                 fingerprint TEXT PRIMARY KEY, omitted_orders INTEGER NOT NULL)""")
@@ -106,11 +167,12 @@ class Journal:
 
     def latest(self) -> list[dict[str, Any]]:
         with closing(sqlite3.connect(self.path.resolve().as_uri() + "?mode=ro", uri=True)) as db:
+            db.execute("BEGIN")  # Pin revisions and manifests to one read-only DB snapshot.
             rows = db.execute("""SELECT payload FROM (
                 SELECT payload, ROW_NUMBER() OVER (
                     PARTITION BY stream,kind,identity ORDER BY known_at DESC
                 ) AS rank FROM events) WHERE rank=1""")
-            return [json.loads(row[0]) for row in rows]
+            return reconcile_operations(db, [json.loads(row[0]) for row in rows])
 
 
 def analytical_commission(operation: dict[str, Any]) -> Decimal | None:
@@ -476,4 +538,8 @@ def build_report(events: list[dict[str, Any]]) -> dict[str, Any]:
                 "observed_at": current["at"] if current else None,
             }
         )
+        reconciliation = next((r["operation_reconciliation"] for r in rows
+                               if "operation_reconciliation" in r), None)
+        if reconciliation is not None:
+            output[-1]["operation_reconciliation"] = reconciliation
     return {"schema": SCHEMA, "generated_at": datetime.now(UTC).isoformat(), "streams": output}

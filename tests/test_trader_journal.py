@@ -306,9 +306,10 @@ def test_collector_is_sandbox_read_only_and_keeps_coverage(tmp_path, monkeypatch
     monkeypatch.setenv("T_INVEST_SANDBOX_TOKEN", "fake")
     monkeypatch.setenv("TEST_ACCOUNT", "fake-account")
     called = []
-    monkeypatch.setattr(
-        tinvest_sandbox.UrlLibJsonTransport, "post", lambda *a, **kw: called.append(a[1])
-    )
+    def response(*a, **kw):
+        called.append(a[1])
+        return {"items": [], "hasNext": False}
+    monkeypatch.setattr(tinvest_sandbox.UrlLibJsonTransport, "post", response)
 
     class Snapshot:
         def as_portfolio_payload(self):
@@ -316,6 +317,7 @@ def test_collector_is_sandbox_read_only_and_keeps_coverage(tmp_path, monkeypatch
 
     class Service:
         def __init__(self, token, transport):
+            self.transport = transport
             for url in [
                 SANDBOX_REST + "/SandboxService/PostSandboxOrder",
                 "https://invest-public-api.tbank.ru/rest/GetSandboxPortfolio",
@@ -329,12 +331,19 @@ def test_collector_is_sandbox_read_only_and_keeps_coverage(tmp_path, monkeypatch
 
         def operations(self, account, instruments, **kwargs):
             assert kwargs["from_time"] == timestamp(T0)
+            self.transport.post(SANDBOX_REST + "/SandboxService/GetSandboxOperationsByCursor",
+                                payload={"accountId": account, "from": T0,
+                                         "to": kwargs["to_time"].isoformat(),
+                                         "state": "OPERATION_STATE_EXECUTED",
+                                         "withoutTrades": False,
+                                         "withoutCommissions": False, "withoutOvernights": False})
             return []
 
     monkeypatch.setattr(tinvest_sandbox, "TInvestSandboxAccountService", Service)
     journal_import.collect(cfg)
     receipt = json.loads(next((tmp_path / "receipts").glob("*.json")).read_bytes())
-    assert len(called) == 1 and receipt["journal_coverage_from"] == T0
+    assert len(called) == 2 and receipt["journal_coverage_from"] == T0
+    assert receipt["journal_operations_snapshot"]["count"] == 0
     assert timestamp(receipt["journal_snapshot_completed_at"]) >= timestamp(receipt["observed_at"])
     cfg["profiles"].append(cfg["profiles"][0])
     with pytest.raises(ValueError, match="distinct"):

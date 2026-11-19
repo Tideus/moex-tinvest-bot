@@ -115,6 +115,7 @@ def test_collector_and_shared_decoder_preserve_missing_commission(
         {"secid": "SBER", "t_invest_uid": "uid", "board": "TQBR", **SPEC["SBER"]}
     ]))
     raw = {"id": "synthetic-buy", "date": T1, "type": "OPERATION_TYPE_BUY",
+           "state": "OPERATION_STATE_EXECUTED",
            "instrumentUid": "uid", "payment": {"units": "-3000", "nano": 0},
            "tradesInfo": {"trades": [{"quantity": 10,
                                       "price": {"units": "300", "nano": 0}}]}}
