@@ -11,7 +11,8 @@ EnvironmentFile=/etc/moex-tinvest-bot/bot.env
 Environment=PYTHONPATH=/opt/moex-trader-journal/src
 Environment=SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
 ExecStart=/usr/bin/python3 -m moex_bot.journal_import --config /etc/moex-trader-journal/config.json --collect
-TimeoutStartSec=180
+# Bounded cold rebuild; routine unchanged inputs use the content-addressed cache.
+TimeoutStartSec=300
 UMask=0027
 NoNewPrivileges=true
 ProtectSystem=strict

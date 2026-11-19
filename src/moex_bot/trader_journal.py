@@ -60,8 +60,21 @@ class Journal:
                 stream TEXT NOT NULL, kind TEXT NOT NULL, identity TEXT NOT NULL,
                 known_at TEXT NOT NULL, checksum TEXT NOT NULL, payload TEXT NOT NULL,
                 UNIQUE(stream,kind,identity,known_at))""")
+            # Rebuildable analytics cache, never the trading execution journal.
+            db.execute("""CREATE TABLE IF NOT EXISTS imported_sources (
+                fingerprint TEXT PRIMARY KEY, omitted_orders INTEGER NOT NULL)""")
+            for action in ("UPDATE", "DELETE"):
+                db.execute(f"""CREATE TRIGGER IF NOT EXISTS invalidate_import_{action.lower()}
+                    AFTER {action} ON events BEGIN DELETE FROM imported_sources; END""")
 
-    def ingest(self, events: list[dict[str, Any]]) -> int:
+    def source_imported(self, fingerprint: str) -> int | None:
+        with closing(sqlite3.connect(self.path.resolve().as_uri() + "?mode=ro", uri=True)) as db:
+            row = db.execute("SELECT omitted_orders FROM imported_sources WHERE fingerprint=?",
+                             (fingerprint,)).fetchone()
+        return None if row is None else int(row[0])
+
+    def ingest(self, events: list[dict[str, Any]], *, source_key: str | None = None,
+               omitted_orders: int = 0) -> int:
         count = 0
         with closing(sqlite3.connect(self.path)) as db, db:
             for event in events:
@@ -72,7 +85,7 @@ class Journal:
                 if timestamp(event["at"]) > timestamp(known):
                     raise ValueError("event after receipt")
                 payload = encoded(event)
-                checksum = digest(event)
+                checksum = hashlib.sha256(payload.encode()).hexdigest()
                 key = (event["stream"], event["kind"], event["identity"], known)
                 previous = db.execute(
                     "SELECT checksum FROM events WHERE stream=? AND kind=? AND identity=? "
@@ -84,6 +97,11 @@ class Journal:
                 if not previous:
                     db.execute("INSERT INTO events VALUES (?,?,?,?,?,?)", (*key, checksum, payload))
                     count += 1
+            if source_key is not None:
+                # Same transaction as every event: a failed/conflicting/partial
+                # ingest can never leave a marker that silently skips a retry.
+                db.execute("INSERT OR REPLACE INTO imported_sources VALUES (?,?)",
+                           (source_key, omitted_orders))
         return count
 
     def latest(self) -> list[dict[str, Any]]:

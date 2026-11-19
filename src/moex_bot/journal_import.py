@@ -163,7 +163,13 @@ def import_artifacts(config: dict[str, Any], journal: Journal) -> dict[str, Any]
     root = Path(config["artifact_root"]).resolve()
     instruments = {r["secid"]: r for r in json.loads(Path(config["universe"]).read_bytes())}
     count, errors, omitted_orders = 0, [], 0
+    # Hash actual bytes, never mtime/size. Bind both adapters and instrument
+    # metadata so a code/config update cannot reuse an incompatible marker.
+    adapter_digest = hashlib.sha256(Path(__file__).read_bytes()
+                                    + Path(__file__).with_name("trader_journal.py").read_bytes()
+                                    ).hexdigest()
     for profile in config["profiles"]:
+        context = digest([adapter_digest, profile, instruments])
         paths: set[Path] = set()
         for pattern in profile["portfolio_globs"]:
             paths.update(root.glob(pattern))
@@ -172,24 +178,36 @@ def import_artifacts(config: dict[str, Any], journal: Journal) -> dict[str, Any]
         for path in sorted(paths):
             try:
                 raw_bytes = path.read_bytes()
-                raw = json.loads(raw_bytes)
-                events = portfolio_events(
-                    raw, profile, instruments, hashlib.sha256(raw_bytes).hexdigest()
-                )
                 if path.name == "portfolio.json":
                     plan_path = path.with_name("plan.json")
                 else:
                     plan_path = path.with_name(path.name.replace("-portfolio-", "-plan-"))
-                if plan_path != path and plan_path.exists():
-                    events.extend(plan_events(json.loads(plan_path.read_bytes()), events[0]))
                 execution_path = path.with_name(path.name.replace("-portfolio-", "-execution-"))
-                if execution_path != path and execution_path.exists():
-                    execution_bytes = execution_path.read_bytes()
+                plan_bytes = (plan_path.read_bytes()
+                              if plan_path != path and plan_path.exists() else None)
+                execution_bytes = (execution_path.read_bytes()
+                                   if execution_path != path and execution_path.exists() else None)
+                source_key = digest([context, str(path.resolve()), *(
+                    hashlib.sha256(b).hexdigest() if b is not None else None
+                    for b in (raw_bytes, plan_bytes, execution_bytes))])
+                cache_enabled = config.get("import_cache", True) is True
+                cached = journal.source_imported(source_key) if cache_enabled else None
+                if cached is not None:
+                    omitted_orders += cached
+                    continue
+                raw = json.loads(raw_bytes)
+                events = portfolio_events(
+                    raw, profile, instruments, hashlib.sha256(raw_bytes).hexdigest()
+                )
+                if plan_bytes is not None:
+                    events.extend(plan_events(json.loads(plan_bytes), events[0]))
+                source_omitted = 0
+                if execution_bytes is not None:
                     execution = json.loads(execution_bytes)
                     for i, row in enumerate(execution.get("submitted", [])):
                         occurred = row.get("occurred_at") or row.get("submitted_at")
                         if not occurred:
-                            omitted_orders += 1
+                            source_omitted += 1
                             continue
                         at = timestamp(occurred).isoformat()
                         receipts = (row.get("known_at"), execution.get("completed_at"),
@@ -197,7 +215,7 @@ def import_artifacts(config: dict[str, Any], journal: Journal) -> dict[str, Any]
                         known = next((timestamp(value).isoformat() for value in receipts
                                       if value and timestamp(value) >= timestamp(at)), None)
                         if known is None:
-                            omitted_orders += 1
+                            source_omitted += 1
                             continue
                         events.append(
                             {
@@ -213,7 +231,9 @@ def import_artifacts(config: dict[str, Any], journal: Journal) -> dict[str, Any]
                                 "filled_lots": row["filled_lots"],
                             }
                         )
-                count += journal.ingest(events)
+                count += journal.ingest(events, source_key=source_key if cache_enabled else None,
+                                        omitted_orders=source_omitted)
+                omitted_orders += source_omitted
             except (OSError, ValueError, KeyError, TypeError):
                 errors.append(f"{profile['id']}: {path.name}: invalid/incomplete artifact")
     return {
@@ -353,19 +373,32 @@ def main() -> int:
     parser.add_argument("--collect", action="store_true")
     parser.add_argument("--prices", action="store_true", help="refresh public chart prices only")
     args = parser.parse_args()
+    stage = "configuration"
     try:
         config = json.loads(args.config.read_bytes())
         if args.collect:
+            stage = "broker_collect"
+            print(f"Journal stage={stage}", flush=True)
             collect(config)
+        stage = "artifact_import"
+        print(f"Journal stage={stage}", flush=True)
         journal = Journal(Path(config["database"]))
         status = import_artifacts(config, journal)
+        stage = "analytical_report"
+        print(f"Journal stage={stage}", flush=True)
         events = journal.latest()
         report = build_report(events)
         report["import"] = status
+        stage = "lineage"
+        print(f"Journal stage={stage}", flush=True)
         attach_order_context(report, config)
         attach_lineage(report, events, config)
+        stage = "chart_prices"
+        print(f"Journal stage={stage}", flush=True)
         attach_charts(report, Path(config["output"]).parent / "prices",
                       refresh=args.collect or args.prices)
+        stage = "publish"
+        print(f"Journal stage={stage}", flush=True)
         publish(
             report,
             Path(
@@ -394,7 +427,8 @@ def main() -> int:
         return 2 if status["errors"] or lineage_errors else 0
     except Exception as exc:
         # Never print broker payloads, account identifiers, URLs containing secrets.
-        print(f"Journal refresh FAILED: {type(exc).__name__}; previous report retained")
+        print(f"Journal refresh FAILED: {type(exc).__name__}; stage={stage}; "
+              "previous report retained")
         return 2
 
 
