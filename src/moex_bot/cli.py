@@ -1207,7 +1207,8 @@ def intraday_trade_notifications(
                     ),
                     f"{operation.side} {operation.secid} · {operation.quantity} шт.",
                     f"Сумма: {operation.gross:.2f} ₽",
-                    f"Комиссия: {operation.commission:.2f} ₽",
+                    (f"Комиссия: {operation.commission:.2f} ₽"
+                     if operation.commission is not None else "Комиссия: н/д, не ноль"),
                     "Источник: исполненная брокерская операция, не торговое намерение.",
                 )
             )

@@ -205,6 +205,7 @@ install -m 0644 "${PROJECT_DIR}/deploy/ubuntu/moex-tinvest-bot.logrotate" \
   /etc/logrotate.d/moex-tinvest-bot
 install -m 0755 "${PROJECT_DIR}/scripts/ubuntu/moex-botctl.sh" \
   /usr/local/sbin/moex-botctl
+bash "${PROJECT_DIR}/scripts/ubuntu/install-research-report.sh"
 systemctl daemon-reload
 restart_timers
 trap - EXIT

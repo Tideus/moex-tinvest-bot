@@ -24,6 +24,9 @@ API_LABELS = {
 
 
 def check_description(key: str) -> str:
+    if key == "data:research-report":
+        return ("RESEARCH SHADOW / Ночной отчёт исследования\n"
+                "Генерация, полнота наблюдений и проверка цепочки; не торговый API")
     if key == "backup:age":
         return ("MOEX BOT / Резервирование состояния\n"
                 "Полная копия БД и истории, не отчёт и не sidecar")
@@ -40,6 +43,9 @@ def check_description(key: str) -> str:
 
 
 def check_action(key: str) -> str:
+    if key == "data:research-report":
+        return ("Проверить moex-research-forward-report.service и reports/*.json; "
+                "не пересчитывать пропущенные решения и не перезапускать торговлю.")
     if key == "backup:age":
         return ("Проверить moex-tinvest-backup.service и maintenance.timer; "
                 "запустить backup.sh, проверить SHA и восстановление в изолированной папке.")
@@ -90,6 +96,16 @@ INACTIVE = "FAIL: active=inactive, no schedule"
 
 def safe_reason(value: str) -> str:
     """Only known templates; never echo arbitrary collector errors to Kuma or Telegram."""
+    research = {
+        "timer inactive": "таймер ночного исследования выключен",
+        "timeout": "генератор ночного исследования превысил лимит времени",
+        "generation failed": "ошибка генерации исследовательского отчёта; проверить journalctl",
+        "incomplete evidence": "отчёт создан, но наблюдения неполны; см. причины в JSON",
+        "completion unknown": "не удалось подтвердить завершение ночного отчёта",
+        "stale": "нет завершённого отчёта после последнего ночного запуска",
+    }
+    if value.removeprefix("FAIL: research report ") in research:
+        return research[value.removeprefix("FAIL: research report ")]
     if value == "FAIL: backup missing":
         return "нет завершённой резервной копии состояния с SHA256"
     if value == "FAIL: backup stale":
@@ -179,7 +195,8 @@ def compact_checks(checks: dict[str, str]) -> str:
          "data:intraday", "data:prod-long-observer", "data:prod-long-protection",
          "quality:long", "quality:intraday",
          "quality:prod-long-observer", "backup:age", "telegram:outbox", "memory:available",
-         "data:news-observer", "intraday:overnight_exposure", "monitor:collector",
+         "data:news-observer", "data:research-report", "intraday:overnight_exposure",
+         "monitor:collector",
          "collector:resources",
          "collector:services", "collector:integrations", "collector:artifacts"}
     for mount in ("/", "/var/lib/moex-tinvest-bot", "/var/log/moex-tinvest-bot"):
@@ -218,7 +235,7 @@ def safe_failure_details(name: str, path: Path, now: datetime) -> str:
             f"{kind}:{unit}" for kind in ("timer", "service") for unit in units
         } | {"api:geo_cbr_press", "api:geo_moex_risk",
              "data:calendar", "data:long", "data:intraday", "data:prod-long-protection",
-             "quality:long",
+             "quality:long", "data:research-report",
              "quality:intraday", "backup:age", "telegram:outbox", "memory:available"}
         for mount in ("/", "/var/lib/moex-tinvest-bot", "/var/log/moex-tinvest-bot"):
             allowed |= {"disk:" + mount, "inodes:" + mount}

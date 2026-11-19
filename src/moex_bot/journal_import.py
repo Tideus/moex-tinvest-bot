@@ -12,6 +12,7 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
+from .broker_fees import commission_amount
 from .journal_cards import attach_charts, attach_order_context
 from .journal_lineage import attach_lineage, collect_lineage
 from .journal_readmodel import publish
@@ -240,7 +241,7 @@ def broker_operation_fields(raw: dict[str, Any]) -> dict[str, Any]:
         except ValueError:
             return None
 
-    commission = money(raw.get("commission"))
+    commission = commission_amount(raw.get("commission"))
     price = money(raw.get("price"))
     return {
         "commission": str(abs(commission)) if commission is not None else None,

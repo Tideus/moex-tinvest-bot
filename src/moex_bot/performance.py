@@ -18,7 +18,7 @@ class TradeOperation:
     side: str | None
     quantity: int
     gross: Decimal
-    commission: Decimal
+    commission: Decimal | None
     external_cashflow: Decimal = Decimal("0")
 
 
@@ -29,8 +29,8 @@ class PerformanceRow:
     end_units: int
     buys: Decimal
     sells: Decimal
-    commission: Decimal
-    pnl: Decimal
+    commission: Decimal | None
+    pnl: Decimal | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -52,11 +52,12 @@ class PerformanceSummary:
     blocked_cycles: int
     rejected_intents: int
     rows: tuple[PerformanceRow, ...]
-    unattributed_pnl: Decimal
+    unattributed_pnl: Decimal | None
     profitable_securities: int
     verdict: str
-    total_commission: Decimal
+    total_commission: Decimal | None
     attribution_reliable: bool
+    unknown_commissions: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -140,6 +141,7 @@ def summarize_performance(
     aggregates: dict[str, list[Decimal | int]] = defaultdict(
         lambda: [Decimal("0"), Decimal("0"), Decimal("0")]
     )
+    unknown_symbols: set[str] = set()
     for item in period_operations:
         if item.secid is None or item.side not in {"BUY", "SELL"}:
             continue
@@ -148,7 +150,10 @@ def summarize_performance(
             bucket[0] = Decimal(str(bucket[0])) + item.gross
         else:
             bucket[1] = Decimal(str(bucket[1])) + item.gross
-        bucket[2] = Decimal(str(bucket[2])) + item.commission
+        if item.commission is None:
+            unknown_symbols.add(item.secid)
+        else:
+            bucket[2] = Decimal(str(bucket[2])) + item.commission
     secids = sorted(set(first.units) | set(last.units) | set(aggregates))
     rows: list[PerformanceRow] = []
     for secid in secids:
@@ -170,18 +175,23 @@ def summarize_performance(
                 end_units,
                 Decimal(str(buy)),
                 Decimal(str(sell)),
-                Decimal(str(commission)),
-                contribution,
+                None if secid in unknown_symbols else Decimal(str(commission)),
+                None if secid in unknown_symbols else contribution,
             )
         )
     drawdown = _max_drawdown(tuple(item.equity for item in points))
     blocked = sum(1 for item in points if item.blocked)
     rejected = sum(item.rejected for item in points)
     verdict = _verdict(len(points), len(period_operations), blocked, drawdown, return_pct)
-    unattributed = pnl - sum((row.pnl for row in rows), Decimal("0"))
-    total_commission = sum((item.commission for item in period_operations), Decimal("0"))
+    unknown_commissions = sum(item.commission is None for item in period_operations)
+    unattributed = (None if any(row.pnl is None for row in rows) else
+                    pnl - sum((row.pnl for row in rows if row.pnl is not None), Decimal("0")))
+    total_commission = (None if unknown_commissions else
+                        sum((item.commission for item in period_operations
+                             if item.commission is not None), Decimal("0")))
     attribution_tolerance = max(Decimal("1"), abs(pnl) * Decimal("0.02"))
-    attribution_reliable = abs(unattributed) <= attribution_tolerance
+    attribution_reliable = (not unknown_commissions and unattributed is not None
+                            and abs(unattributed) <= attribution_tolerance)
     return PerformanceSummary(
         label,
         first.observed_at,
@@ -201,10 +211,11 @@ def summarize_performance(
         rejected,
         tuple(rows),
         unattributed,
-        sum(1 for row in rows if row.pnl > 0),
+        sum(1 for row in rows if row.pnl is not None and row.pnl > 0),
         verdict,
         total_commission,
         attribution_reliable,
+        unknown_commissions,
     )
 
 
@@ -225,7 +236,9 @@ def render_performance_report(summary: PerformanceSummary, *, weekly: bool) -> s
             if summary.benchmark_aligned
             else "Разница к benchmark: недоступна из-за несовпадения периода"
         ),
-        f"Комиссии по операциям: {_money(summary.total_commission)}",
+        (f"Комиссии по операциям: {_money(summary.total_commission)}"
+         if summary.total_commission is not None else
+         f"Комиссии: н/д в {summary.unknown_commissions} операциях; net по ним не подтверждён"),
         f"Максимальная просадка: {summary.max_drawdown_pct:.2f}%",
         "",
         "📊 ПО БУМАГАМ",
@@ -247,12 +260,14 @@ def render_performance_report(summary: PerformanceSummary, *, weekly: bool) -> s
             "ℹ️ Открытые позиции переоценены по последнему снимку; "
             "их вклад ещё не является реализованной прибылью/убытком."
         )
-    for row in sorted(summary.rows, key=lambda item: (-item.pnl, item.secid)):
+    for row in sorted(summary.rows, key=lambda item: (item.pnl is None,
+                                                     -(item.pnl or Decimal(0)), item.secid)):
+        result = _signed_money(row.pnl) if row.pnl is not None else "net н/д: комиссия неизвестна"
         lines.append(
-            f"• {row.secid}: {_signed_money(row.pnl)} · вклад MTM · "
+            f"• {row.secid}: {result} · вклад MTM · "
             f"позиция {row.start_units}→{row.end_units} шт."
         )
-    if summary.unattributed_pnl != 0:
+    if summary.unattributed_pnl is not None and summary.unattributed_pnl != 0:
         lines.append(
             f"• Прочее/сверка счёта: {_signed_money(summary.unattributed_pnl)} "
             "(комиссии, денежные операции или разница снимков)"

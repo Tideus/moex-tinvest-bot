@@ -162,6 +162,14 @@ def collect_services(app: Path, state: Path, settings: dict[str, Any],
                     checks[f"service:{name}"] = "FAIL: stuck activating >600s"
             except (ValueError, OSError):
                 checks[f"service:{name}"] = "FAIL: cannot determine run duration"
+    from .monitoring_research import KEY, UNIT, report_check
+
+    if systemd(UNIT + ".service", "LoadState") == "loaded":
+        try:
+            uptime = float(Path("/proc/uptime").read_text().split()[0])
+            checks[KEY] = report_check(systemd, now, uptime)
+        except (ValueError, OSError):
+            checks[KEY] = "FAIL: research report completion unknown"
     return checks
 
 

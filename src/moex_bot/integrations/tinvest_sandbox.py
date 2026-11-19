@@ -582,12 +582,9 @@ def _trade_operation(
             raise ValueError("invalid operation trade price or quantity")
         quantity += trade_quantity
         gross += money_value_to_decimal(price_raw) * trade_quantity
-    commission_raw = raw.get("commission", {})
-    commission = (
-        abs(money_value_to_decimal(commission_raw))
-        if isinstance(commission_raw, Mapping)
-        else Decimal("0")
-    )
+    from ..broker_fees import commission_amount
+
+    commission = commission_amount(raw.get("commission"))
     return TradeOperation(
         operation_id=operation_id,
         occurred_at=occurred_at,

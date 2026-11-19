@@ -105,7 +105,7 @@ def test_legacy_zero_remains_unverified_and_vwap_is_explicitly_calculated(tmp_pa
     assert op["price"] is None and op["price_source"] == "unknown"
 
 
-def test_collector_preserves_missing_commission_without_changing_shared_decoder(
+def test_collector_and_shared_decoder_preserve_missing_commission(
     tmp_path, monkeypatch
 ):
     from moex_bot.integrations import tinvest_sandbox
@@ -138,10 +138,10 @@ def test_collector_preserves_missing_commission_without_changing_shared_decoder(
     assert operation_row["commission"] is None
     assert operation_row["journal_commission_source"] == "broker_missing"
     assert operation_row["journal_raw_operation_sha256"] == digest(raw)
-    # The shared strategy adapter still has its original behavior.
+    # Reports and journal now agree: absent commission is unknown, not zero.
     from moex_bot.domain import Instrument
     instrument = Instrument("SBER", "uid", "TQBR", 10, Decimal("0.01"))
-    assert tinvest_sandbox._trade_operation(raw, {"uid": instrument}).commission == 0
+    assert tinvest_sandbox._trade_operation(raw, {"uid": instrument}).commission is None
 
 
 @pytest.mark.parametrize("known_time", [False, True])

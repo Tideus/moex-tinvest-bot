@@ -17,9 +17,10 @@ class IntradayPerformanceRow:
     secid: str
     buys: Decimal
     sells: Decimal
-    commission: Decimal
-    cashflow_pnl: Decimal
+    commission: Decimal | None
+    cashflow_pnl: Decimal | None
     end_lots: int
+    gross_cashflow: Decimal = Decimal("0")
 
 
 @dataclass(frozen=True, slots=True)
@@ -36,7 +37,8 @@ class IntradayPerformanceSummary:
     forced_flat_cycles: int
     quality_failures: int
     rows: tuple[IntradayPerformanceRow, ...]
-    unattributed_pnl: Decimal
+    unattributed_pnl: Decimal | None
+    unknown_commissions: int = 0
 
 
 def summarize_intraday_performance(
@@ -72,21 +74,26 @@ def summarize_intraday_performance(
     totals: dict[str, list[Decimal]] = defaultdict(
         lambda: [Decimal("0"), Decimal("0"), Decimal("0")]
     )
+    unknown_symbols: set[str] = set()
     for operation in period_operations:
         if operation.secid is None or operation.side not in {"BUY", "SELL"}:
             continue
         bucket = totals[operation.secid]
         bucket[0 if operation.side == "BUY" else 1] += operation.gross
-        bucket[2] += operation.commission
+        if operation.commission is None:
+            unknown_symbols.add(operation.secid)
+        else:
+            bucket[2] += operation.commission
     end_positions = last[2]
     rows = tuple(
         IntradayPerformanceRow(
             secid=secid,
             buys=values[0],
             sells=values[1],
-            commission=values[2],
-            cashflow_pnl=values[1] - values[0] - values[2],
+            commission=None if secid in unknown_symbols else values[2],
+            cashflow_pnl=None if secid in unknown_symbols else values[1] - values[0] - values[2],
             end_lots=end_positions.get(secid, 0),
+            gross_cashflow=values[1] - values[0],
         )
         for secid, values in sorted(totals.items())
     )
@@ -109,7 +116,8 @@ def summarize_intraday_performance(
         quality_failures += int(
             not isinstance(quality, Mapping) or quality.get("passed") is not True
         )
-    attributed = sum((row.cashflow_pnl for row in rows), Decimal("0"))
+    unknown_commissions = sum(o.commission is None for o in period_operations)
+    attributed = sum((r.cashflow_pnl for r in rows if r.cashflow_pnl is not None), Decimal("0"))
     return IntradayPerformanceSummary(
         report_date,
         first[1],
@@ -123,7 +131,8 @@ def summarize_intraday_performance(
         forced,
         quality_failures,
         rows,
-        pnl - attributed,
+        None if unknown_commissions else pnl - attributed,
+        unknown_commissions,
     )
 
 
@@ -141,14 +150,20 @@ def render_intraday_performance_report(summary: IntradayPerformanceSummary) -> s
     ]
     if not summary.rows:
         lines.append("• исполненных BUY/SELL операций не было")
-    for row in sorted(summary.rows, key=lambda item: (-item.cashflow_pnl, item.secid)):
+    for row in sorted(summary.rows, key=lambda r: (r.cashflow_pnl is None,
+                                                 -(r.cashflow_pnl or Decimal(0)), r.secid)):
         residual = "" if row.end_lots == 0 else f" · остаток {row.end_lots} лот."
+        result = (_signed_money(row.cashflow_pnl) if row.cashflow_pnl is not None
+                  else f"gross {_signed_money(row.gross_cashflow)}; net н/д — комиссия неизвестна")
         lines.append(
-            f"• {row.secid}: {_signed_money(row.cashflow_pnl)} · "
+            f"• {row.secid}: {result} · "
             f"BUY {_money(row.buys)} · SELL {_money(row.sells)}{residual}"
         )
     if summary.unattributed_pnl:
         lines.append(f"• Сверка счёта: {_signed_money(summary.unattributed_pnl)}")
+    if summary.unknown_commissions:
+        lines.append(f"⚠️ Комиссия неизвестна в {summary.unknown_commissions} операциях. "
+                     "Изменение баланса не подтверждает полный net каждой сделки.")
     lines.extend(
         (
             "",

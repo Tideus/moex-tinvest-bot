@@ -133,17 +133,25 @@ def performance(
     day: date,
 ) -> dict[str, Any]:
     day_ops = tuple(o for o in operations if o.occurred_at.astimezone(MOSCOW).date() == day)
-    rows: dict[str, dict[str, Decimal]] = {}
+    rows: dict[str, dict[str, Decimal | None]] = {}
+    unknown_symbols = {op.secid for op in day_ops if op.commission is None}
     for op in day_ops:
         if op.secid and op.side in {"BUY", "SELL"}:
             r = rows.setdefault(
                 op.secid, {"buy": Decimal(0), "sell": Decimal(0), "commission": Decimal(0)}
             )
-            r["buy" if op.side == "BUY" else "sell"] += op.gross
-            r["commission"] += op.commission
+            key = "buy" if op.side == "BUY" else "sell"
+            r[key] = (r[key] or Decimal(0)) + op.gross
+            if op.secid in unknown_symbols:
+                r["commission"] = None
+            else:
+                r["commission"] = (r["commission"] or Decimal(0)) + (op.commission or Decimal(0))
     result: dict[str, Any] = {
         "trades": sum(o.side in {"BUY", "SELL"} for o in day_ops),
-        "commission": sum((o.commission for o in day_ops), Decimal(0)),
+        "commission": (None if any(o.commission is None for o in day_ops) else
+                       sum((o.commission for o in day_ops
+                            if o.commission is not None), Decimal(0))),
+        "unknown_commissions": sum(o.commission is None for o in day_ops),
         "rows": rows,
         "pnl": None,
         "period_started_at": None,
@@ -168,12 +176,15 @@ def performance(
         flows = [o for o in operations if o.secid == s and a < o.occurred_at <= b]
         if "current_value" not in last or "current_value" not in first:
             continue
+        if any(o.commission is None for o in flows if o.side in {"BUY", "SELL"}):
+            r["pnl"] = None
+            continue
         r["pnl"] = (
             Decimal(last["current_value"])
             - Decimal(first["current_value"])
             + sum(
                 (
-                    o.gross * (1 if o.side == "SELL" else -1) - o.commission
+                    o.gross * (1 if o.side == "SELL" else -1) - (o.commission or Decimal(0))
                     for o in flows
                     if o.side in {"BUY", "SELL"}
                 ),
@@ -204,9 +215,10 @@ def render(data: dict[str, Any]) -> str:
             f"P&L окна наблюдения: {Decimal(perf['pnl']):+,.2f} ₽",
             f"От {perf['period_started_at']} до {perf['period_ended_at']}",
         ]
-    lines += [f"Исполнений за день: {perf['trades']} · комиссии: {perf['commission']} ₽"]
+    fee = f"{perf['commission']} ₽" if perf['commission'] is not None else "н/д (не ноль)"
+    lines += [f"Исполнений за день: {perf['trades']} · комиссии: {fee}"]
     for s, r in perf["rows"].items():
-        value = f"{Decimal(r['pnl']):+,.2f} ₽" if "pnl" in r else "P&L н/д"
+        value = f"{Decimal(r['pnl']):+,.2f} ₽" if r.get("pnl") is not None else "P&L н/д"
         lines.append(f"• {s}: {value}; покупки {r['buy']} ₽; продажи {r['sell']} ₽")
     lines += [
         "",
