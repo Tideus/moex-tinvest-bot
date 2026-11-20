@@ -20,7 +20,7 @@ DAY = date(2026, 11, 12)
     "daily-performance", "intraday-daily-performance", "long-daily-performance",
     "prod-long-daily-control", "long-close",
 ])
-@pytest.mark.parametrize("suffix", ["json", "txt"])
+@pytest.mark.parametrize("suffix", ["json", "txt", "attempt.json"])
 def test_report_rebuilt_next_day_is_included_without_changing_source(tmp_path, prefix, suffix):
     source, dest = tmp_path / "source", tmp_path / "dest"
     source.mkdir()

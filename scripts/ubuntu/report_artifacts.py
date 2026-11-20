@@ -10,7 +10,7 @@ from pathlib import Path
 
 REPORT_NAME = re.compile(
     r"(?:daily-performance|intraday-daily-performance|long-daily-performance|"
-    r"prod-long-daily-control|long-close)-(\d{4}-\d{2}-\d{2})\.(?:json|txt)\Z"
+    r"prod-long-daily-control|long-close)-(\d{4}-\d{2}-\d{2})\.(?:json|txt|attempt\.json)\Z"
 )
 
 
