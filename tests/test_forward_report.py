@@ -6,7 +6,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from forward_report import generate, snapshot_store_type
+from forward_report import generate, report_diagnostics, snapshot_store_type
 
 from moex_bot.monitoring_labels import (
     check_action,
@@ -198,3 +198,38 @@ def test_kuma_report_diagnostics_do_not_mask_rss_with_iss(tmp_path):
     assert "наблюдения неполны" in safe_failure_details("Trading data", path, at)
     rss = safe_failure_details("RSS [api:geo_moex_risk]", path, at)
     assert "источник не ответил" in rss and "наблюдения неполны" not in rss
+
+
+def test_report_summary_exposes_real_gaps_without_mutation_or_private_text():
+    report = {'source_error_count': 23, 'model_entry_missing': 0, 'incomplete': True,
+              'source_errors': {'MarketDataService/GetOrderBook:URLError': 9,
+                                'quote:SBER:ValueError': 5, 'TOKEN=secret': 1},
+              'strategies': {'intraday:current': {
+                  'expected': 297, 'decisions': 297, 'missed_slots': 0,
+                  'states': {'data_missing': 1},
+                  'markouts': {'30': {'missing_quote': 3}, '60': {'missing_quote': 3}}}}}
+    before = json.dumps(report, sort_keys=True)
+    result = report_diagnostics(report)
+    assert result['source_error_count'] == 23
+    assert result['source_error_entries_are_not_independent_incidents'] is True
+    assert result['strategies']['intraday:current']['missing_quotes_by_horizon'] == {
+        '30': 3, '60': 3}
+    assert result['strategies']['intraday:current']['data_missing'] == 1
+    assert 'secret' not in json.dumps(result)
+    assert json.dumps(report, sort_keys=True) == before
+
+
+def test_report_summary_unknown_counts_are_not_zero_or_success():
+    result = report_diagnostics({'source_error_count': True, 'source_errors': [],
+                                 'strategies': {'long:current': {'states': None,
+                                                                'markouts': None}}})
+    assert result['source_error_count'] is None
+    assert result['strategies']['long:current']['data_missing'] is None
+    assert result['strategies']['long:current']['expected'] is None
+
+
+def test_diagnose_does_not_mislabel_all_health_failures_as_stale_trading():
+    script = (Path(__file__).resolve().parents[1]/'scripts/ubuntu/moex-botctl.sh').read_text(
+        encoding='utf-8')
+    assert 'check "Последний цикл свежий"' not in script
+    assert 'Сводная диагностика: API, данные, службы и исследования' in script

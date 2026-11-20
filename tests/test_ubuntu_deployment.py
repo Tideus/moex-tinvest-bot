@@ -154,6 +154,7 @@ def test_all_deployment_shell_scripts_use_strict_mode() -> None:
         "install-kuma-local.sh",
         "install-long-flow-shadow.sh",
         "install-research-report.sh",
+        "install-admission-diagnostics.sh",
         "certbot-reload-nginx.sh",
         "run-prod-long-observer.sh",
         "run-long-once-sandbox.sh",

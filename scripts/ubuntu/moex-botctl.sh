@@ -661,8 +661,8 @@ diagnose_once() {
     "${PYTHON_BIN}" -m moex_bot.cli storage-maintenance \
       --config "${CONFIG_DIR}/maintenance.json" --filesystem /var/lib \
       --state-dir "${STATE_DIR}" --log-dir "${LOG_DIR}" --backup-dir "${BACKUP_DIR}"
-  check "Последний цикл свежий" \
-    "проверьте journalctl сервисов и доступность MOEX/ALGOPACK" \
+  check "Сводная диагностика: API, данные, службы и исследования" \
+    "смотрите конкретные FAIL ниже; сбой RSS или исследования не означает остановку торгового API" \
     as_service /usr/bin/bash "${APP_DIR}/scripts/ubuntu/healthcheck.sh"
   if [[ "${FAILURES}" -eq 0 ]]; then
     printf '\033[1;32mHEALTHY\033[0m: диагностический цикл пройден.\n'

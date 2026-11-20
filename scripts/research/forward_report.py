@@ -9,11 +9,57 @@ from __future__ import annotations
 import argparse
 import importlib
 import json
+import re
 import sqlite3
 import sys
 from contextlib import contextmanager
 from datetime import date
 from pathlib import Path
+
+
+def report_diagnostics(report):
+    """Bounded, non-secret summary of frozen facts; no reinterpretation or backfill."""
+    def count(value):
+        return value if type(value) is int and value >= 0 else None
+
+    errors = report.get("source_errors", {})
+    safe_errors = {}
+    if isinstance(errors, dict):
+        for name, value in errors.items():
+            if re.fullmatch(
+                r"(?:MarketDataService/GetOrderBook|quote:(?:SBER|ROSN|CHMF)):"
+                r"(?:TimeoutError|URLError|ValueError|HTTPError|ConnectionError)", str(name)
+            ):
+                safe_errors[name] = count(value)
+    strategies = {}
+    raw = report.get("strategies", {})
+    if isinstance(raw, dict):
+        for name in ("intraday:current", "intraday:hour_trend", "intraday:normalized_trend",
+                     "intraday:range_quantile", "long:current", "long:channel_20_10",
+                     "long:ensemble_20_60_120"):
+            item = raw.get(name)
+            if not isinstance(item, dict):
+                continue
+            states = item.get("states", {})
+            marks = item.get("markouts", {})
+            strategies[name] = {
+                key: count(item.get(key)) for key in ("expected", "decisions", "missed_slots")
+            }
+            strategies[name]["data_missing"] = (
+                count(states.get("data_missing", 0)) if isinstance(states, dict) else None)
+            strategies[name]["missing_quotes_by_horizon"] = {
+                horizon: count(value.get("missing_quote"))
+                for horizon in ("5", "15", "30", "60")
+                if isinstance(marks, dict) and isinstance(value := marks.get(horizon), dict)
+            }
+    return {
+        "source_error_count": count(report.get("source_error_count")),
+        "source_errors": safe_errors,
+        "source_error_entries_are_not_independent_incidents": True,
+        "model_entry_missing": count(report.get("model_entry_missing")),
+        "strategies": strategies,
+        "historical_decisions_unchanged": True,
+    }
 
 
 def snapshot_store_type(original):
@@ -95,6 +141,7 @@ def generate(runtime_module, bundle, state, day=None):
             "status": "INCOMPLETE" if incomplete else "COMPLETE",
             "chain": report["chain"],
             "report": str(state / "reports" / f"{day}.json"),
+            "diagnostics": report_diagnostics(report),
         }, 3 if incomplete else 0
     finally:
         runtime_module.Store = original
