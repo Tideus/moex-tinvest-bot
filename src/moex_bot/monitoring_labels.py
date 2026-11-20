@@ -96,6 +96,18 @@ INACTIVE = "FAIL: active=inactive, no schedule"
 
 def safe_reason(value: str) -> str:
     """Only known templates; never echo arbitrary collector errors to Kuma or Telegram."""
+    context = re.fullmatch(
+        r"(FAIL: (?:probe (?:timeout|dns|tls|schema|connection|unknown) "
+        r"\([0-9]+\.[0-9]s\)|HTTP [1-5][0-9]{2}|response schema|API rejected request)); "
+        r"method=(UsersService/GetAccounts|SandboxService/GetSandboxAccounts); "
+        r"stage=(request|response_body|response_schema)", value,
+    )
+    if context:
+        stages = {"request": "соединение / ожидание заголовков",
+                  "response_body": "чтение тела ответа", "response_schema": "проверка формата"}
+        return f"{safe_reason(context[1])}; метод {context[2]}; этап: {stages[context[3]]}"
+    if value in {"FAIL: response schema", "FAIL: API rejected request"}:
+        return "формат ответа некорректен" if "schema" in value else "API отклонил запрос"
     research = {
         "timer inactive": "таймер ночного исследования выключен",
         "timeout": "генератор ночного исследования превысил лимит времени",

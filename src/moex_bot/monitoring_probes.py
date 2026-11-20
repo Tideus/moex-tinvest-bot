@@ -58,30 +58,41 @@ def disk_status(total: int, free: int, settings: dict[str, Any]) -> str:
 
 
 def request_probe(url: str, *, token: str = "", payload: dict[str, object] | None = None,
-                  timeout: float = 10, block: str = "", xml: bool = False) -> str:
+                  timeout: float = 10, block: str = "", xml: bool = False,
+                  method_context: str = "") -> str:
+    if method_context not in {"", "UsersService/GetAccounts", "SandboxService/GetSandboxAccounts"}:
+        raise ValueError("unsupported probe method context")
     headers = {"Content-Type": "application/json", "User-Agent": "moex-tinvest-shadow/0.1"}
     if token:
         headers["Authorization"] = f"Bearer {token}"
     request = Request(url, headers=headers,
                       data=None if payload is None else json.dumps(payload).encode())
     started = monotonic()
+    stage = "request"  # DNS/TCP/TLS and waiting for response headers; not just TCP.
+
+    def failure(message: str) -> str:
+        return (message + f"; method={method_context}; stage={stage}"
+                if method_context else message)
+
     try:
         with urlopen(request, timeout=timeout) as response:  # noqa: S310
+            stage = "response_body"
             data = response.read(4 * 1024 * 1024)
+        stage = "response_schema"
         if xml:
             root = ElementTree.fromstring(data)
-            return "OK" if is_feed_root(root.tag) else "FAIL: RSS schema"
+            return "OK" if is_feed_root(root.tag) else failure("FAIL: RSS schema")
         raw = json.loads(data)
         if not isinstance(raw, dict) or (block and block not in raw):
-            return "FAIL: response schema"
+            return failure("FAIL: response schema")
         if raw.get("ok") is False:
-            return "FAIL: API rejected request"
+            return failure("FAIL: API rejected request")
         return "OK"
     except HTTPError as exc:
-        return f"FAIL: HTTP {exc.code}"
+        return failure(f"FAIL: HTTP {exc.code}")
     except Exception as exc:
         # Never include URL/exception: Telegram URL contains a secret.
-        return f"FAIL: probe {failure_kind(exc)} ({monotonic() - started:.1f}s)"
+        return failure(f"FAIL: probe {failure_kind(exc)} ({monotonic() - started:.1f}s)")
 
 
 def systemd(unit: str, property_name: str) -> str:
@@ -200,7 +211,7 @@ def collect_integrations(app: Path, state: Path, settings: dict[str, Any],
         checks[f"api:tinvest_{env}"] = request_probe(
             services["t_invest"][env + "_rest"]
             + "/tinkoff.public.invest.api.contract.v1." + method,
-            token=token, payload={}, timeout=timeout)
+            token=token, payload={}, timeout=timeout, method_context=method)
     token = os.environ.get("T_INVEST_READONLY_TOKEN", "")
     if settings["calendar_required"]:
         checks["api:calendar"] = request_probe(

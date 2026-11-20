@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import sqlite3
@@ -11,6 +12,7 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
+from .daily_report_store import atomic_text, attempt, closing_window, final_report, report_lock
 from .domain import Instrument, OrderStatus
 from .live_execution import registered_live_journal
 from .live_protection import _verified_stop
@@ -213,13 +215,27 @@ def main() -> int:
     args = parser.parse_args()
     now = datetime.now(UTC)
     day = report_day(now, args.report_date)  # Refuse an unfinished session before API calls.
-    result = safe_observe(args.settings, now)
+    with report_lock(args.output):
+        return daily_report(args, day, now)
+
+
+def daily_report(args: argparse.Namespace, day: date, now: datetime) -> int:
+    account = os.environ.get("T_INVEST_PROD_ACCOUNT_ID", "").strip()
+    binding = hashlib.sha256(account.encode()).hexdigest() if account else None
+    saved = final_report(args.output, day, "prod", binding)
+    if saved is None and not closing_window(day, now):
+        attempt(args.output, day, now, "UNAVAILABLE", "outside_close_window_no_final_report")
+        print("FAIL: IIS final report unavailable; outside closing window; history not changed")
+        return 2
+    result = saved if saved is not None else safe_observe(args.settings, now)
     body = render(result, day)
-    args.output.parent.mkdir(parents=True, exist_ok=True)
-    args.output.write_text(body + "\n", encoding="utf-8")
-    args.output.with_suffix(".json").write_text(
-        json.dumps(result, ensure_ascii=False), encoding="utf-8",
-    )
+    if saved is None:
+        result.update(report_date=str(day), account_binding=binding)
+        atomic_text(args.output.with_suffix(".json"), json.dumps(result, ensure_ascii=False) + "\n")
+    if not args.output.exists() or args.output.read_text(encoding="utf-8") != body + "\n":
+        atomic_text(args.output, body + "\n")
+    attempt(args.output, day, now, "PRESERVED" if saved else "PUBLISHED",
+            "final_report_already_exists" if saved else "closing_window_observation")
     if args.outbox and result["state"] != "NOT_ENROLLED":
         SQLiteOutbox(args.outbox).enqueue(kind="prod_once_daily", dedupe_key=f"prod-once:{day}",
                                          body=body, now=now)

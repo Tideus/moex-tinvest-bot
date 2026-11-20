@@ -16,6 +16,7 @@ from typing import Any
 
 from .account_profiles import load_account_registry
 from .cli import _verified_instruments
+from .daily_report_store import atomic_text, attempt, closing_window, final_report, report_lock
 from .integrations.tinvest_sandbox import TInvestSandboxAccountService
 from .long_auto_operator import ANCHOR
 from .long_auto_sandbox import SandboxOnlyTransport
@@ -42,15 +43,6 @@ def report_day(now: datetime, requested: date | None = None) -> date:
     if local < datetime.combine(day, CLOSE, MOSCOW):
         raise ValueError("evening session not closed")
     return day
-
-
-def closing_window(day: date, now: datetime) -> bool:
-    local = now.astimezone(MOSCOW)
-    return (
-        datetime.combine(day, CLOSE, MOSCOW)
-        <= local
-        < datetime.combine(day + timedelta(days=1), time(6, 50), MOSCOW)
-    )
 
 
 class ReportTransport(SandboxOnlyTransport):
@@ -241,6 +233,11 @@ def render(data: dict[str, Any]) -> str:
 
 
 def generate(args: argparse.Namespace, now: datetime) -> int:
+    with report_lock(args.output):
+        return _generate(args, now)
+
+
+def _generate(args: argparse.Namespace, now: datetime) -> int:
     day = report_day(now, args.report_date)
     registry = load_account_registry(args.accounts)
     profile = registry.by_id("long")
@@ -253,6 +250,26 @@ def generate(args: argparse.Namespace, now: datetime) -> int:
         or account == os.getenv("T_INVEST_PROD_ACCOUNT_ID", "").strip()
     ):
         raise ValueError("dedicated LONG sandbox account required")
+    account_binding = hashlib.sha256(account.encode()).hexdigest()
+    saved = final_report(args.output, day, "long", account_binding)
+    if saved is not None:
+        body = render(saved)
+        # JSON is the canonical commit; repair only the derived text after an interrupted write.
+        if not args.output.exists() or args.output.read_text(encoding="utf-8") != body + "\n":
+            atomic_text(args.output, body + "\n")
+        _notify(args, day, body, now)
+        attempt(args.output, day, now, "PRESERVED", "final_report_already_exists")
+        print(f"PASS: preserved final LONG report; date={day}; no broker reads")
+        return 0
+    if not closing_window(day, now):
+        attempt(args.output, day, now, "UNAVAILABLE", "outside_close_window_no_final_report")
+        print("FAIL: LONG final report unavailable; outside closing window; history not changed")
+        return 2
+    if (args.output.parent / f"long-close-{day}.json").exists():
+        # A close without a usable final needs explicit evidence recovery, not a new valuation.
+        attempt(args.output, day, now, "UNAVAILABLE", "close_exists_without_final_report")
+        print("FAIL: LONG close exists without final report; recover original evidence")
+        return 2
     binding = resolve(args.base / "sandbox.sqlite3", args.anchor, account)
     ledger = ReadOnlyLedger(binding.state, account, anchor=binding.anchor)
     status = ledger.status()
@@ -262,6 +279,8 @@ def generate(args: argparse.Namespace, now: datetime) -> int:
     current = service.broker_snapshot(account, instruments).as_portfolio_payload()
     current.pop("account_id")
     observed = datetime.now(UTC)
+    if not closing_window(day, observed):
+        raise ValueError("broker observation outside closing window")
     start = datetime.combine(day, time.min, MOSCOW)
     opening = opening_point(args.base, args.output, day, account)
     from_time = min(start, datetime.fromisoformat(opening["observed_at"])) if opening else start
@@ -280,6 +299,8 @@ def generate(args: argparse.Namespace, now: datetime) -> int:
         {**current, "observed_at": observed.isoformat()} if closing_window(day, observed) else None
     )
     data = {
+        "publication_final": True,
+        "account_binding": account_binding,
         "report_date": str(day),
         "observed_at": observed.isoformat(),
         "ledger_state": status,
@@ -290,10 +311,6 @@ def generate(args: argparse.Namespace, now: datetime) -> int:
     }
     body = render(data)
     args.output.parent.mkdir(parents=True, exist_ok=True)
-    args.output.write_text(body + "\n", encoding="utf-8")
-    args.output.with_suffix(".json").write_text(
-        json.dumps(data, default=str, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
-    )
     if ending:
         close = {
             **ending,
@@ -301,9 +318,19 @@ def generate(args: argparse.Namespace, now: datetime) -> int:
             "report_date": str(day),
         }
         target = args.output.parent / f"long-close-{day}.json"
-        temp = target.with_suffix(".tmp")
-        temp.write_text(json.dumps(close, default=str), encoding="utf-8")
-        temp.replace(target)
+        # Keep the first close used as the next session's opening valuation.
+        if not target.exists():
+            atomic_text(target, json.dumps(close, default=str) + "\n")
+    atomic_text(args.output.with_suffix(".json"),
+                json.dumps(data, default=str, ensure_ascii=False, indent=2) + "\n")
+    atomic_text(args.output, body + "\n")
+    _notify(args, day, body, observed)
+    attempt(args.output, day, observed, "PUBLISHED", "closing_window_observation")
+    print(f"PASS: LONG sandbox report written; date={day}")
+    return 0
+
+
+def _notify(args: argparse.Namespace, day: date, body: str, observed: datetime) -> None:
     policy = load_notification_policy(args.notifications)
     if args.outbox and policy.long_evening_report_enabled:
         SQLiteOutbox(args.outbox).enqueue(
@@ -312,8 +339,6 @@ def generate(args: argparse.Namespace, now: datetime) -> int:
             body=body,
             now=observed,
         )
-    print(f"PASS: LONG sandbox report written; date={day}")
-    return 0
 
 
 def main() -> int:

@@ -59,3 +59,36 @@ def test_geo_timeout_remains_fail_closed_without_secret():
     assert payload["source_failures"] == {"moex_risk": "timeout"}
     assert payload["feed_observed_at"] is None
     assert "SECRET" not in str(payload)
+
+
+@pytest.mark.parametrize('stage', ['request', 'response_body', 'response_schema'])
+@pytest.mark.parametrize('method,key', [
+    ('UsersService/GetAccounts', 'api:tinvest_prod'),
+    ('SandboxService/GetSandboxAccounts', 'api:tinvest_sandbox'),
+])
+def test_tinvest_alert_keeps_method_stage_and_environment(monkeypatch, stage, method, key):
+    class Response(io.BytesIO):
+        def read(self, *a):
+            if stage == 'response_body':
+                raise TimeoutError('SECRET')
+            return b'invalid'
+
+    def open_request(*a, **k):
+        if stage == 'request':
+            raise URLError(TimeoutError('SECRET'))
+        return Response()
+
+    monkeypatch.setattr(monitoring_probes, 'urlopen', open_request)
+    result = monitoring_probes.request_probe('https://example.test', token='SECRET',
+                                            payload={}, method_context=method)
+    assert f'method={method}; stage={stage}' in result
+    message = compact_checks({key: result})
+    assert key in message and method in message and 'этап:' in message
+    assert 'SECRET' not in result + message
+
+
+def test_context_is_whitelisted():
+    with pytest.raises(ValueError, match='context'):
+        monitoring_probes.request_probe('https://example.test', method_context='SECRET')
+    assert 'SECRET' not in safe_reason(
+        'FAIL: probe timeout (10.1s); method=SECRET; stage=request')
