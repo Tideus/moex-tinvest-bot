@@ -23,6 +23,8 @@ KINDS = {'tests', 'independent_audit', 'restore_drill', 'monitoring_reporting'}
 PENDING = ['fresh_iis_readonly_preflight', 'fresh_production_monitoring_and_delivery',
            'fresh_off_host_control_head', 'operator_recovery_readiness',
            'separate_explicit_operator_authorization']
+LINKS = ('decision_sha256', 'ledger_candidate_sha256', 'parent_id_sha256')
+STATIC = ('secid', 'lot_size', 'limit_price', 'stop_trigger')
 
 
 def digest(raw: bytes) -> str:
@@ -35,46 +37,107 @@ def read(path: Path) -> bytes:
     return path.read_bytes()
 
 
+def valid_hash(value: Any) -> bool:
+    return (isinstance(value, str) and len(value) == 64
+            and all(c in '0123456789abcdef' for c in value))
+
+
+def confirmed(p: dict[str, Any], *, closed: bool = False) -> bool:
+    return (type(p.get('version')) is int and p['version'] == 1
+            and p.get('environment') == 'sandbox' and p.get('read_only') is True
+            and p.get('ledger_state') == 'FILLED_PROTECTED'
+            and p.get('state') == ('POSITION_CLOSED' if closed else 'FILLED_PROTECTED')
+            and p.get('broker_status') == 'filled'
+            and type(p.get('lots')) is int and p['lots'] == 1
+            and type(p.get('filled_lots')) is int and p['filled_lots'] == 1
+            and p.get('buy_verified') is True and p.get('stop_verified') is (not closed)
+            and all(valid_hash(p.get(k)) for k in LINKS)
+            and (closed or valid_hash(p.get('stop_id_sha256')))
+            and isinstance(p.get('secid'), str) and bool(p['secid'])
+            and type(p.get('lot_size')) is int and p['lot_size'] > 0
+            and all(isinstance(p.get(k), str) and p[k] for k in ('limit_price', 'stop_trigger')))
+
+
 def evaluate(review: dict[str, Any], receipts: list[tuple[bytes, str]],
              now: datetime) -> dict[str, Any]:
     """A successful proof only updates a non-authorizing technical evidence packet."""
     start = datetime.fromisoformat(review['sandbox_not_before'])
     if now.tzinfo is None or start.tzinfo is None or start > now:
         raise ValueError('invalid time boundary')
+    if (type(review.get('sandbox_attempt')) is not int or review['sandbox_attempt'] < 1
+            or not valid_hash(review.get('sandbox_account_sha256'))):
+        raise ValueError('invalid sandbox review binding')
     matches = []
     for raw, name in receipts:
         p = json.loads(raw)
-        if (p.get('account_sha256') != review['sandbox_account_sha256']
+        unavailable = p.get('state') == 'UNAVAILABLE' and p.get('environment') == 'sandbox'
+        if not unavailable and (p.get('account_sha256') != review['sandbox_account_sha256']
                 or p.get('attempt') != review['sandbox_attempt']):
             continue
         at = datetime.fromisoformat(p['observed_at'])
-        if at.tzinfo is None or not start <= at <= now:
+        if at.tzinfo is None:
+            raise ValueError('invalid time boundary')
+        if not start <= at <= now:
             continue
-        facts = {k: v for k, v in p.items() if k != 'observed_at'}
+        # Producer hashes UNAVAILABLE including time; successful readbacks dedupe by facts.
+        facts = p if unavailable else {k: v for k, v in p.items() if k != 'observed_at'}
         expected = digest(json.dumps(facts, sort_keys=True).encode())
         if name != expected + '.json':
             raise ValueError('receipt content hash differs')
         matches.append((at, p, digest(raw)))
-    state, proof = 'WAITING_SANDBOX', None
+    matches.sort(key=lambda row: (row[0], row[2]))
+    historical = next((row for row in matches if confirmed(row[1])
+                       and type(row[1].get('attempt')) is int), None)
+    state, proof, reason = 'WAITING_SANDBOX', None, 'no_receipt'
     if matches:
-        _, p, sha = max(matches, key=lambda x: x[0])
-        exact = (p.get('environment') == 'sandbox' and p.get('read_only') is True
-                 and p.get('state') == p.get('ledger_state') == 'FILLED_PROTECTED'
-                 and p.get('broker_status') == 'filled'
-                 and type(p.get('filled_lots')) is int and p['filled_lots'] == 1
-                 and type(p.get('lots')) is int and p['lots'] == 1
-                 and p.get('buy_verified') is True and p.get('stop_verified') is True)
-        hashes = ('decision_sha256', 'ledger_candidate_sha256',
-                  'parent_id_sha256', 'stop_id_sha256')
-        exact = exact and all(isinstance(p.get(k), str) and len(p[k]) == 64
-                              and all(c in '0123456789abcdef' for c in p[k]) for k in hashes)
-        if exact:
-            state, proof = 'TECHNICAL_EVIDENCE_COMPLETE_PENDING_OPERATOR', sha
+        state, reason = 'SANDBOX_NOT_CONFIRMED', 'no_historical_protection'
+    if historical:
+        good_at, good, good_sha = historical
+        reason = 'historical_protection_confirmed'
+        closed_seen = False
+        ambiguous = any(left[0] == right[0] and left[1] != right[1]
+                        for left, right in zip(matches, matches[1:], strict=False))
+        for at, p, _ in matches:
+            if ambiguous:
+                reason = 'ambiguous_same_time'
+                break
+            if p.get('state') == 'UNAVAILABLE':
+                if at >= good_at:
+                    reason = 'subsequent_readback_unavailable'
+                    break
+                continue
+            if (type(p.get('attempt')) is not int
+                    or type(p.get('version')) is not int or p['version'] != 1
+                    or p.get('environment') != 'sandbox' or p.get('read_only') is not True
+                    or type(p.get('lot_size')) is not int
+                    or any(p.get(k) != good[k] for k in (*LINKS, *STATIC))
+                    or ('stop_id_sha256' in p and p['stop_id_sha256'] != good['stop_id_sha256'])):
+                reason = 'conflicting_binding'
+                break
+            if at < good_at:
+                if p.get('state') != 'REQUIRES_REVIEW':
+                    reason = 'closed_before_protection'
+                    break
+                continue
+            if confirmed(p, closed=True) and at > good_at:
+                closed_seen = True
+            elif not confirmed(p) or closed_seen:
+                reason = 'subsequent_readback_conflict'
+                break
         else:
-            state = 'SANDBOX_NOT_CONFIRMED'
-    return {'version': 1, 'decision': 'DRAFT_NOT_AUTHORIZED', 'execution_allowed': False,
+            state, proof = 'TECHNICAL_EVIDENCE_COMPLETE_PENDING_OPERATOR', good_sha
+            if closed_seen:
+                reason = 'historical_protection_then_closed'
+    latest = matches[-1] if matches else None
+    return {'version': 2, 'decision': 'DRAFT_NOT_AUTHORIZED', 'execution_allowed': False,
             'revision': review['revision'], 'status': state,
             'technical_evidence': review['evidence'], 'sandbox_receipt_sha256': proof,
+            'sandbox_historical_proof_sha256': historical[2] if historical else None,
+            'sandbox_historical_observed_at': historical[1]['observed_at'] if historical else None,
+            'sandbox_latest_receipt_sha256': latest[2] if latest else None,
+            'sandbox_latest_observed_at': latest[1]['observed_at'] if latest else None,
+            'sandbox_latest_state': latest[1].get('state') if latest else None,
+            'sandbox_evidence_reason': reason,
             'missing': PENDING + ([] if proof else ['sandbox_fill_and_native_stop']),
             'note': 'No trading admission. Historical sandbox proof is not current IIS protection.'}
 
@@ -121,12 +184,26 @@ def check_inputs() -> dict[str, Any]:
 
 def render(p: dict[str, Any]) -> str:
     names = {'WAITING_SANDBOX': 'Ожидается реальный BUY → подтверждённый стоп в sandbox.',
-             'SANDBOX_NOT_CONFIRMED': 'Sandbox-покупка и активный стоп ещё не подтверждены.',
+             'SANDBOX_NOT_CONFIRMED': 'Sandbox-доказательства недостаточны или противоречивы.',
              'TECHNICAL_EVIDENCE_COMPLETE_PENDING_OPERATOR':
-                 'Sandbox BUY и активный стоп подтверждены: технический пакет дополнен.',
+                 'Исторический sandbox BUY → защитный стоп подтверждён.',
              'REVIEW_INVALID': 'Проверка заблокирована: входные данные изменились или недоступны.'}
     detail = '\n' + explanation(p) if p['status'] == 'REVIEW_INVALID' else ''
+    reasons = {
+        'historical_protection_then_closed':
+            'Позднее позиция закрыта. Причина закрытия и P&L этим не установлены.',
+        'subsequent_readback_unavailable':
+            'После подтверждения проверка была недоступна; требуется свежая сверка.',
+        'conflicting_binding': 'Конфликт привязок попытки, покупки или стопа; нужна проверка.',
+        'ambiguous_same_time': 'Противоречивые квитанции с одинаковым временем.',
+        'closed_before_protection': 'Нарушена последовательность закрытия и защиты.',
+        'subsequent_readback_conflict': 'Последующее состояние не подтверждает безопасную цепочку.',
+        'no_historical_protection': 'Нет полного исторического подтверждения покупки и стопа.',
+    }
+    if p.get('sandbox_evidence_reason') in reasons:
+        detail += '\n' + reasons[p['sandbox_evidence_reason']]
     return ('📋 LONG · подготовка допуска на ИИС\n' + names[p['status']] + detail
+            + '\nКвитанции не подтверждают текущую защиту ИИС и не дают повторный вход.'
             + '\n\nЭтот сборщик не включает PROD. Это НЕ разрешение на торговлю.'
             + '\nОстаются: свежая сверка ИИС, проверка контроля/доставки перед включением,'
               ' готовность оператора к восстановлению и отдельное подтверждение.'

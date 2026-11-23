@@ -1,9 +1,11 @@
 import importlib.util
 import json
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
+from test_long_auto_sandbox import case as case
+from test_long_sandbox_verifier import saved as saved
 
 
 @pytest.fixture
@@ -28,8 +30,9 @@ def integrity():
 def inputs():
     review = dict(revision='reviewed-release', sandbox_not_before='2026-11-08T16:00:00+00:00',
                   sandbox_account_sha256='a' * 64, sandbox_attempt=2, evidence={})
-    proof = dict(environment='sandbox', observed_at='2026-11-09T07:20:00+00:00',
+    proof = dict(version=1, environment='sandbox', observed_at='2026-11-09T07:20:00+00:00',
                  read_only=True, account_sha256='a' * 64, attempt=2,
+                 secid='SBER', lot_size=10, limit_price='300', stop_trigger='294',
                  state='FILLED_PROTECTED', ledger_state='FILLED_PROTECTED',
                  broker_status='filled', lots=1, filled_lots=1,
                  buy_verified=True, stop_verified=True)
@@ -39,7 +42,8 @@ def inputs():
 
 
 def receipt(watch, proof):
-    facts = {k: v for k, v in proof.items() if k != 'observed_at'}
+    facts = (proof if proof.get('state') == 'UNAVAILABLE' else
+             {k: v for k, v in proof.items() if k != 'observed_at'})
     name = watch.digest(json.dumps(facts, sort_keys=True).encode()) + '.json'
     return json.dumps(proof).encode(), name
 
@@ -87,6 +91,178 @@ def test_later_adverse_result_blocks_success(watch, inputs):
                          stop_verified=False)
     assert watch.evaluate(review, [receipt(watch, proof), receipt(watch, later)], now)[
         'status'] == 'SANDBOX_NOT_CONFIRMED'
+
+
+def closed(proof, **changes):
+    result = proof | dict(observed_at='2026-11-09T07:25:00+00:00',
+                          state='POSITION_CLOSED', stop_verified=False)
+    del result['stop_id_sha256']  # The actual verifier never supplies a stop ID after closure.
+    return result | changes
+
+
+def test_confirmed_then_closed_preserves_historical_proof_not_current_protection(watch, inputs):
+    review, proof, now = inputs
+    success, closure = receipt(watch, proof), receipt(watch, closed(proof))
+    packet = watch.evaluate(review, [closure, success], now)
+    assert packet == watch.evaluate(review, [success, closure], now)
+    assert packet['sandbox_receipt_sha256'] == watch.digest(success[0])
+    assert packet['sandbox_historical_proof_sha256'] == watch.digest(success[0])
+    assert packet['sandbox_latest_receipt_sha256'] == watch.digest(closure[0])
+    assert packet['sandbox_latest_state'] == 'POSITION_CLOSED'
+    assert packet['sandbox_evidence_reason'] == 'historical_protection_then_closed'
+    assert packet['status'] == 'TECHNICAL_EVIDENCE_COMPLETE_PENDING_OPERATOR'
+    assert packet['execution_allowed'] is False
+    assert 'fresh_production_monitoring_and_delivery' in packet['missing']
+    text = watch.render(packet)
+    assert 'Исторический' in text and 'Причина закрытия и P&L этим не установлены' in text
+    assert 'не дают повторный вход' in text and 'активный стоп подтверждён' not in text
+
+
+def test_closed_without_proof_or_before_proof_cannot_confirm(watch, inputs):
+    review, proof, now = inputs
+    closure = closed(proof)
+    for evidence in ([closure], [closure | {'observed_at': '2026-11-09T07:19:00+00:00'}, proof]):
+        packet = watch.evaluate(review, [receipt(watch, p) for p in evidence], now)
+        assert packet['status'] == 'SANDBOX_NOT_CONFIRMED'
+        assert packet['sandbox_receipt_sha256'] is None
+
+
+@pytest.mark.parametrize('field,value', [
+    ('decision_sha256', 'c'*64), ('ledger_candidate_sha256', 'c'*64),
+    ('parent_id_sha256', 'c'*64), ('stop_id_sha256', 'c'*64),
+    ('secid', 'T'), ('lot_size', 1), ('limit_price', '301'), ('stop_trigger', '295'),
+    ('version', True), ('version', '1'), ('lots', True), ('lots', '1'),
+    ('filled_lots', True), ('filled_lots', 2), ('stop_verified', True),
+    ('buy_verified', False), ('ledger_state', 'UNKNOWN'), ('broker_status', 'unknown'),
+    ('read_only', False), ('environment', 'prod'),
+    ('state', 'REQUIRES_REVIEW'), ('state', 'UNKNOWN'),
+])
+def test_conflicting_closure_never_reuses_success(watch, inputs, field, value):
+    review, proof, now = inputs
+    packet = watch.evaluate(review, [receipt(watch, proof),
+                                    receipt(watch, closed(proof, **{field: value}))], now)
+    assert packet['status'] == 'SANDBOX_NOT_CONFIRMED'
+    assert packet['sandbox_historical_proof_sha256'] is not None
+    assert packet['sandbox_receipt_sha256'] is None and packet['execution_allowed'] is False
+
+
+@pytest.mark.parametrize('changes', [
+    {'state': 'POSITION_CLOSED', 'stop_verified': False}, {'stop_id_sha256': 'c'*64},
+])
+def test_simultaneous_conflicts_are_order_independent(watch, inputs, changes):
+    review, proof, now = inputs
+    rows = [receipt(watch, proof), receipt(watch, proof | changes)]
+    left, right = (watch.evaluate(review, r, now) for r in (rows, list(reversed(rows))))
+    assert left == right and left['status'] == 'SANDBOX_NOT_CONFIRMED'
+    assert left['sandbox_evidence_reason'] == 'ambiguous_same_time'
+
+
+def test_changed_stop_and_reopened_position_block(watch, inputs):
+    review, proof, now = inputs
+    for middle in (closed(proof, observed_at='2026-11-09T07:22:00+00:00'),
+                   proof | {'observed_at': '2026-11-09T07:22:00+00:00',
+                            'stop_id_sha256': 'c'*64}):
+        rows = [proof, middle, proof | {'observed_at': '2026-11-09T07:25:00+00:00'}]
+        assert watch.evaluate(review, [receipt(watch, p) for p in rows], now)[
+            'status'] == 'SANDBOX_NOT_CONFIRMED'
+
+
+def test_unbound_unavailable_is_visible_and_cannot_be_cleared_by_old_success(watch, inputs):
+    review, proof, now = inputs
+    error = dict(version=1, state='UNAVAILABLE', environment='sandbox', read_only=True,
+                 observed_at='2026-11-09T07:25:00+00:00', failure={'reason': 'network'})
+    packet = watch.evaluate(review, [receipt(watch, error), receipt(watch, proof)], now)
+    assert packet['sandbox_historical_proof_sha256'] is not None
+    assert packet['sandbox_evidence_reason'] == 'subsequent_readback_unavailable'
+    assert packet['sandbox_latest_state'] == 'UNAVAILABLE'
+    assert packet['status'] == 'SANDBOX_NOT_CONFIRMED'
+    assert 'требуется свежая сверка' in watch.render(packet)
+    # An earlier failure does not erase a later complete readback.
+    error['observed_at'] = '2026-11-09T07:19:00+00:00'
+    assert watch.evaluate(review, [receipt(watch, error), receipt(watch, proof)], now)[
+        'status'] == 'TECHNICAL_EVIDENCE_COMPLETE_PENDING_OPERATOR'
+
+
+@pytest.mark.parametrize('field,value', [('version', True), ('version', '1'),
+                                        ('lot_size', True), ('lot_size', '10')])
+def test_schema_types_are_exact(watch, inputs, field, value):
+    review, proof, now = inputs
+    assert watch.evaluate(review, [receipt(watch, proof | {field: value})], now)[
+        'status'] == 'SANDBOX_NOT_CONFIRMED'
+
+
+def test_boolean_attempt_and_naive_time_do_not_authorize(watch, inputs):
+    review, proof, now = inputs
+    review['sandbox_attempt'] = 1
+    proof['attempt'] = True
+    assert watch.evaluate(review, [receipt(watch, proof)], now)[
+        'status'] == 'SANDBOX_NOT_CONFIRMED'
+    proof.update(attempt=1, observed_at='2026-11-09T07:20:00')
+    with pytest.raises(ValueError, match='invalid time boundary'):
+        watch.evaluate(review, [receipt(watch, proof)], now)
+
+
+def test_producer_readbacks_and_publication_match_evaluator(watch, saved, tmp_path, monkeypatch):
+    from moex_bot import long_sandbox_verifier as verifier
+    from moex_bot.long_auto_once import run_sandbox_candidate
+
+    candidate, state, anchor, broker, transport, now = saved
+    run_sandbox_candidate(candidate, state, broker, clock=lambda: now, anchor=anchor)
+    before = state.read_bytes(), anchor.read_bytes()
+    proof = verifier.verify(state, anchor, candidate.account_id, broker, now)
+    assert proof['state'] == 'FILLED_PROTECTED'
+    original = transport.post
+
+    def flat(url, **kwargs):
+        if url.endswith('/GetSandboxPositions'):
+            return {'securities': []}
+        if url.endswith('/GetSandboxStopOrders'):
+            return {'stopOrders': []}
+        return original(url, **kwargs)
+
+    monkeypatch.setattr(transport, 'post', flat)
+    later = now + timedelta(minutes=5)
+    closure = verifier.verify(state, anchor, candidate.account_id, broker, later)
+    assert closure['state'] == 'POSITION_CLOSED' and 'stop_id_sha256' not in closure
+    folder, outbox = tmp_path/'receipts', tmp_path/'outbox.sqlite3'
+    for p in (proof, closure):
+        verifier.publish(p, folder, outbox, later)
+    originals = {p.name: p.read_bytes() for p in folder.glob('*.json')}
+    review = dict(revision='checked', evidence={}, sandbox_account_sha256=proof['account_sha256'],
+                  sandbox_attempt=proof['attempt'], sandbox_not_before=now.isoformat())
+    monkeypatch.setattr(watch, 'BASE', tmp_path)
+    monkeypatch.setattr(watch, 'RECEIPTS', folder)
+    monkeypatch.setattr(watch, 'OUTBOX', outbox)
+    monkeypatch.setattr(watch, 'check_inputs', lambda: review)
+    (tmp_path/'results').mkdir()
+    assert watch.main() == watch.main() == 0
+    packet = json.loads(next((tmp_path/'results').glob('*.json')).read_bytes())
+    assert packet['status'] == 'TECHNICAL_EVIDENCE_COMPLETE_PENDING_OPERATOR'
+    assert packet['sandbox_evidence_reason'] == 'historical_protection_then_closed'
+    assert packet['execution_allowed'] is False
+    assert {p.name: p.read_bytes() for p in folder.glob('*.json')} == originals
+    assert (state.read_bytes(), anchor.read_bytes()) == before
+
+
+def test_diagnostics_upgrade_pins_the_previous_shipped_blobs():
+    import hashlib
+    import subprocess
+
+    root = Path(__file__).resolve().parents[1]
+    installer = (root/'scripts/ubuntu/install-admission-diagnostics.sh').read_text()
+    # No Git needed for ordinary tests; these are the independently reviewed LF bytes.
+    expected = ('cd8ea80a200a947c88a1b30fdff70a924330f03361caf97bc26c5c5eb75bb448',
+                '0d2f4fcbe36c76fd127dafca873ca39dc59b6ee55656e464168833e7b1653bfc')
+    assert all(sha in installer for sha in expected)
+    assert '"$old" != "${reviewed[$index]}"' in installer
+    # Where the release object exists, verify the allowlist against Git, not deployed files.
+    revision = '645342ec04880b4cd2b33c0b9831236af8fe2aa0'
+    for name, sha in zip(('long_admission_watch.py', 'long_admission_integrity.py'),
+                         expected, strict=True):
+        result = subprocess.run(['git', '-C', str(root), 'show',
+                                 f'{revision}:scripts/ops/{name}'], capture_output=True)
+        if result.returncode == 0:
+            assert hashlib.sha256(result.stdout).hexdigest() == sha
 
 
 def test_deployment_and_evidence_pins(watch, integrity, inputs, tmp_path, monkeypatch):

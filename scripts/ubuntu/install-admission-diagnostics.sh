@@ -12,6 +12,8 @@ fi
 sources=(long_admission_watch.py long_admission_integrity.py)
 targets=(report.py verify-deployment.py)
 previous=(0a30f078b1fd712447272252dc22df854aeb3cab4c29ecd14e7e159ef721ef4c ecae5ac51eeeffeda5b6a229ccbabb1542f715d7df6b4e75d91282a8e5d2006b)
+# Audited diagnostics shipped by 645342e (canonical LF blobs, not local CRLF checkouts).
+reviewed=(cd8ea80a200a947c88a1b30fdff70a924330f03361caf97bc26c5c5eb75bb448 0d2f4fcbe36c76fd127dafca873ca39dc59b6ee55656e464168833e7b1653bfc)
 # Validate both files before changing either. Refuse to overwrite unknown local edits.
 for index in 0 1; do
   file="$TARGET/${targets[$index]}"
@@ -19,7 +21,7 @@ for index in 0 1; do
   [[ -f "$file" && ! -L "$file" && "$(stat -c %u "$file")" == 0 ]]
   old="$(sha256sum "$file" | cut -d ' ' -f 1)"
   new="$(sha256sum "$source" | cut -d ' ' -f 1)"
-  if [[ "$old" != "${previous[$index]}" && "$old" != "$new" ]]; then
+  if [[ "$old" != "${previous[$index]}" && "$old" != "${reviewed[$index]}" && "$old" != "$new" ]]; then
     echo 'FAIL: custom readiness diagnostics; review before replacement' >&2
     exit 2
   fi
