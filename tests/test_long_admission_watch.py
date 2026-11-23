@@ -177,6 +177,9 @@ def test_unbound_unavailable_is_visible_and_cannot_be_cleared_by_old_success(wat
     assert packet['sandbox_latest_state'] == 'UNAVAILABLE'
     assert packet['status'] == 'SANDBOX_NOT_CONFIRMED'
     assert 'требуется свежая сверка' in watch.render(packet)
+    assert 'повторная покупка для него не нужна' in watch.render(packet)
+    assert 'sandbox_latest_readback_or_conflict_review' in packet['missing']
+    assert 'sandbox_fill_and_native_stop' not in packet['missing']
     # An earlier failure does not erase a later complete readback.
     error['observed_at'] = '2026-11-09T07:19:00+00:00'
     assert watch.evaluate(review, [receipt(watch, error), receipt(watch, proof)], now)[

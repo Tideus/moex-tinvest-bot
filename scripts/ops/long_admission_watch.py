@@ -138,7 +138,9 @@ def evaluate(review: dict[str, Any], receipts: list[tuple[bytes, str]],
             'sandbox_latest_observed_at': latest[1]['observed_at'] if latest else None,
             'sandbox_latest_state': latest[1].get('state') if latest else None,
             'sandbox_evidence_reason': reason,
-            'missing': PENDING + ([] if proof else ['sandbox_fill_and_native_stop']),
+            'missing': PENDING + ([] if proof else [
+                'sandbox_latest_readback_or_conflict_review' if historical
+                else 'sandbox_fill_and_native_stop']),
             'note': 'No trading admission. Historical sandbox proof is not current IIS protection.'}
 
 
@@ -202,6 +204,8 @@ def render(p: dict[str, Any]) -> str:
     }
     if p.get('sandbox_evidence_reason') in reasons:
         detail += '\n' + reasons[p['sandbox_evidence_reason']]
+    if p.get('sandbox_historical_proof_sha256') and p['status'] == 'SANDBOX_NOT_CONFIRMED':
+        detail += '\nИсторическое подтверждение сохранено; повторная покупка для него не нужна.'
     return ('📋 LONG · подготовка допуска на ИИС\n' + names[p['status']] + detail
             + '\nКвитанции не подтверждают текущую защиту ИИС и не дают повторный вход.'
             + '\n\nЭтот сборщик не включает PROD. Это НЕ разрешение на торговлю.'
