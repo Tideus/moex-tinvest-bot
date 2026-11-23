@@ -235,6 +235,9 @@ def live_operator(
                 short_enabled=item.short_enabled_verified,
             )
         broker = TInvestLiveBroker(token, account, UrlLibJsonTransport(), instruments)
+        from .daily_risk import BASIS_DIR
+        if policy.canary.max_strategy_daily_loss_weight is not None:
+            broker.daily_risk_directory = BASIS_DIR
         journal = Path(settings["journal"])
         if action == "probe":
             # Technical reference only: prospective cost of one liquid share lot, never a signal.

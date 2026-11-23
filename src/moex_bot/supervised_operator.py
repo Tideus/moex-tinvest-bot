@@ -252,6 +252,9 @@ def operate(args: argparse.Namespace) -> int:
         for x in load_universe(args.universe)
     }
     broker = SupervisedTInvestBroker(token, account, UrlLibJsonTransport(), instruments)
+    from .daily_risk import BASIS_DIR
+    if policy.canary.max_strategy_daily_loss_weight is not None:
+        broker.daily_risk_directory = BASIS_DIR
     journal = Path(settings["journal"])
     now = datetime.now(UTC)
     if args.action in {"protection-preview", "protection-apply"}:

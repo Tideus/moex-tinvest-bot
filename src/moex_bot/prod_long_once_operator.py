@@ -21,6 +21,7 @@ from urllib.error import HTTPError
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 from .config import load_config
+from .daily_risk import BASIS_DIR
 from .domain import OrderIntent, Side
 from .integrations.tinvest_sandbox import JsonPostTransport
 from .live_audit import AuditJsonTransport
@@ -321,6 +322,8 @@ def operate(args: argparse.Namespace) -> dict[str, str | int]:
         capital_limit=policy.canary.capital_limit_rub,
         protected_futures=policy.protected_external_instruments,
         reserve_weight=load_config(CONFIG / "prod_shadow.json").min_cash_reserve_weight,
+        daily_risk_directory=(BASIS_DIR if policy.canary.max_strategy_daily_loss_weight
+                              is not None else None),
     )
     return run_once(
         candidate=candidate,

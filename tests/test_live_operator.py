@@ -230,6 +230,8 @@ def test_operator_dispatch_enroll_preview_execute_reconcile_with_mock_broker_onl
         def capture(self, intent: OrderIntent) -> LiveState:
             calls.append("capture")
             now = datetime.now(UTC)
+            from moex_bot.daily_risk import MSK, AccountDailyRisk, account_hash
+            opening = now.astimezone(MSK).replace(hour=0, minute=0, second=5, microsecond=0)
             return LiveState(
                 self.account_id,
                 "ACCOUNT_TYPE_TINKOFF_IIS",
@@ -250,6 +252,8 @@ def test_operator_dispatch_enroll_preview_execute_reconcile_with_mock_broker_onl
                 {},
                 0,
                 frozenset(),
+                AccountDailyRisk(account_hash(self.account_id), opening, now,
+                                 Decimal(160000), Decimal(160000), Decimal(0), Decimal(0), 'a'*64),
             )
 
         def submit(self, intent: OrderIntent) -> OrderRecord:

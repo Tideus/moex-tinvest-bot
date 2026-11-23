@@ -6,9 +6,11 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, time
 from decimal import Decimal
+from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
 
+from ..daily_risk_reader import read_risk
 from ..domain import Instrument, OrderIntent, OrderRecord, OrderStatus, Side
 from ..live_execution import LiveHolding, LiveState
 from ..observer_funding import verified_order_total
@@ -47,6 +49,7 @@ class TInvestLiveBroker:
     instruments_by_uid: dict[str, Instrument]
     clock: Callable[[], datetime] = lambda: datetime.now(UTC)
     timeout_seconds: float = 10
+    daily_risk_directory: Path | None = None
 
     def __post_init__(self) -> None:
         if not self.token.strip() or not self.account_id.strip() or self.timeout_seconds <= 0:
@@ -154,6 +157,18 @@ class TInvestLiveBroker:
             },
         )
         total = verified_order_total(estimate, intent)
+        account_risk = None
+        risk_reason = "not configured: legacy account-yield gate"
+        # Risk evidence is for new exposure only. A failure must never prevent
+        # an already authorized protective stop or an owned-position exit.
+        if self.daily_risk_directory is not None and intent.side is Side.BUY:
+            try:
+                account_risk = read_risk(
+                    self._post, self.account_id, self.clock, self.daily_risk_directory)
+                risk_reason = "BOD and cash bridge verified"
+            except (OSError, ValueError, KeyError, ArithmeticError) as exc:
+                risk_reason = (str(exc) if type(exc) is ValueError
+                               else f"account daily risk unavailable: {type(exc).__name__}")
         status = self._post("MarketDataService/GetTradingStatus", {"instrumentId": inst.uid})
         book = self._post("MarketDataService/GetOrderBook", {"instrumentId": inst.uid, "depth": 1})
         if book.get("instrumentUid") != inst.uid or status.get("instrumentUid") != inst.uid:
@@ -182,13 +197,17 @@ class TInvestLiveBroker:
             quotation_to_decimal(bids[0]["price"]),
             quotation_to_decimal(asks[0]["price"]),
             cash,
-            _money(portfolio.get("totalAmountPortfolio")),
-            _money(portfolio.get("dailyYield")),
+            (account_risk.current_equity if account_risk is not None
+             else _money(portfolio.get("totalAmountPortfolio"))),
+            (_money(portfolio.get("dailyYield")) if self.daily_risk_directory is None
+             else Decimal('NaN')),  # Not used as risk P&L in the split profile.
             turnover,
             total,
             holdings,
             len(orders),
             frozenset(str(row["instrumentUid"]) for row in stops),
+            account_risk,
+            risk_reason,
         )
 
     def _equity_portfolio(

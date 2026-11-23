@@ -1,0 +1,11 @@
+[Unit]
+Description=Capture IIS opening capital, never backdate missing days
+
+[Timer]
+OnCalendar=*-*-* 00:00:05 Europe/Moscow
+AccuracySec=1s
+Persistent=false
+Unit=moex-tinvest-daily-risk.service
+
+[Install]
+WantedBy=timers.target

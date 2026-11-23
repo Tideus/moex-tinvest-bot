@@ -1,0 +1,20 @@
+[Unit]
+Description=MOEX IIS immutable opening capital (read-only, no orders)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+Group=moexbot
+EnvironmentFile=/etc/moex-tinvest-bot/bot.env
+Environment=PYTHONDONTWRITEBYTECODE=1
+ExecStart=/opt/moex-tinvest-bot/.venv/bin/python -m moex_bot.daily_risk_operator capture
+TimeoutStartSec=45
+UMask=0027
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/moex-tinvest-control/daily-risk
+

@@ -288,7 +288,10 @@ def run_once(
     intent, plan = paired(candidate)
     risk = (plan.entry_price - plan.stop_trigger) * plan.instrument.lot_size
     risk += intent.notional * Decimal(".005")
-    if risk > policy.canary.capital_limit_rub * policy.canary.max_account_daily_loss_weight:
+    strategy_weight = (policy.canary.max_strategy_daily_loss_weight
+                       if policy.canary.max_strategy_daily_loss_weight is not None
+                       else policy.canary.max_account_daily_loss_weight)
+    if risk > policy.canary.capital_limit_rub * strategy_weight:
         raise ValueError("planned stop distance and transaction costs exceed risk budget")
     identity = journal_identity(journal, candidate.account_id)
     claim = Claim(claim_directory, claim_binding(candidate, plan, identity, release))
@@ -301,6 +304,8 @@ def run_once(
     with closing(sqlite3.connect(journal.as_uri() + "?mode=ro", uri=True)) as db:
         if db.execute("SELECT COUNT(*) FROM actions").fetchone()[0] != 0:
             raise ValueError("first-entry journal already contains attempts; never re-arm")
+        from .daily_risk import unused_strategy_pnl
+        strategy_pnl = unused_strategy_pnl(db, candidate.account_id, identity)
     now = clock()
     if (
         now.tzinfo is None
@@ -312,7 +317,7 @@ def run_once(
     # journal reservation repeats all checks against a NEW snapshot after claim.
     initial = broker.capture(intent)
     check_entry_state(intent, initial, plan)
-    _authorize(intent, policy, initial, {}, 0, Decimal(0), clock())
+    _authorize(intent, policy, initial, {}, 0, Decimal(0), clock(), strategy_pnl)
     authority()
     if candidate.valid_until - clock() < timedelta(seconds=180):
         raise ValueError("signal too old after read-only preflight")

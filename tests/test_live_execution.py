@@ -56,6 +56,9 @@ def _setup(tmp_path: Path) -> tuple:
     policy = replace(
         load_prod_long_policy(ROOT / "config/prod_long.json"), execution_stage="canary"
     )
+    # Retain the original supervised-policy regression suite. Split first-entry
+    # policy and its positive/negative gates are exercised in test_daily_risk.
+    policy = replace(policy, canary=replace(policy.canary, max_strategy_daily_loss_weight=None))
     instrument = Instrument(
         "SBER",
         "uid-sber",

@@ -215,6 +215,8 @@ install -m 0644 "${PROJECT_DIR}/deploy/ubuntu/moex-tinvest-shadow.timer" \
 for suffix in service timer; do
   unit="moex-tinvest-long-once-sandbox.${suffix}"
   install -m 0644 "${PROJECT_DIR}/deploy/ubuntu/${unit}" "$(root_path /etc/systemd/system/${unit})"
+  unit="moex-tinvest-daily-risk.${suffix}"
+  install -m 0644 "${PROJECT_DIR}/deploy/ubuntu/${unit}" "$(root_path /etc/systemd/system/${unit})"
 done
 install -m 0644 "${PROJECT_DIR}/deploy/ubuntu/moex-tinvest-prod-long-observer.service" \
   "$(root_path /etc/systemd/system/moex-tinvest-prod-long-observer.service)"
@@ -322,6 +324,7 @@ chmod 0644 "${CONFIG_DIR}/runtime.json"
   --runtime "${CONFIG_DIR}/runtime.json"
 
 systemctl daemon-reload
+install -d -o root -g "${SERVICE_USER}" -m 0750 /var/lib/moex-tinvest-control/daily-risk
 if [[ "${ENABLE_TIMER}" -eq 1 ]]; then
   "${APP_DIR}/scripts/ubuntu/activate.sh"
 fi

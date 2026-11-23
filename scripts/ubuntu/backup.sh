@@ -73,8 +73,12 @@ tar --create --gzip --file "${stage_dir}/state.tar.gz" --directory "${stage_dir}
 # Preserve all control evidence, but never auto-extract/re-enroll from this sidecar.
 if [[ -d /var/lib/moex-tinvest-control/prod-long-once ]]; then
   control_archive="${archive%.tar.gz}.prod-control.tar.gz"
+  control_items=(prod-long-once)
+  if [[ -d /var/lib/moex-tinvest-control/daily-risk ]]; then
+    control_items+=(daily-risk)
+  fi
   tar --create --gzip --file "${control_archive}" \
-    --directory /var/lib/moex-tinvest-control prod-long-once
+    --directory /var/lib/moex-tinvest-control "${control_items[@]}"
   (cd "${BACKUP_DIR}" && sha256sum "$(basename "${control_archive}")") >"${control_archive}.sha256"
 fi
 if [[ -d /var/lib/moex-tinvest-control/long-once-sandbox ]]; then

@@ -85,6 +85,43 @@ def test_one_buy_one_native_stop_and_never_another_candidate(case):
     assert (case["claim_directory"] / "stop-dispatch.json").is_file()
 
 
+def test_split_limits_allow_manual_loss_but_protection_survives_risk_loss(case):
+    from test_daily_risk import evidence
+    policy = case['policy']
+    case['policy'] = replace(policy, canary=replace(policy.canary,
+                                                   max_strategy_daily_loss_weight=Decimal('.015')))
+    broker = case['broker']
+    risk = evidence()
+    broker.state = replace(broker.state, equity=risk.current_equity,
+                           account_daily_risk=risk, daily_pnl=Decimal('-1000'))
+    submit = broker.submit
+
+    def fill_then_lose_daily_risk(intent):
+        result = submit(intent)
+        broker.state = replace(broker.state, account_daily_risk=None)
+        return result
+
+    broker.submit = fill_then_lose_daily_risk
+    assert execute(case)['state'] == 'FILLED_PROTECTED'
+    assert len(broker.calls) == 1 and case['stops'].post_stop.call_count == 1
+
+
+def test_split_risk_rechecked_before_reservation_dispatch(case):
+    from test_daily_risk import evidence
+    policy = case['policy']
+    case['policy'] = replace(policy, canary=replace(policy.canary,
+                                                   max_strategy_daily_loss_weight=Decimal('.015')))
+    broker = case['broker']
+    risk = evidence()
+    first = replace(broker.state, equity=risk.current_equity, account_daily_risk=risk)
+    broker.capture = Mock(side_effect=[first, replace(first, account_daily_risk=None)])
+    with pytest.raises(ValueError, match='IIS risk UNKNOWN'):
+        execute(case)
+    assert not broker.calls and not case['stops'].post_stop.called
+    assert (case['claim_directory'] / 'claim.json').exists()
+    assert not (case['claim_directory'] / 'buy-dispatch.json').exists()
+
+
 @pytest.mark.parametrize("refusal_at", [1, 2])
 def test_funding_limit_lost_before_reservation_never_dispatches(case, refusal_at):
     broker = case["broker"]

@@ -15,6 +15,7 @@ from typing import Protocol
 from uuid import NAMESPACE_URL, uuid4, uuid5
 from zoneinfo import ZoneInfo
 
+from .daily_risk import AccountDailyRisk, check_daily_limits, unused_strategy_pnl
 from .domain import Instrument, OrderIntent, OrderRecord, OrderStatus, Side
 from .execution_journal import ExecutionJournal
 from .prod_long import ProdLongPolicy, validate_prod_long_policy
@@ -99,6 +100,8 @@ class LiveState:
     positions: dict[str, LiveHolding]
     active_orders: int
     stop_uids: frozenset[str]
+    account_daily_risk: AccountDailyRisk | None = None
+    account_risk_reason: str = "not collected"
 
 
 class LiveBrokerPort(Protocol):
@@ -199,6 +202,7 @@ def _authorize(
     count: int,
     reserved_turnover: Decimal,
     now: datetime,
+    strategy_pnl: Decimal | None = None,
 ) -> None:
     if (
         state.account_type != policy.account_type
@@ -250,7 +254,6 @@ def _authorize(
     numeric = (
         state.cash_available,
         state.equity,
-        state.daily_pnl,
         state.daily_turnover,
         state.estimated_total,
         reserved_turnover,
@@ -291,12 +294,20 @@ def _authorize(
         if units > owned.get(instrument.uid, 0) or holding is None or units > holding.free_units:
             raise ValueError("sell would touch manual holdings or create a short")
     else:
-        # Whole-account loss can block new risk; the canary-sized cap makes this conservative.
-        loss_budget = min(state.equity, policy.canary.capital_limit_rub) * (
-            policy.canary.max_account_daily_loss_weight
-        )
-        if state.daily_pnl <= -loss_budget:
-            raise ValueError("daily loss gate blocks new exposure")
+        if policy.canary.max_strategy_daily_loss_weight is not None:
+            check_daily_limits(
+                account=state.account_id, equity=state.equity, now=now,
+                account_risk=state.account_daily_risk, strategy_pnl=strategy_pnl,
+                strategy_capital=policy.canary.capital_limit_rub,
+                strategy_weight=policy.canary.max_strategy_daily_loss_weight,
+                account_weight=policy.canary.max_account_daily_loss_weight,
+            )
+        else:
+            loss_budget = min(state.equity, policy.canary.capital_limit_rub) * (
+                policy.canary.max_account_daily_loss_weight
+            )
+            if not state.daily_pnl.is_finite() or state.daily_pnl <= -loss_budget:
+                raise ValueError("daily loss gate blocks new exposure")
         if state.estimated_total < notional or state.estimated_total > notional * Decimal("1.005"):
             raise ValueError("broker fee estimate is missing or exceeds reserve")
         if state.estimated_total > state.cash_available:
@@ -352,7 +363,9 @@ def execute_live_intent(
         if state.account_id != broker.account_id:
             raise ValueError("fresh broker state belongs to another account")
         owned, count, turnover = _ledger_summary(db, scope, now)
-        _authorize(intent, policy, state, owned, count, turnover, now)
+        strategy_pnl = (unused_strategy_pnl(db, broker.account_id, journal_uuid)
+                        if policy.canary.max_strategy_daily_loss_weight is not None else None)
+        _authorize(intent, policy, state, owned, count, turnover, now, strategy_pnl)
         captured.append(state)
         return state.started_at
 

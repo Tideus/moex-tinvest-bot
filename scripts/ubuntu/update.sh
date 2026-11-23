@@ -219,6 +219,9 @@ install -m 0755 "${PROJECT_DIR}/scripts/ubuntu/moex-botctl.sh" \
 bash "${PROJECT_DIR}/scripts/ubuntu/install-research-report.sh"
 bash "${PROJECT_DIR}/scripts/ubuntu/install-admission-diagnostics.sh"
 systemctl daemon-reload
+# Immutable start-of-day evidence is separate from resettable execution databases.
+# This creates storage only; activation of the read-only timer is operator-controlled.
+install -d -o root -g "${SERVICE_USER}" -m 0750 /var/lib/moex-tinvest-control/daily-risk
 restart_timers
 trap - EXIT
 if [[ "${WAS_LONG_ONCE_ACTIVE}" == 1 ]]; then

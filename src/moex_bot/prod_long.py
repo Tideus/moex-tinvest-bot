@@ -26,6 +26,8 @@ class ProdLongCanary:
     max_account_daily_loss_weight: Decimal
     allow_margin: bool
     allowed_asset_classes: tuple[str, ...]
+    # None preserves the legacy policy until an explicit operator migration.
+    max_strategy_daily_loss_weight: Decimal | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -79,6 +81,11 @@ def load_prod_long_policy(path: Path) -> ProdLongPolicy:
             allow_margin=_boolean(canary_raw.get("allow_margin"), "allow_margin"),
             allowed_asset_classes=_strings(
                 canary_raw.get("allowed_asset_classes"), "allowed_asset_classes"
+            ),
+            max_strategy_daily_loss_weight=(
+                _decimal(canary_raw["max_strategy_daily_loss_weight"],
+                         "max_strategy_daily_loss_weight")
+                if "max_strategy_daily_loss_weight" in canary_raw else None
             ),
         ),
     )
@@ -244,6 +251,11 @@ def validate_prod_long_policy(policy: ProdLongPolicy) -> None:
         raise ValueError("production canary permits from one to four orders per day")
     if not Decimal("0") < canary.max_account_daily_loss_weight <= Decimal("0.02"):
         raise ValueError("account daily loss gate must be in (0, 0.02]")
+    if canary.max_strategy_daily_loss_weight is not None and (
+        not canary.max_strategy_daily_loss_weight.is_finite()
+        or not Decimal(0) < canary.max_strategy_daily_loss_weight <= Decimal(".02")
+    ):
+        raise ValueError("strategy daily loss gate must be in (0, 0.02]")
     if canary.allow_margin:
         raise ValueError("margin is forbidden for the initial production canary")
     if canary.allowed_asset_classes != ("share",):
