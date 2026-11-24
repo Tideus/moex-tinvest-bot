@@ -14,6 +14,8 @@ fi
 install -d -m 0755 /usr/local/lib/moex-research-report
 install -m 0644 "$PROJECT_DIR/scripts/research/forward_report.py" \
   /usr/local/lib/moex-research-report/forward_report.py
+install -m 0644 "$PROJECT_DIR/scripts/research/forward_diagnostics.py" \
+  /usr/local/lib/moex-research-report/forward_diagnostics.py
 install -d -m 0755 /etc/systemd/system/moex-research-forward-report.service.d
 install -m 0644 "$PROJECT_DIR/deploy/research-report/report.conf" \
   /etc/systemd/system/moex-research-forward-report.service.d/report.conf

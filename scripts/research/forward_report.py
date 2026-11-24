@@ -16,6 +16,15 @@ from contextlib import contextmanager
 from datetime import date
 from pathlib import Path
 
+# -I deliberately excludes the script directory; this admin-installed helper is trusted.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from forward_diagnostics import (  # noqa: E402
+    classify,
+    notify_status,
+    save_diagnostics,
+    status_text,
+)
+
 
 def report_diagnostics(report):
     """Bounded, non-secret summary of frozen facts; no reinterpretation or backfill."""
@@ -135,13 +144,15 @@ def generate(runtime_module, bundle, state, day=None):
         report = runtime.report(day)
         # Completeness is from the frozen protocol, not inferred from exit=0.
         incomplete = bool(report.get("incomplete", True))
+        diagnostics = report_diagnostics(report)
+        diagnostics["source_classification"] = classify(runtime.store, str(day))
         return {
             "execution_allowed": False,
             "day": str(day),
             "status": "INCOMPLETE" if incomplete else "COMPLETE",
             "chain": report["chain"],
             "report": str(state / "reports" / f"{day}.json"),
-            "diagnostics": report_diagnostics(report),
+            "diagnostics": diagnostics,
         }, 3 if incomplete else 0
     finally:
         runtime_module.Store = original
@@ -158,7 +169,10 @@ def main():
     # Service uses -I; only the explicitly selected frozen bundle is imported.
     sys.path.insert(0, str(args.bundle.resolve(strict=True)))
     runtime = importlib.import_module("forward_shadow.runtime")
+    notify_status("RESEARCH_REPORT_RUNNING")
     result, code = generate(runtime, args.bundle, args.state, args.day)
+    save_diagnostics(args.state, result)
+    notify_status(status_text(result))
     print(json.dumps(result, ensure_ascii=False, sort_keys=True))
     return code
 

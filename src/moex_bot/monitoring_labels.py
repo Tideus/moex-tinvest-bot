@@ -96,6 +96,17 @@ INACTIVE = "FAIL: active=inactive, no schedule"
 
 def safe_reason(value: str) -> str:
     """Only known templates; never echo arbitrary collector errors to Kuma or Telegram."""
+    from .monitoring_research import DETAIL_PATTERN
+
+    detail = re.fullmatch("FAIL: research report incomplete evidence; " + DETAIL_PATTERN, value)
+    if detail:
+        return (f"отчёт {detail[1]} создан, но наблюдения неполны; "
+                f"пустой стакан в подтверждённом перерыве: {detail[2]}; "
+                f"пустой стакан во время торгов: {detail[3]}; "
+                f"ошибки запросов T-Invest: {detail[4]}; "
+                f"не классифицировано: {detail[5]}; "
+                f"пропуски решений (с учётом вариантов): {detail[6]}. "
+                "Это записи наблюдений, не число независимых сбоев API.")
     context = re.fullmatch(
         r"(FAIL: (?:probe (?:timeout|dns|tls|schema|connection|unknown) "
         r"\([0-9]+\.[0-9]s\)|HTTP [1-5][0-9]{2}|response schema|API rejected request)); "
