@@ -271,6 +271,23 @@ def test_diagnostics_upgrade_pins_the_previous_shipped_blobs():
             assert hashlib.sha256(result.stdout).hexdigest() == sha
 
 
+def test_recovery_migration_accepts_exact_fff013f_not_unknown_local_edits():
+    import hashlib
+    import subprocess
+
+    root = Path(__file__).resolve().parents[1]
+    script = (root/'scripts/ubuntu/install-admission-diagnostics.sh').read_text()
+    expected = 'a5cb31f863d3f6f73c866d03cc4959db4aa6cc396d6970952b3713024409b776'
+    assert expected in script
+    assert '"$old" != "${recovery_previous[$index]}"' in script
+    assert "custom readiness diagnostics; review before replacement" in script
+    result = subprocess.run(['git', '-C', str(root), 'show',
+        'fff013fe6dd7b1d00664264eaa521852c5b50229:scripts/ops/long_admission_watch.py'],
+        capture_output=True)
+    if result.returncode == 0:
+        assert hashlib.sha256(result.stdout).hexdigest() == expected
+
+
 def test_deployment_and_evidence_pins(watch, integrity, inputs, tmp_path, monkeypatch):
     review, _, _ = inputs
     app, base = tmp_path/'app', tmp_path/'review'
