@@ -290,7 +290,7 @@ check_permissions() {
   require_permissions "644:root:${SERVICE_USER}" "${CONFIG_DIR}/maintenance.json"
   require_permissions "750:${SERVICE_USER}:${SERVICE_USER}" "${STATE_DIR}"
   require_permissions "750:${SERVICE_USER}:${SERVICE_USER}" "${LOG_DIR}"
-  require_permissions "750:${SERVICE_USER}:${SERVICE_USER}" "${BACKUP_DIR}"
+  require_permissions "750:root:${SERVICE_USER}" "${BACKUP_DIR}"
   while IFS= read -r script; do
     require_permissions "755:root:root" "${script}"
   done < <(find "${APP_DIR}/scripts/ubuntu" -type f -name '*.sh' -print)

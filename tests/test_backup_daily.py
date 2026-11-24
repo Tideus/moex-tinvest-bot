@@ -1,6 +1,7 @@
 import importlib.util
 import os
 import sqlite3
+import subprocess
 from contextlib import closing
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -106,6 +107,46 @@ def test_daily_maintenance_requires_backup_first():
     assert (script.index('mv -- "${stage_dir}/state.tar.gz"')
             < script.index('mv -- "${stage_dir}/checksum"'))
     assert "moex-tinvest-backup.service" in (ROOT / "scripts/ubuntu/install.sh").read_text()
+
+
+def test_deployment_keeps_backup_directory_and_archive_ownership_separate():
+    command = 'install -d -o root -g "${SERVICE_USER}" -m 0750 "${BACKUP_DIR}"'
+    for name in ('install.sh', 'update.sh'):
+        script = (ROOT / 'scripts/ubuntu' / name).read_text()
+        assert command in script
+        assert '"${STATE_DIR}" "${LOG_DIR}" "${BACKUP_DIR}"' not in script
+    assert 'chown root:"${MOEX_BOT_USER:-moexbot}" "${BACKUP_DIR}"' in (
+        ROOT / 'scripts/ubuntu/backup.sh').read_text()
+
+
+@pytest.mark.skipif(os.name == 'nt', reason='Linux root ownership integration')
+def test_deployment_repairs_backup_directory_without_changing_archives(tmp_path):
+    if os.geteuid() != 0:
+        pytest.skip('run in isolated root-only Linux suite')
+    import grp
+
+    group = grp.getgrgid(65534).gr_name
+    directory = tmp_path / 'backups'
+    directory.mkdir(mode=0o777)
+    archive = directory / 'private-evidence.tar.gz'
+    archive.write_bytes(b'unchanged historical recovery evidence')
+    archive.chmod(0o600)
+    before = archive.stat()
+    command = 'install -d -o root -g "${SERVICE_USER}" -m 0750 "${BACKUP_DIR}"'
+    for name in ('install.sh', 'update.sh'):
+        # Execute the deployment's exact directory operation against isolated paths only.
+        script = (ROOT / 'scripts/ubuntu' / name).read_text()
+        actual = next(line.strip() for line in script.splitlines() if line.strip() == command)
+        os.chown(directory, 65534, 65534)
+        subprocess.run(['bash', '-eu', '-c', actual], check=True,
+                       env={**os.environ, 'BACKUP_DIR': str(directory), 'SERVICE_USER': group})
+        assert directory.stat().st_uid == 0
+        assert directory.stat().st_gid == 65534
+        assert directory.stat().st_mode & 0o777 == 0o750
+        after = archive.stat()
+        assert (after.st_uid, after.st_gid, after.st_mode, after.st_ino) == (
+            before.st_uid, before.st_gid, before.st_mode, before.st_ino)
+        assert archive.read_bytes() == b'unchanged historical recovery evidence'
 
 
 def test_retention_keeps_full_recovery_sets_not_only_three_sidecars(tmp_path):

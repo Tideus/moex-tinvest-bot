@@ -166,7 +166,9 @@ install -m 0644 "${PROJECT_DIR}/scripts/ubuntu/long_once_context.py" \
 chown -R root:root "${APP_DIR}"
 install -d -o root -g "${SERVICE_USER}" -m 0750 "${CONFIG_DIR}"
 install -d -o "${SERVICE_USER}" -g "${SERVICE_USER}" -m 0750 \
-  "${STATE_DIR}" "${LOG_DIR}" "${BACKUP_DIR}"
+  "${STATE_DIR}" "${LOG_DIR}"
+# Independent recovery evidence must remain root-owned, matching backup.sh/retention.
+install -d -o root -g "${SERVICE_USER}" -m 0750 "${BACKUP_DIR}"
 chown root:"${SERVICE_USER}" "${CONFIG_DIR}/bot.env"
 chmod 0640 "${CONFIG_DIR}/bot.env"
 bash "${PROJECT_DIR}/scripts/ubuntu/install-ca-certificates.sh"

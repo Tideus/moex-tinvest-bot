@@ -118,8 +118,8 @@ if [[ -n "${DESTDIR}" ]]; then
 else
   install -d -m 0755 "$(root_path "${APP_DIR}")"
   install -d -m 0750 "$(root_path "${CONFIG_DIR}")"
-  install -d -m 0750 "$(root_path "${STATE_DIR}")" "$(root_path "${LOG_DIR}")" \
-    "$(root_path "${BACKUP_DIR}")"
+  install -d -m 0750 "$(root_path "${STATE_DIR}")" "$(root_path "${LOG_DIR}")"
+  install -d -o root -g "${SERVICE_USER}" -m 0750 "${BACKUP_DIR}"
   install -d -m 0755 "$(root_path /etc/systemd/system)" "$(root_path /etc/logrotate.d)"
   install -d -m 0755 "$(root_path /usr/local/sbin)"
 fi
@@ -278,7 +278,8 @@ if [[ -n "${DESTDIR}" ]]; then
 fi
 
 chown -R root:root "${APP_DIR}"
-chown -R "${SERVICE_USER}:${SERVICE_USER}" "${STATE_DIR}" "${LOG_DIR}" "${BACKUP_DIR}"
+chown -R "${SERVICE_USER}:${SERVICE_USER}" "${STATE_DIR}" "${LOG_DIR}"
+# Never recursively transfer root-owned recovery archives to the trading user.
 chown root:"${SERVICE_USER}" "${CONFIG_DIR}" "${CONFIG_DIR}/bot.env" \
   "${CONFIG_DIR}/runtime.json" "${CONFIG_DIR}/maintenance.json"
 chmod 0750 "${CONFIG_DIR}"

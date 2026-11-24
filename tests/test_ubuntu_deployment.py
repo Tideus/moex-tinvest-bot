@@ -220,7 +220,8 @@ def test_update_reasserts_runtime_owners_and_modes() -> None:
     assert 'chown -R root:root "${APP_DIR}"' in text
     assert 'chmod 0640 "${CONFIG_DIR}/bot.env"' in text
     assert 'install -d -o root -g "${SERVICE_USER}" -m 0750 "${CONFIG_DIR}"' in text
-    assert '"${STATE_DIR}" "${LOG_DIR}" "${BACKUP_DIR}"' in text
+    assert '"${STATE_DIR}" "${LOG_DIR}"' in text
+    assert 'install -d -o root -g "${SERVICE_USER}" -m 0750 "${BACKUP_DIR}"' in text
 
 
 def test_prelaunch_checks_runtime_owners_and_modes() -> None:
@@ -230,6 +231,7 @@ def test_prelaunch_checks_runtime_owners_and_modes() -> None:
     assert "check_permissions" in text
     assert 'require_permissions "640:root:${SERVICE_USER}" "${ENV_FILE}"' in text
     assert 'require_permissions "755:root:root" "${script}"' in text
+    assert 'require_permissions "750:root:${SERVICE_USER}" "${BACKUP_DIR}"' in text
 
 
 def test_install_and_update_publish_single_command_control_tool() -> None:
