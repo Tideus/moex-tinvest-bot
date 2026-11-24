@@ -43,7 +43,7 @@ def valid_hash(value: Any) -> bool:
 
 
 def confirmed(p: dict[str, Any], *, closed: bool = False) -> bool:
-    return (type(p.get('version')) is int and p['version'] == 1
+    return (type(p.get('version')) is int and p['version'] in (1, 2)
             and p.get('environment') == 'sandbox' and p.get('read_only') is True
             and p.get('ledger_state') == 'FILLED_PROTECTED'
             and p.get('state') == ('POSITION_CLOSED' if closed else 'FILLED_PROTECTED')
@@ -53,9 +53,25 @@ def confirmed(p: dict[str, Any], *, closed: bool = False) -> bool:
             and p.get('buy_verified') is True and p.get('stop_verified') is (not closed)
             and all(valid_hash(p.get(k)) for k in LINKS)
             and (closed or valid_hash(p.get('stop_id_sha256')))
+            and (p['version'] == 1 or (p.get('stop_evidence_verified') is True
+                                      and valid_hash(p.get('stop_id_sha256'))))
             and isinstance(p.get('secid'), str) and bool(p['secid'])
             and type(p.get('lot_size')) is int and p['lot_size'] > 0
             and all(isinstance(p.get(k), str) and p[k] for k in ('limit_price', 'stop_trigger')))
+
+
+def recoverable(p: dict[str, Any]) -> bool:
+    """Unavailability is not a contradiction. Known local/integrity faults remain sticky."""
+    if p.get('read_only') is not True or type(p.get('version')) is not int:
+        return False
+    if p['version'] == 1 and 'failure' not in p:
+        return True  # Original v1 had no error details; never infer a network cause.
+    f = p.get('failure')
+    return (p['version'] in (1, 2) and isinstance(f, dict)
+            and f.get('source') == 't_invest_sandbox'
+            and (f.get('category') in {'timeout', 'dns', 'tls', 'connection'}
+                 or (f.get('category') == 'http' and type(f.get('http_status')) is int
+                     and (f['http_status'] in {408, 429} or 500 <= f['http_status'] <= 599))))
 
 
 def evaluate(review: dict[str, Any], receipts: list[tuple[bytes, str]],
@@ -77,10 +93,16 @@ def evaluate(review: dict[str, Any], receipts: list[tuple[bytes, str]],
         at = datetime.fromisoformat(p['observed_at'])
         if at.tzinfo is None:
             raise ValueError('invalid time boundary')
+        if type(p.get('version')) is int and p['version'] == 2:
+            begun = datetime.fromisoformat(p['request_started_at'])
+            if (begun.tzinfo is None or not begun <= at <= now
+                    or not 0 <= (at - begun).total_seconds() <= 180):
+                raise ValueError('invalid verification interval')
         if not start <= at <= now:
             continue
         # Producer hashes UNAVAILABLE including time; successful readbacks dedupe by facts.
-        facts = p if unavailable else {k: v for k, v in p.items() if k != 'observed_at'}
+        facts = p if unavailable or p.get('version') == 2 else {
+            k: v for k, v in p.items() if k != 'observed_at'}
         expected = digest(json.dumps(facts, sort_keys=True).encode())
         if name != expected + '.json':
             raise ValueError('receipt content hash differs')
@@ -91,23 +113,35 @@ def evaluate(review: dict[str, Any], receipts: list[tuple[bytes, str]],
     state, proof, reason = 'WAITING_SANDBOX', None, 'no_receipt'
     if matches:
         state, reason = 'SANDBOX_NOT_CONFIRMED', 'no_historical_protection'
+    episodes: list[dict[str, Any]] = []
+    pending: datetime | None = None
+    latest_fresh: datetime | None = None
     if historical:
         good_at, good, good_sha = historical
         reason = 'historical_protection_confirmed'
         closed_seen = False
         ambiguous = any(left[0] == right[0] and left[1] != right[1]
                         for left, right in zip(matches, matches[1:], strict=False))
-        for at, p, _ in matches:
+        for at, p, sha in matches:
             if ambiguous:
                 reason = 'ambiguous_same_time'
                 break
             if p.get('state') == 'UNAVAILABLE':
                 if at >= good_at:
+                    if not recoverable(p):
+                        reason = 'nonrecoverable_readback_error'
+                        break
+                    if pending is None:
+                        episodes.append({'failure_sha256': sha,
+                                         'failure_observed_at': at.isoformat(),
+                                         'recovery_sha256': None, 'recovery_observed_at': None})
+                    pending = at
+                    episodes[-1].update(last_failure_sha256=sha,
+                                        last_failure_observed_at=at.isoformat())
                     reason = 'subsequent_readback_unavailable'
-                    break
                 continue
             if (type(p.get('attempt')) is not int
-                    or type(p.get('version')) is not int or p['version'] != 1
+                    or type(p.get('version')) is not int or p['version'] not in (1, 2)
                     or p.get('environment') != 'sandbox' or p.get('read_only') is not True
                     or type(p.get('lot_size')) is not int
                     or any(p.get(k) != good[k] for k in (*LINKS, *STATIC))
@@ -124,10 +158,22 @@ def evaluate(review: dict[str, Any], receipts: list[tuple[bytes, str]],
             elif not confirmed(p) or closed_seen:
                 reason = 'subsequent_readback_conflict'
                 break
+            if p['version'] == 2:
+                begun = datetime.fromisoformat(p['request_started_at'])
+                if pending is not None and begun > pending:
+                    episodes[-1].update(recovery_sha256=sha, recovery_observed_at=at.isoformat())
+                    pending = None
+                if pending is None:
+                    latest_fresh = at
         else:
-            state, proof = 'TECHNICAL_EVIDENCE_COMPLETE_PENDING_OPERATOR', good_sha
-            if closed_seen:
-                reason = 'historical_protection_then_closed'
+            if pending is not None:
+                reason = 'subsequent_readback_unavailable'
+            elif episodes and (latest_fresh is None or (now - latest_fresh).total_seconds() > 300):
+                reason = 'recovered_readback_stale'
+            else:
+                state, proof = 'TECHNICAL_EVIDENCE_COMPLETE_PENDING_OPERATOR', good_sha
+                reason = ('historical_protection_then_closed' if closed_seen
+                          else 'historical_protection_confirmed')
     latest = matches[-1] if matches else None
     return {'version': 2, 'decision': 'DRAFT_NOT_AUTHORIZED', 'execution_allowed': False,
             'revision': review['revision'], 'status': state,
@@ -138,6 +184,9 @@ def evaluate(review: dict[str, Any], receipts: list[tuple[bytes, str]],
             'sandbox_latest_observed_at': latest[1]['observed_at'] if latest else None,
             'sandbox_latest_state': latest[1].get('state') if latest else None,
             'sandbox_evidence_reason': reason,
+            'sandbox_availability_episodes': episodes,
+            'sandbox_recovery_latest_fresh_at': latest_fresh.isoformat() if episodes
+                and latest_fresh is not None else None,
             'missing': PENDING + ([] if proof else [
                 'sandbox_latest_readback_or_conflict_review' if historical
                 else 'sandbox_fill_and_native_stop']),
@@ -196,6 +245,12 @@ def render(p: dict[str, Any]) -> str:
             'Позднее позиция закрыта. Причина закрытия и P&L этим не установлены.',
         'subsequent_readback_unavailable':
             'После подтверждения проверка была недоступна; требуется свежая сверка.',
+        'nonrecoverable_readback_error':
+            'Ошибка журнала/привязки или непроверенная причина: '
+            'автоматическое восстановление запрещено.',
+        'recovered_readback_stale':
+            'Сверка после сбоя устарела (старше 5 минут); '
+            'нужна новая проверка, не повторная покупка.',
         'conflicting_binding': 'Конфликт привязок попытки, покупки или стопа; нужна проверка.',
         'ambiguous_same_time': 'Противоречивые квитанции с одинаковым временем.',
         'closed_before_protection': 'Нарушена последовательность закрытия и защиты.',
@@ -206,6 +261,10 @@ def render(p: dict[str, Any]) -> str:
         detail += '\n' + reasons[p['sandbox_evidence_reason']]
     if p.get('sandbox_historical_proof_sha256') and p['status'] == 'SANDBOX_NOT_CONFIRMED':
         detail += '\nИсторическое подтверждение сохранено; повторная покупка для него не нужна.'
+    episodes = p.get('sandbox_availability_episodes', [])
+    if episodes and episodes[-1]['recovery_sha256'] and p['status'].startswith('TECHNICAL_'):
+        detail += ('\nСвязь после недоступности восстановлена свежей полной сверкой той же покупки '
+                   'и исходной защиты. Все сбои сохранены в истории.')
     return ('📋 LONG · подготовка допуска на ИИС\n' + names[p['status']] + detail
             + '\nКвитанции не подтверждают текущую защиту ИИС и не дают повторный вход.'
             + '\n\nЭтот сборщик не включает PROD. Это НЕ разрешение на торговлю.'
@@ -260,12 +319,22 @@ def main() -> int:
     if not OUTBOX.is_file():
         raise ValueError('shared outbox missing')
     SQLiteOutbox(OUTBOX).enqueue(kind='long_admission_review',
-                               dedupe_key='long-admission-review:' + sha,
+                               dedupe_key='long-admission-review:' + notification_key(packet),
                                body=render(packet), now=now)
     diagnostic = (f" stage={packet['failure_stage']} reason={packet['failure_reason']}"
                   if packet['status'] == 'REVIEW_INVALID' else '')
     print(packet['status'] + diagnostic + '; execution_allowed=false')
     return 2 if packet['status'] == 'REVIEW_INVALID' else 0
+
+
+def notification_key(packet: dict[str, Any]) -> str:
+    """Alert on episode/status transitions, not on each two-minute receipt/freshness tick."""
+    ignored = {'sandbox_latest_receipt_sha256', 'sandbox_latest_observed_at',
+               'sandbox_recovery_latest_fresh_at', 'sandbox_availability_episodes'}
+    stable = {k: v for k, v in packet.items() if k not in ignored}
+    stable['episodes'] = [{k: ep[k] for k in ('failure_sha256', 'recovery_sha256')}
+                          for ep in packet.get('sandbox_availability_episodes', [])]
+    return digest(json.dumps(stable, sort_keys=True).encode())
 
 
 if __name__ == '__main__':

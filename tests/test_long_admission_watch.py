@@ -42,7 +42,7 @@ def inputs():
 
 
 def receipt(watch, proof):
-    facts = (proof if proof.get('state') == 'UNAVAILABLE' else
+    facts = (proof if proof.get('state') == 'UNAVAILABLE' or proof.get('version') == 2 else
              {k: v for k, v in proof.items() if k != 'observed_at'})
     name = watch.digest(json.dumps(facts, sort_keys=True).encode()) + '.json'
     return json.dumps(proof).encode(), name
@@ -170,7 +170,8 @@ def test_changed_stop_and_reopened_position_block(watch, inputs):
 def test_unbound_unavailable_is_visible_and_cannot_be_cleared_by_old_success(watch, inputs):
     review, proof, now = inputs
     error = dict(version=1, state='UNAVAILABLE', environment='sandbox', read_only=True,
-                 observed_at='2026-11-09T07:25:00+00:00', failure={'reason': 'network'})
+                 observed_at='2026-11-09T07:25:00+00:00',
+                 failure={'source': 't_invest_sandbox', 'category': 'connection'})
     packet = watch.evaluate(review, [receipt(watch, error), receipt(watch, proof)], now)
     assert packet['sandbox_historical_proof_sha256'] is not None
     assert packet['sandbox_evidence_reason'] == 'subsequent_readback_unavailable'
@@ -226,7 +227,9 @@ def test_producer_readbacks_and_publication_match_evaluator(watch, saved, tmp_pa
     monkeypatch.setattr(transport, 'post', flat)
     later = now + timedelta(minutes=5)
     closure = verifier.verify(state, anchor, candidate.account_id, broker, later)
-    assert closure['state'] == 'POSITION_CLOSED' and 'stop_id_sha256' not in closure
+    assert closure['state'] == 'POSITION_CLOSED'
+    assert closure['stop_id_sha256'] == proof['stop_id_sha256']
+    assert closure['stop_evidence_verified'] is True and closure['stop_verified'] is False
     folder, outbox = tmp_path/'receipts', tmp_path/'outbox.sqlite3'
     for p in (proof, closure):
         verifier.publish(p, folder, outbox, later)

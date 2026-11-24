@@ -2,6 +2,8 @@ import os
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+import pytest
+
 from moex_bot.storage_maintenance import (
     StoragePolicy,
     StorageUsage,
@@ -89,3 +91,25 @@ def test_dry_run_never_deletes_candidates(tmp_path: Path) -> None:
     assert result.cleanup_triggered
     assert result.deleted_files == 0
     assert old_log.exists()
+
+
+@pytest.mark.parametrize("apply", [False, True])
+def test_long_evidence_survives_storage_pressure_and_retention(tmp_path: Path, apply: bool) -> None:
+    artifacts = tmp_path / "artifacts"
+    evidence = artifacts / "long-sandbox-verification"
+    protected = [evidence / name for name in (
+        "historical-v1.json", "failure-v2.json", "recovery-v2.json", "nested/conflict.json")]
+    for path in protected:
+        _old(path, days=1000)
+    ordinary = artifacts / "cache.json"
+    _old(ordinary)
+    originals = {p: p.read_bytes() for p in protected}
+    result = maintain_storage(
+        policy=POLICY, filesystem_path=tmp_path, artifacts_dir=artifacts,
+        logs_dir=tmp_path / "logs", backups_dir=tmp_path / "backups", apply=apply, now=NOW,
+        usage_reader=lambda _: StorageUsage(1000, 950, 50),
+    )
+    assert result.cleanup_triggered and result.critical
+    assert result.deleted_files == int(apply)
+    assert ordinary.exists() is not apply
+    assert {p: p.read_bytes() for p in protected} == originals

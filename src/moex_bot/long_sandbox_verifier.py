@@ -123,7 +123,21 @@ def verify(state: Path, anchor: Path, account: str, broker: SandboxLongBroker,
         return result
     if actual.status is OrderStatus.FILLED and actual.filled_lots == 1:
         result["buy_verified"] = True
-        if (status == "FILLED_PROTECTED" and not holdings
+        if status == "FILLED_PROTECTED" and parent == actual:
+            # Closure is not a stop fill. Still bind it to the original durable protection,
+            # including the dispatch fence validated by ReadOnlyLedger, before returning.
+            progress.enter("stop_evidence")
+            response = json.loads(row[2])
+            if not anchor.with_suffix(anchor.suffix + ".stop-dispatch").is_file():
+                raise ValueError("missing stop dispatch fence")
+            if (not isinstance(response, dict) or response.get("verified") is not True
+                    or response.get("orderRequestId") != candidate.stop_request_id
+                    or not isinstance(response.get("stopOrderId"), str)
+                    or not response["stopOrderId"]):
+                raise ValueError("invalid durable stop evidence")
+            result["stop_id_sha256"] = hashlib.sha256(response["stopOrderId"].encode()).hexdigest()
+            result["stop_evidence_verified"] = True
+        if (status == "FILLED_PROTECTED" and parent == actual and not holdings
                 and not related_orders and not related_stops):
             result["state"] = "POSITION_CLOSED"
             return result  # Not proof of a stop fill or an earlier verified active stop.
@@ -132,9 +146,6 @@ def verify(state: Path, anchor: Path, account: str, broker: SandboxLongBroker,
                 and str(holdings[0].get("blocked")) == "0"
                 and not holdings[0].get("exchangeBlocked") and not related_orders):
             progress.enter("stop_evidence")
-            response = json.loads(row[2])
-            if not anchor.with_suffix(anchor.suffix + ".stop-dispatch").is_file():
-                raise ValueError("missing stop dispatch fence")
             progress.enter("protection_readback", "GetSandboxStopOrders")
             verified = broker.verify_protection(candidate, response)
             if verified.get("verified") is True:
@@ -176,7 +187,7 @@ def render(result: dict[str, Any]) -> str:
 
 def publish(result: dict[str, Any], output: Path, outbox: Path, now: datetime) -> None:
     output.mkdir(parents=True, exist_ok=True, mode=0o700)
-    facts = {k: v for k, v in result.items() if k != "observed_at"}
+    facts = {k: v for k, v in result.items() if k not in {"observed_at", "request_started_at"}}
     identity = json.dumps(facts, sort_keys=True)
     digest = hashlib.sha256(identity.encode()).hexdigest()
     receipt_digest = digest
@@ -186,8 +197,15 @@ def publish(result: dict[str, Any], output: Path, outbox: Path, now: datetime) -
             json.dumps(result, sort_keys=True).encode()).hexdigest()
         day = datetime.fromisoformat(result["observed_at"]).astimezone(MOSCOW).date()
         digest += ":" + day.isoformat()
+    if result.get("version") == 2:
+        started = datetime.fromisoformat(result["request_started_at"])
+        completed = datetime.fromisoformat(result["observed_at"])
+        if (started.tzinfo is None or completed.tzinfo is None or now.tzinfo is None
+                or not started <= completed <= now):
+            raise ValueError("invalid verification interval")
+        receipt_digest = hashlib.sha256(json.dumps(result, sort_keys=True).encode()).hexdigest()
     target = output / (receipt_digest + ".json")
-    # Immutable first readback per outcome, not a mutable latest success overwritten by failure.
+    # v1 stays immutable. v2 preserves EVERY completed observation, including recovery.
     if not target.exists():
         fd, name = tempfile.mkstemp(prefix=".pending-", dir=output)
         temporary = Path(name)
@@ -210,8 +228,9 @@ def publish(result: dict[str, Any], output: Path, outbox: Path, now: datetime) -
             finally:
                 os.close(fd)
     stored = json.loads(target.read_bytes())
-    if ({k: v for k, v in stored.items() if k != "observed_at"} != facts
-            or (result["state"] == "UNAVAILABLE" and stored != result)):
+    if ({k: v for k, v in stored.items() if k not in {"observed_at", "request_started_at"}} != facts
+            or ((result["state"] == "UNAVAILABLE" or result.get("version") == 2)
+                and stored != result)):
         raise ValueError("existing verification receipt mismatches; never silently replace")
     SQLiteOutbox(outbox).enqueue(kind="long_sandbox_verification",
                                 dedupe_key="long-sandbox-verification:" + digest,
@@ -292,6 +311,11 @@ def main() -> int:
         print("LONG sandbox verification failure: "
               + json.dumps(result["failure"], ensure_ascii=False))
     if result is not None:
+        # Completion time, not request start: a request overlapping a failure cannot recover it.
+        completed = datetime.now(UTC)
+        result.update(version=2, request_started_at=now.isoformat(),
+                      observed_at=completed.isoformat())
+        now = completed
         publish(result, OUTPUT, OUTBOX, now)
     publish_planner_failures(STATE.parent, OUTBOX, now)
     token, chat = os.getenv("TELEGRAM_BOT_TOKEN", ""), os.getenv("TELEGRAM_CHAT_ID", "")

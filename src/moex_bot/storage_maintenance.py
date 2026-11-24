@@ -145,7 +145,13 @@ def _old_files(root: Path, now: datetime, retention_days: int) -> list[Path]:
     result: list[Path] = []
     resolved_root = root.resolve()
     for path in root.rglob("*"):
-        if not path.is_file() or not path.resolve().is_relative_to(resolved_root):
+        resolved = path.resolve()
+        # Admission receipts are append-only evidence, not expiring diagnostic artifacts.
+        # Preserve failures/conflicts as well as successes, including nested/legacy receipts.
+        if ("long-sandbox-verification" in path.parts
+                or "long-sandbox-verification" in resolved.parts
+                or path.is_symlink() or not path.is_file()
+                or not resolved.is_relative_to(resolved_root)):
             continue
         modified = datetime.fromtimestamp(path.stat().st_mtime, tz=UTC)
         if modified < cutoff:
