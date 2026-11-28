@@ -20,6 +20,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from forward_diagnostics import (  # noqa: E402
     classify,
+    consumer_gaps,
     notify_status,
     save_diagnostics,
     status_text,
@@ -146,6 +147,7 @@ def generate(runtime_module, bundle, state, day=None):
         incomplete = bool(report.get("incomplete", True))
         diagnostics = report_diagnostics(report)
         diagnostics["source_classification"] = classify(runtime.store, str(day))
+        diagnostics["consumer_gaps"] = consumer_gaps(runtime.store, str(day))
         return {
             "execution_allowed": False,
             "day": str(day),

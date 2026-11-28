@@ -147,6 +147,90 @@ def status_text(result):
     return f"{PREFIX} day={day} " + " ".join(f"{k}={diag[k]}" for k in FIELDS)
 
 
+def consumer_gaps(store, day):
+    """Explain missing consumers, not causes: no replacement quotes or new decisions.
+
+    A calendar break can explain why a window is unobservable, but it does not
+    prove which network request caused a missing price. Preserve INCOMPLETE.
+    The observation window is the frozen v1 protocol's inclusive 60 seconds.
+    """
+    if store._verified is None:
+        raise ValueError("unverified_diagnostics_denied")
+    result = dict(available=False, execution_allowed=False,
+                  historical_decisions_unchanged=True, completeness_unchanged=True)
+    try:
+        calendar = store.get("calendar:" + day)
+        decisions = {r["key"]: r for r in store.rows(day, "decision")}
+        entries = {r["digest"]: r for r in store.rows(day, "model_entry")}
+        rows = []
+        for kind in ("model_entry", "markout"):
+            for event in store.rows(day, kind):
+                value = event["value"]
+                if value.get("state") == "observed":
+                    continue
+                row = {"kind": kind, "key": event["key"], "digest": event["digest"],
+                       "symbol": value.get("symbol"), "strategy": value.get("strategy"),
+                       "decision_key": value.get("decision_key"),
+                       "target_at": value.get("target_at"),
+                       "horizon_minutes": value.get("horizon_minutes"),
+                       "classification": "unclassified", "causal_api_failure": None}
+                try:
+                    decision = decisions[value["decision_key"]]
+                    d = decision["value"]
+                    if (value["decision_digest"] != decision["digest"]
+                            or any(value[k] != d[k] for k in ("symbol", "strategy"))):
+                        raise ValueError("unbound_consumer")
+                    target = stamp(value["target_at"])
+                    anchor = stamp(d["decision_at"])
+                    if kind == "markout":
+                        entry = entries[value["entry_digest"]]["value"]
+                        if (entry["state"] != "observed"
+                                or entry["decision_digest"] != decision["digest"]
+                                or entry["decision_key"] != value["decision_key"]
+                                or any(entry[k] != d[k] for k in ("symbol", "strategy"))):
+                            raise ValueError("unbound_entry")
+                        anchor = stamp(entry["quote"]["exchange_at"])
+                        horizon = value["horizon_minutes"]
+                        if type(horizon) is not int or horizon not in (5, 15, 30, 60):
+                            raise ValueError("unknown_horizon")
+                        if target != anchor + timedelta(minutes=horizon):
+                            raise ValueError("wrong_target")
+                    elif not 0 <= (target - anchor).total_seconds() <= 30:
+                        raise ValueError("invalid_entry_delay")
+                    end = target + timedelta(seconds=60)
+                    if any(t.date().isoformat() != day for t in (anchor, target, end)):
+                        row["classification"] = "cross_day_window"
+                    else:
+                        intervals = calendar_intervals(
+                            calendar["value"], day, value["symbol"], stamp(d["decision_at"]))
+                        if any(a <= anchor <= target <= end < b for a, b in intervals):
+                            row["classification"] = "in_session_missing"
+                        elif any(a <= target <= end < b for a, b in intervals):
+                            row["classification"] = "cross_session_window"
+                        elif all(end < a or target >= b for a, b in intervals):
+                            row["classification"] = "outside_session_window"
+                        else:
+                            row["classification"] = "session_boundary_window"
+                except (AttributeError, KeyError, TypeError, ValueError, OverflowError):
+                    row["reason"] = "consumer_binding_or_calendar_unavailable"
+                rows.append(row)
+        missing_inputs = [
+            {"decision_key": r["key"], "digest": r["digest"],
+             "symbol": r["value"].get("symbol"), "strategy": r["value"].get("strategy"),
+             "decision_at": r["value"].get("decision_at"),
+             "reasons": r["value"].get("reasons", [])}
+            for r in decisions.values() if r["value"].get("state") == "data_missing"
+        ]
+        result.update(available=True, missing_price_consumers=rows,
+                      data_missing_decisions=missing_inputs,
+                      observations_are_not_independent_trades=True,
+                      scope="persisted_consumers_only_not_absent_events",
+                      decision_reasons_are_original_mixed_filter_and_data_codes=True)
+    except (sqlite3.Error, AttributeError, KeyError, TypeError, ValueError):
+        result["reason"] = "consumer_evidence_unavailable"
+    return result
+
+
 def notify_status(text):
     address = os.getenv("NOTIFY_SOCKET")
     if not address:
